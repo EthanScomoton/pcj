@@ -10,7 +10,7 @@ num_classes = 10   # 类别数量
 
 # 超参数（需要调整的数值）
 learning_rate = 0.001  # 学习率
-num_epochs = 10        # 训练轮数
+num_epochs = 15        # 训练轮数
 batch_size = 32        # 批次大小z
 
 # 自定义注意力机制模块

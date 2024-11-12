@@ -7,7 +7,6 @@ from scipy.stats import weibull_min
 ## main
 latitude = None
 day_of_year = None
-Ei = None
 edge_indices = None
 energy_matrix = None
 
@@ -25,10 +24,113 @@ while material_type not in ['mineral_1', 'mineral_2', 'coal']:
     print("输入无效。请输入 mineral_1, mineral_2, 或 coal。")
     material_type = input("请重新输入材料类型: ")
 
+def dijkstra(energy_matrix, start_point, end_point):
+    num_nodes = energy_matrix.shape[0]
+    visited = np.zeros(num_nodes, dtype=bool)
+    distance = np.full(num_nodes, np.inf)
+    previous = np.full(num_nodes, np.nan)
+    distance[start_point] = 0
 
+    # 使用优先队列来加速最短路径查找
+    pq = [(0, start_point)]  # (distance, node)
+
+    while pq:
+        current_dist, current = heapq.heappop(pq)
+        if visited[current]:
+            continue
+        visited[current] = True
+
+        if current == end_point:
+            break
+
+        for neighbor in range(num_nodes):
+            if not visited[neighbor] and energy_matrix[current, neighbor] < np.inf:
+                new_distance = current_dist + energy_matrix[current, neighbor]
+                if new_distance < distance[neighbor]:
+                    distance[neighbor] = new_distance
+                    previous[neighbor] = current
+                    heapq.heappush(pq, (new_distance, neighbor))
+
+    # 构造最短路径
+    min_path = []
+    current = end_point
+    while not np.isnan(current):
+        min_path.insert(0, int(current) + 1)  # 转换为 1 索引
+        current = previous[int(current)]
+
+    E_total = distance[end_point]
+    if np.isinf(E_total):
+        min_path = []
+
+    return min_path, E_total
+
+
+def calculate_energy_matrix(yard_matrix, Q_list_regular, P_list_regular, Q_total, special_connections, material_type):
+    n = yard_matrix.shape[0]
+    energy_matrix = np.full((n, n), np.inf)  # 初始化为无穷大，表示不可通行
+    edge_indices = []
+    regular_idx = 0
+    special_conn = special_connections.get(material_type, [])
+
+    # 使用字典来加速查找特定边
+    special_edge_dict = {(sc['nodes'][0] - 1, sc['nodes'][1] - 1): sc for sc in special_conn}
+
+    for i in range(n):
+        for j in range(i + 1, n):
+            if yard_matrix[i, j] == 1:
+                # 优先查找是否为特殊边
+                special_key = (i, j) if (i, j) in special_edge_dict else (j, i)
+                if special_key in special_edge_dict:
+                    sc = special_edge_dict[special_key]
+                    Q_value = sc['Q']
+                    P_value = sc['P']
+                    if Q_value == 0:
+                        # 如果 Q 为 0，设置为不可通行
+                        print(f"节点 {i+1} 和 {j+1} 之间的 Q 为 0，无法运输，设置为不可通行。")
+                        continue
+                    T_i = Q_total / Q_value
+                    
+                    # 处理 P 为 0 的情况
+                    if P_value == 0:
+                        print(f"节点 {i+1} 和 {j+1} 之间的 P 为 0，假设该连接不消耗能量。")
+                        P_value = 1e-6  # 设置一个接近 0 的小值，表示无能耗但避免除零问题
+
+                    # 检查无效值
+                    if np.isnan(P_value) or np.isnan(T_i) or np.isinf(P_value) or np.isinf(T_i):
+                        raise ValueError(f"无效的 P 或 T_i 值：P={P_value}, T_i={T_i}，发生在节点 {i+1} 到 {j+1}")
+
+                    energy_matrix[i, j] = energy_matrix[j, i] = P_value * T_i
+                    edge_info = {'nodes': [i + 1, j + 1], 'Q': Q_value, 'P': P_value}
+                    edge_indices.append(edge_info)
+                else:
+                    if regular_idx >= len(Q_list_regular) or regular_idx >= len(P_list_regular):
+                        raise ValueError('Q_list_regular 或 P_list_regular 的长度不足，无法匹配所有常规连接。')
+
+                    Q_value = Q_list_regular[regular_idx]
+                    P_value = P_list_regular[regular_idx]
+                    regular_idx += 1
+
+                    # 检查 Q_value 是否为零
+                    if Q_value == 0 or np.isclose(Q_value, 0):
+                        continue  # 跳过该连接
+                    T_i = Q_total / Q_value
+
+                    # 处理 P 为 0 的情况
+                    if P_value == 0 or np.isclose(P_value, 0):
+                        continue
+                    # 检查无效值
+                    if np.isnan(P_value) or np.isnan(T_i) or np.isinf(P_value) or np.isinf(T_i):
+                        raise ValueError(f"无效的 P_value 或 T_i 值，发生在节点 {i+1} 到 {j+1}。P_value: {P_value}, T_i: {T_i}")
+
+                    energy_matrix[i, j] = energy_matrix[j, i] = P_value * T_i
+                    edge_info = {'nodes': [i + 1, j + 1], 'Q': Q_value, 'P': P_value}
+                    edge_indices.append(edge_info)
+
+    return energy_matrix, edge_indices
 
 
 def calculate_energy_consumption(Q_total, material_type, start_point, end_point):
+    Ei = None
     # 定义三个堆场的邻接矩阵
     mineral_yard_1_matrix = np.array([
         [0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0],
@@ -177,116 +279,8 @@ def calculate_energy_consumption(Q_total, material_type, start_point, end_point)
 
     return min_path, E_total, Ei, edge_indices, energy_matrix
 
-def dijkstra(energy_matrix, start_point, end_point):
-    num_nodes = energy_matrix.shape[0]
-    visited = np.zeros(num_nodes, dtype=bool)
-    distance = np.full(num_nodes, np.inf)
-    previous = np.full(num_nodes, np.nan)
-    distance[start_point] = 0
-
-    # 使用优先队列来加速最短路径查找
-    pq = [(0, start_point)]  # (distance, node)
-
-    while pq:
-        current_dist, current = heapq.heappop(pq)
-        if visited[current]:
-            continue
-        visited[current] = True
-
-        if current == end_point:
-            break
-
-        for neighbor in range(num_nodes):
-            if not visited[neighbor] and energy_matrix[current, neighbor] < np.inf:
-                new_distance = current_dist + energy_matrix[current, neighbor]
-                if new_distance < distance[neighbor]:
-                    distance[neighbor] = new_distance
-                    previous[neighbor] = current
-                    heapq.heappush(pq, (new_distance, neighbor))
-
-    # 构造最短路径
-    min_path = []
-    current = end_point
-    while not np.isnan(current):
-        min_path.insert(0, int(current) + 1)  # 转换为 1 索引
-        current = previous[int(current)]
-
-    E_total = distance[end_point]
-    if np.isinf(E_total):
-        min_path = []
-
-    return min_path, E_total
-
-
-def calculate_energy_matrix(yard_matrix, Q_list_regular, P_list_regular, Q_total, special_connections, material_type):
-    n = yard_matrix.shape[0]
-    energy_matrix = np.full((n, n), np.inf)  # 初始化为无穷大，表示不可通行
-    edge_indices = []
-    regular_idx = 0
-    special_conn = special_connections.get(material_type, [])
-
-    # 使用字典来加速查找特定边
-    special_edge_dict = {(sc['nodes'][0] - 1, sc['nodes'][1] - 1): sc for sc in special_conn}
-
-    for i in range(n):
-        for j in range(i + 1, n):
-            if yard_matrix[i, j] == 1:
-                # 优先查找是否为特殊边
-                special_key = (i, j) if (i, j) in special_edge_dict else (j, i)
-                if special_key in special_edge_dict:
-                    sc = special_edge_dict[special_key]
-                    Q_value = sc['Q']
-                    P_value = sc['P']
-                    if Q_value == 0:
-                        # 如果 Q 为 0，设置为不可通行
-                        print(f"节点 {i+1} 和 {j+1} 之间的 Q 为 0，无法运输，设置为不可通行。")
-                        continue
-                    T_i = Q_total / Q_value
-                    
-                    # 处理 P 为 0 的情况
-                    if P_value == 0:
-                        print(f"节点 {i+1} 和 {j+1} 之间的 P 为 0，假设该连接不消耗能量。")
-                        P_value = 1e-6  # 设置一个接近 0 的小值，表示无能耗但避免除零问题
-
-                    # 检查无效值
-                    if np.isnan(P_value) or np.isnan(T_i) or np.isinf(P_value) or np.isinf(T_i):
-                        raise ValueError(f"无效的 P 或 T_i 值：P={P_value}, T_i={T_i}，发生在节点 {i+1} 到 {j+1}")
-
-                    energy_matrix[i, j] = energy_matrix[j, i] = P_value * T_i
-                    edge_info = {'nodes': [i + 1, j + 1], 'Q': Q_value, 'P': P_value}
-                    edge_indices.append(edge_info)
-                else:
-                    if regular_idx >= len(Q_list_regular) or regular_idx >= len(P_list_regular):
-                        raise ValueError('Q_list_regular 或 P_list_regular 的长度不足，无法匹配所有常规连接。')
-
-                    Q_value = Q_list_regular[regular_idx]
-                    P_value = P_list_regular[regular_idx]
-                    regular_idx += 1
-
-                    # 检查 Q_value 是否为零
-                    if Q_value == 0:
-                        print(f"节点 {i+1} 和 {j+1} 之间的 Q 为 0，无法运输，设置为不可通行。")
-                        continue  # 跳过该连接
-
-                    T_i = Q_total / Q_value
-
-                    # 处理 P 为 0 的情况
-                    if P_value == 0:
-                        print(f"节点 {i+1} 和 {j+1} 之间的 P 为 0，假设该连接不消耗能量。")
-                        P_value = 1e-6  # 设置一个接近 0 的小值
-
-                    # 检查无效值
-                    if np.isnan(P_value) or np.isnan(T_i) or np.isinf(P_value) or np.isinf(T_i):
-                        raise ValueError(f"无效的 P_value 或 T_i 值，发生在节点 {i+1} 到 {j+1}。P_value: {P_value}, T_i: {T_i}")
-
-                    energy_matrix[i, j] = energy_matrix[j, i] = P_value * T_i
-                    edge_info = {'nodes': [i + 1, j + 1], 'Q': Q_value, 'P': P_value}
-                    edge_indices.append(edge_info)
-
-    return energy_matrix, edge_indices
-
 # 调用计算最小能耗路径的函数
-min_path, E_total, Ei, edge_indices, energy_matrix = calculate_energy_consumption(Q_total, material_type, start_point, end_point)
+min_path, E_total, Ei = calculate_energy_consumption(Q_total, material_type, start_point, end_point)
 
 # 输出计算结果
 print(f"最小路径: {min_path}")

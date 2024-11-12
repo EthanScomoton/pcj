@@ -84,20 +84,21 @@ def calculate_energy_matrix(yard_matrix, Q_list_regular, P_list_regular, Q_total
                     sc = special_edge_dict[special_key]
                     Q_value = sc['Q']
                     P_value = sc['P']
-                    if Q_value == 0:
-                        # 如果 Q 为 0，设置为不可通行
-                        print(f"节点 {i+1} 和 {j+1} 之间的 Q 为 0，无法运输，设置为不可通行。")
+                    if Q_value == 0 or np.isinf(Q_value):
+                        # 如果 Q 为 0 或无穷大，设置为不可通行
+                        print(f"节点 {i+1} 和 {j+1} 之间的 Q 为 0 或无穷大，无法运输，设置为不可通行。")
                         continue
                     T_i = Q_total / Q_value
                     
-                    # 处理 P 为 0 的情况
-                    if P_value == 0:
-                        print(f"节点 {i+1} 和 {j+1} 之间的 P 为 0，假设该连接不消耗能量。")
+                    # 处理 P 为 0 或无穷大的情况
+                    if P_value == 0 or np.isinf(P_value):
+                        print(f"节点 {i+1} 和 {j+1} 之间的 P 为 0 或无穷大，假设该连接不消耗能量。")
                         P_value = 1e-6  # 设置一个接近 0 的小值，表示无能耗但避免除零问题
 
                     # 检查无效值
                     if np.isnan(P_value) or np.isnan(T_i) or np.isinf(P_value) or np.isinf(T_i):
-                        raise ValueError(f"无效的 P 或 T_i 值：P={P_value}, T_i={T_i}，发生在节点 {i+1} 到 {j+1}")
+                        print(f"无效的 P 或 T_i 值：P={P_value}, T_i={T_i}，发生在节点 {i+1} 到 {j+1}")
+                        continue
 
                     energy_matrix[i, j] = energy_matrix[j, i] = P_value * T_i
                     edge_info = {'nodes': [i + 1, j + 1], 'Q': Q_value, 'P': P_value}
@@ -110,17 +111,20 @@ def calculate_energy_matrix(yard_matrix, Q_list_regular, P_list_regular, Q_total
                     P_value = P_list_regular[regular_idx]
                     regular_idx += 1
 
-                    # 检查 Q_value 是否为零
-                    if Q_value == 0 or np.isclose(Q_value, 0):
+                    # 检查 Q_value 是否为零或无穷大
+                    if Q_value == 0 or np.isclose(Q_value, 0) or np.isinf(Q_value):
+                        print(f"节点 {i+1} 和 {j+1} 之间的 Q 为 0 或无穷大，跳过该连接。")
                         continue  # 跳过该连接
                     T_i = Q_total / Q_value
 
-                    # 处理 P 为 0 的情况
-                    if P_value == 0 or np.isclose(P_value, 0):
+                    # 处理 P 为 0 或无穷大的情况
+                    if P_value == 0 or np.isclose(P_value, 0) or np.isinf(P_value):
+                        print(f"节点 {i+1} 和 {j+1} 之间的 P 为 0 或无穷大，跳过该连接。")
                         continue
                     # 检查无效值
                     if np.isnan(P_value) or np.isnan(T_i) or np.isinf(P_value) or np.isinf(T_i):
-                        raise ValueError(f"无效的 P_value 或 T_i 值，发生在节点 {i+1} 到 {j+1}。P_value: {P_value}, T_i: {T_i}")
+                        print(f"无效的 P_value 或 T_i 值，发生在节点 {i+1} 到 {j+1}。P_value: {P_value}, T_i: {T_i}")
+                        continue
 
                     energy_matrix[i, j] = energy_matrix[j, i] = P_value * T_i
                     edge_info = {'nodes': [i + 1, j + 1], 'Q': Q_value, 'P': P_value}

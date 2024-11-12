@@ -1,5 +1,5 @@
 import numpy as np
-import scipy.sparse.csgraph as csgraph
+import heapq
 import matplotlib.pyplot as plt
 from scipy.stats import weibull_min
 
@@ -180,16 +180,17 @@ def calculate_energy_consumption(Q_total, material_type, start_point, end_point)
 def dijkstra(energy_matrix, start_point, end_point):
     num_nodes = energy_matrix.shape[0]
     visited = np.zeros(num_nodes, dtype=bool)
-    distance = np.full(num_nodes, np.inf)  # 初始化距离为无穷大
+    distance = np.full(num_nodes, np.inf)
     previous = np.full(num_nodes, np.nan)
     distance[start_point] = 0
 
-    for _ in range(num_nodes):
-        unvisited_indices = np.where(~visited)[0]
-        if len(unvisited_indices) == 0:
-            break
-        min_idx = np.argmin(distance[unvisited_indices])
-        current = unvisited_indices[min_idx]
+    # 使用优先队列来加速最短路径查找
+    pq = [(0, start_point)]  # (distance, node)
+
+    while pq:
+        current_dist, current = heapq.heappop(pq)
+        if visited[current]:
+            continue
         visited[current] = True
 
         if current == end_point:
@@ -197,11 +198,13 @@ def dijkstra(energy_matrix, start_point, end_point):
 
         for neighbor in range(num_nodes):
             if not visited[neighbor] and energy_matrix[current, neighbor] < np.inf:
-                new_distance = distance[current] + energy_matrix[current, neighbor]
+                new_distance = current_dist + energy_matrix[current, neighbor]
                 if new_distance < distance[neighbor]:
                     distance[neighbor] = new_distance
                     previous[neighbor] = current
+                    heapq.heappush(pq, (new_distance, neighbor))
 
+    # 构造最短路径
     min_path = []
     current = end_point
     while not np.isnan(current):
@@ -219,24 +222,24 @@ def calculate_energy_matrix(yard_matrix, Q_list_regular, P_list_regular, Q_total
     n = yard_matrix.shape[0]
     energy_matrix = np.full((n, n), np.inf)
     edge_indices = []
-
     regular_idx = 0
     special_conn = special_connections.get(material_type, [])
+
+    # 使用字典来加速查找特定边
+    special_edge_dict = {(sc['nodes'][0] - 1, sc['nodes'][1] - 1): sc for sc in special_conn}
 
     for i in range(n):
         for j in range(i + 1, n):
             if yard_matrix[i, j] == 1:
-                is_special = False
-                for sc in special_conn:
-                    if (sc['nodes'][0] == i and sc['nodes'][1] == j) or (sc['nodes'][0] == j and sc['nodes'][1] == i):
-                        is_special = True
-                        edge_info = {'nodes': [i + 1, j + 1], 'Q': sc['Q'], 'P': sc['P']}
-                        T_i = Q_total / sc['Q']
-                        energy_matrix[i, j] = energy_matrix[j, i] = sc['P'] * T_i
-                        edge_indices.append(edge_info)
-                        break
-
-                if not is_special:
+                # 优先查找是否为特殊边
+                special_key = (i, j) if (i, j) in special_edge_dict else (j, i)
+                if special_key in special_edge_dict:
+                    sc = special_edge_dict[special_key]
+                    edge_info = {'nodes': [i + 1, j + 1], 'Q': sc['Q'], 'P': sc['P']}
+                    T_i = Q_total / sc['Q']
+                    energy_matrix[i, j] = energy_matrix[j, i] = sc['P'] * T_i
+                    edge_indices.append(edge_info)
+                else:
                     if regular_idx >= len(Q_list_regular) or regular_idx >= len(P_list_regular):
                         raise ValueError('Q_list_regular 或 P_list_regular 的长度不足，无法匹配所有常规连接。')
 
@@ -447,63 +450,59 @@ for i in range(1, len(t)):
 
     E_storage[i] = min(max(E_storage[i], 0), E_max)
 
-# 7. 绘制结果
+# 函数：绘图优化 - 使用面向对象的接口，减少 plt.show() 调用次数
+def plot_results(t, E_solar_supply, E_wind_supply, E_storage_discharge, E_grid_supply, E_solar, E_wind, E_load, E_storage, E_max, material_type, t0):
+    fig, axs = plt.subplots(4, 1, figsize=(10, 16))
+    
+    # （1）能源供应来源堆叠图
+    axs[0].stackplot(t, E_solar_supply, E_wind_supply, E_storage_discharge, E_grid_supply,
+                     labels=['太阳能供电', '风能供电', '储能放电供电', '电网供电'])
+    axs[0].set_xlabel('时间（小时）')
+    axs[0].set_ylabel('能量（kWh）')
+    axs[0].set_title('能源供应来源堆叠图')
+    axs[0].legend()
+    axs[0].grid(True)
 
-# （1）能源供应来源堆叠图
-plt.figure()
-plt.stackplot(t, E_solar_supply, E_wind_supply, E_storage_discharge, E_grid_supply, labels=['太阳能供电', '风能供电', '储能放电供电', '电网供电'])
-plt.xlabel('时间（小时）')
-plt.ylabel('能量（kWh）')
-plt.title('能源供应来源堆叠图')
-plt.legend()
-plt.grid(True)
-plt.show()
+    # （2）各能源类型时序供应曲线
+    axs[1].plot(t, E_solar_supply, 'g', label='太阳能供电')
+    axs[1].plot(t, E_wind_supply, 'c', label='风能供电')
+    axs[1].plot(t, E_storage_discharge, 'm', label='储能放电供电')
+    axs[1].plot(t, E_grid_supply, 'r', label='电网供电')
+    axs[1].set_xlabel('时间（小时）')
+    axs[1].set_ylabel('能量（kWh）')
+    axs[1].set_title('各能源类型时序供应曲线')
+    axs[1].legend()
+    axs[1].grid(True)
 
-# （2）各能源类型时序供应曲线
-plt.figure()
-plt.plot(t, E_solar_supply, 'g', label='太阳能供电')
-plt.plot(t, E_wind_supply, 'c', label='风能供电')
-plt.plot(t, E_storage_discharge, 'm', label='储能放电供电')
-plt.plot(t, E_grid_supply, 'r', label='电网供电')
-plt.xlabel('时间（小时）')
-plt.ylabel('能量（kWh）')
-plt.title('各能源类型时序供应曲线')
-plt.legend()
-plt.grid(True)
-plt.show()
+    # （3）可再生能源和负荷需求关系曲线图
+    axs[2].plot(t, E_solar + E_wind, 'g--', label='光伏、风能总发电量')
+    axs[2].plot(t, E_load * (t[1] - t[0]), 'm:', label='负荷能耗需求')
+    axs[2].set_xlabel('时间（小时）')
+    axs[2].set_ylabel('能量（kWh）')
+    axs[2].set_title('光伏、风能发电与负荷需求关系图')
+    axs[2].legend()
+    axs[2].grid(True)
 
-# （3）可再生能源和负荷需求关系曲线图
-plt.figure()
-plt.plot(t, E_solar + E_wind, 'g--', label='光伏、风能总发电量')
-plt.plot(t, E_load * dt, 'm:', label='负荷能耗需求')
-plt.xlabel('时间（小时）')
-plt.ylabel('能量（kWh）')
-plt.title('光伏、风能发电与负荷需求关系图')
-plt.legend()
-plt.grid(True)
-plt.show()
+    # （4）储能水平变化图（SOC）
+    axs[3].plot(t, E_storage / E_max * 100, 'c', linewidth=2)
+    axs[3].set_xlabel('时间（小时）')
+    axs[3].set_ylabel('储能水平（百分比）')
+    axs[3].set_title('储能设备 SOC（百分比）随时间变化图')
+    axs[3].grid(True)
 
-# （4）储能水平变化图（SOC）
-plt.figure()
-plt.plot(t, E_storage / E_max * 100, 'c', linewidth=2)
-plt.xlabel('时间（小时）')
-plt.ylabel('储能水平（百分比）')
-plt.title('储能设备 SOC（百分比）随时间变化图')
-plt.grid(True)
-plt.show()
+    plt.tight_layout()
 
-# （5）在特定时间点各能源对负荷的供应比例图
-t0 = start_time + T_end / 2
-idx = np.argmin(np.abs(t - t0))
+    # 绘制在特定时间点各能源对负荷的供应比例
+    idx = np.argmin(np.abs(t - t0))
+    energy_sources = [E_solar_supply[idx], E_wind_supply[idx], E_storage_discharge[idx], E_grid_supply[idx]]
+    total_supply = sum(energy_sources)
+    energy_percentage = np.array(energy_sources) / total_supply * 100 if total_supply > 0 else np.zeros_like(energy_sources)
 
-energy_sources = [E_solar_supply[idx], E_wind_supply[idx], E_storage_discharge[idx], E_grid_supply[idx]]
-total_supply = sum(energy_sources)
-energy_percentage = np.array(energy_sources) / total_supply * 100 if total_supply > 0 else np.zeros_like(energy_sources)
+    energy_labels = ['太阳能供电', '风能供电', '储能供电', '电网供电']
+    energy_labels_with_percent = [f'{lbl}: {pct:.1f}%' for lbl, pct in zip(energy_labels, energy_percentage)]
 
-energy_labels = ['太阳能供电', '风能供电', '储能供电', '电网供电']
-energy_labels_with_percent = [f'{lbl}: {pct:.1f}%' for lbl, pct in zip(energy_labels, energy_percentage)]
+    plt.figure()
+    plt.pie(energy_sources, labels=energy_labels_with_percent, autopct='%1.1f%%')
+    plt.title(f'{material_type} {t[idx]:.2f} 小时各能源对负荷的供应比例')
 
-plt.figure()
-plt.pie(energy_sources, labels=energy_labels_with_percent, autopct='%1.1f%%')
-plt.title(f'{material_type} {t[idx]:.2f} 小时各能源对负荷的供应比例')
-plt.show()
+    plt.show()

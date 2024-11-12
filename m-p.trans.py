@@ -438,57 +438,74 @@ for i in range(1, len(t)):
     E_storage[i] = min(max(E_storage[i], 0), E_max)
 
 # 绘图
-def plot_results(t, E_solar_supply, E_wind_supply, E_storage_discharge, E_grid_supply, E_solar, E_wind, E_load, E_storage, E_max, material_type, t0):
+def plot_results(t, E_solar_supply, E_wind_supply, E_storage_discharge, E_grid_supply, E_solar, E_wind, E_load, E_storage, E_max, material_type, start_time, T_end):
     fig, axs = plt.subplots(4, 1, figsize=(10, 16))
     
-    # （1）能源供应来源堆叠图
-    axs[0].stackplot(t, E_solar_supply, E_wind_supply, E_storage_discharge, E_grid_supply,labels=['太阳能供电', '风能供电', '储能放电供电', '电网供电'])
-    axs[0].set_xlabel('时间（小时）')
-    axs[0].set_ylabel('能量（kWh）')
-    axs[0].set_title('能源供应来源堆叠图')
+    # (1) Energy supply sources stack plot
+    axs[0].stackplot(t, E_solar_supply, E_wind_supply, E_storage_discharge, E_grid_supply, labels=['Solar Power Supply', 'Wind Power Supply', 'Storage Discharge Supply', 'Grid Power Supply'])
+    axs[0].set_xlabel('Time (hours)')
+    axs[0].set_ylabel('Energy (kWh)')
+    axs[0].set_title('Energy Supply Sources Stack Plot')
     axs[0].legend()
     axs[0].grid(True)
 
-    # （2）各能源类型时序供应曲线
-    axs[1].plot(t, E_solar_supply, 'g', label='太阳能供电')
-    axs[1].plot(t, E_wind_supply, 'c', label='风能供电')
-    axs[1].plot(t, E_storage_discharge, 'm', label='储能放电供电')
-    axs[1].plot(t, E_grid_supply, 'r', label='电网供电')
-    axs[1].set_xlabel('时间（小时）')
-    axs[1].set_ylabel('能量（kWh）')
-    axs[1].set_title('各能源类型时序供应曲线')
+    # (2) Supply curves for different energy types
+    axs[1].plot(t, E_solar_supply, 'g', label='Solar Power Supply')
+    axs[1].plot(t, E_wind_supply, 'c', label='Wind Power Supply')
+    axs[1].plot(t, E_storage_discharge, 'm', label='Storage Discharge Supply')
+    axs[1].plot(t, E_grid_supply, 'r', label='Grid Power Supply')
+    axs[1].set_xlabel('Time (hours)')
+    axs[1].set_ylabel('Energy (kWh)')
+    axs[1].set_title('Energy Type Supply Curves')
     axs[1].legend()
     axs[1].grid(True)
 
-    # （3）可再生能源和负荷需求关系曲线图
-    axs[2].plot(t, E_solar + E_wind, 'g--', label='光伏、风能总发电量')
-    axs[2].plot(t, E_load * (t[1] - t[0]), 'm:', label='负荷能耗需求')
-    axs[2].set_xlabel('时间（小时）')
-    axs[2].set_ylabel('能量（kWh）')
-    axs[2].set_title('光伏、风能发电与负荷需求关系图')
+    # (3) Renewable energy generation vs load demand curve
+    axs[2].plot(t, E_solar + E_wind, 'g--', label='Total Solar and Wind Generation')
+    axs[2].plot(t, E_load * (t[1] - t[0]), 'm:', label='Load Energy Demand')
+    axs[2].set_xlabel('Time (hours)')
+    axs[2].set_ylabel('Energy (kWh)')
+    axs[2].set_title('Renewable Energy Generation vs Load Demand')
     axs[2].legend()
     axs[2].grid(True)
 
-    # （4）储能水平变化图（SOC）
+    # (4) Storage State of Charge (SOC) curve
     axs[3].plot(t, E_storage / E_max * 100, 'c', linewidth=2)
-    axs[3].set_xlabel('时间（小时）')
-    axs[3].set_ylabel('储能水平（百分比）')
-    axs[3].set_title('储能设备 SOC（百分比）随时间变化图')
+    axs[3].set_xlabel('Time (hours)')
+    axs[3].set_ylabel('State of Charge (%)')
+    axs[3].set_title('Storage System SOC Over Time')
     axs[3].grid(True)
 
     plt.tight_layout()
 
-    # 绘制在特定时间点各能源对负荷的供应比例
+    # Pie chart for energy source contribution at a specific time point
+    t0 = start_time + T_end / 2
     idx = np.argmin(np.abs(t - t0))
     energy_sources = [E_solar_supply[idx], E_wind_supply[idx], E_storage_discharge[idx], E_grid_supply[idx]]
     total_supply = sum(energy_sources)
     energy_percentage = np.array(energy_sources) / total_supply * 100 if total_supply > 0 else np.zeros_like(energy_sources)
 
-    energy_labels = ['太阳能供电', '风能供电', '储能供电', '电网供电']
+    energy_labels = ['Solar Power Supply', 'Wind Power Supply', 'Storage Supply', 'Grid Supply']
     energy_labels_with_percent = [f'{lbl}: {pct:.1f}%' for lbl, pct in zip(energy_labels, energy_percentage)]
 
     plt.figure()
     plt.pie(energy_sources, labels=energy_labels_with_percent, autopct='%1.1f%%')
-    plt.title(f'{material_type} {t[idx]:.2f} 小时各能源对负荷的供应比例')
+    plt.title(f'{material_type} Energy Contribution at {t[idx]:.2f} Hours')
 
     plt.show()
+
+plot_results(
+    t, 
+    E_solar_supply, 
+    E_wind_supply, 
+    E_storage_discharge, 
+    E_grid_supply, 
+    E_solar, 
+    E_wind, 
+    E_load, 
+    E_storage, 
+    E_max, 
+    material_type,
+    start_time,
+    T_end
+)

@@ -291,12 +291,10 @@ print(f"总能耗: {E_total}")
 
 # 初始化参数
 start_time = 5
-dt = 0.05  # 时间步长（小时）
+dt = 0.05
 num_segments = len(min_path) - 1
-
 # 预分配 segment_info
 segment_info = [{'start_time': None, 'end_time': None, 'P_edge': None} for _ in range(num_segments)]
-
 # 初始化最小输送能力
 Q_min_edge = np.inf
 total_P_edge = 0
@@ -319,31 +317,15 @@ for k in range(num_segments):
     if not edge_found:
         raise ValueError(f'在 edge_indices 中未找到边 ({node_start}, {node_end})。可能原因：该边不可通行或数据有误。')
 
-    # 更新最小输送能力
     Q_min_edge = min(Q_min_edge, Q_edge)
-
-    # 累加总的功率需求
     total_P_edge += P_edge
-
-    # 存储该段的信息
     segment_info[k]['P_edge'] = P_edge
 
-# 计算总的运输时间，由最小的输送能力决定
 T_total = Q_total / Q_min_edge
-
-# 输出最小输送能力
 print(f'最小输送能力为 {Q_min_edge:.2f} 吨/小时。')
-
-# 设置模拟总时间为运输任务的总时间
 T_end = T_total
-
-# 生成时间向量（实际时间）
 t = np.arange(start_time, start_time + T_end, dt)
-
-# 初始化负荷曲线
 E_load = np.full_like(t, total_P_edge)
-
-# 输出运输任务完成时间
 print(f'运输任务在 {T_end:.2f} 小时内完成。')
 
 
@@ -352,17 +334,12 @@ print(f'运输任务在 {T_end:.2f} 小时内完成。')
 latitude = 30  # 设置纬度
 declination = 23.45 * np.sin(np.deg2rad(360 * (284 + day_of_year) / 365))
 hour_angle = np.degrees(np.arccos(-np.tan(np.deg2rad(latitude)) * np.tan(np.deg2rad(declination))))
-
 sunrise = 12 - hour_angle / 15
 sunset = 12 + hour_angle / 15
-
 sunrise = max(0, sunrise)
 sunset = min(24, sunset)
-
 print(f'当天日出时间：{sunrise:.2f} 点')
 print(f'当天日落时间：{sunset:.2f} 点')
-
-
 
 P_solar_one = 0.4  # 单块最大功率（kW）
 P_solar_Panel = 200
@@ -376,13 +353,10 @@ for i in range(len(t)):
 P_solar[P_solar < 0] = 0
 E_solar = P_solar * dt
 
-
 k_weibull = 2  # 形状参数
 c_weibull = 8  # 平均风速
-
 np.random.seed(1)
 v_wind = weibull_min.rvs(k_weibull, scale=c_weibull, size=len(t))
-
 v_in = 5
 v_rated = 8
 v_out = 12
@@ -401,7 +375,6 @@ for i in range(len(v_wind)):
 
 P_wind *= N_wind_turbine
 E_wind = P_wind * dt
-
 
 P_renewable = P_solar + P_wind
 E_renewable = E_solar + E_wind
@@ -429,15 +402,11 @@ for i in range(1, len(t)):
     E_gen_solar = E_solar[i]
     E_gen_wind = E_wind[i]
     E_load_step = E_load[i] * dt
-
     E_storage[i] = E_storage[i-1]
-
     E_solar_supply[i] = min(E_gen_solar, E_load_step)
     remaining_load = E_load_step - E_solar_supply[i]
-
     E_wind_supply[i] = min(E_gen_wind, remaining_load)
     remaining_load -= E_wind_supply[i]
-
     net_renewable_energy = (E_gen_solar + E_gen_wind) - (E_solar_supply[i] + E_wind_supply[i])
 
     if net_renewable_energy > 0:

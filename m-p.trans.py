@@ -84,16 +84,13 @@ def calculate_energy_matrix(yard_matrix, Q_list_regular, P_list_regular, Q_total
                     sc = special_edge_dict[special_key]
                     Q_value = sc['Q']
                     P_value = sc['P']
-                    if Q_value == 0 or np.isinf(Q_value):
-                        # 如果 Q 为 0 或无穷大，设置为不可通行
-                        print(f"节点 {i+1} 和 {j+1} 之间的 Q 为 0 或无穷大，无法运输，设置为不可通行。")
+                    if Q_value == 0:
+                        print(f"节点 {i+1} 和 {j+1} 之间的 Q 为 0，无法运输，设置为不可通行。")
                         continue
                     T_i = Q_total / Q_value
-                    
-                    # 处理 P 为 0 或无穷大的情况
-                    if P_value == 0 or np.isinf(P_value):
-                        print(f"节点 {i+1} 和 {j+1} 之间的 P 为 0 或无穷大，假设该连接不消耗能量。")
-                        P_value = 1e-6  # 设置一个接近 0 的小值，表示无能耗但避免除零问题
+                    if P_value == 0:
+                        print(f"节点 {i+1} 和 {j+1} 之间的 P 为 0，假设该连接不消耗能量。")
+                        P_value = 1e-6  # 避免除零 
 
                     # 检查无效值
                     if np.isnan(P_value) or np.isnan(T_i) or np.isinf(P_value) or np.isinf(T_i):
@@ -284,7 +281,7 @@ def calculate_energy_consumption(Q_total, material_type, start_point, end_point)
     return min_path, E_total, Ei, edge_indices, energy_matrix
 
 # 调用计算最小能耗路径的函数
-min_path, E_total, Ei = calculate_energy_consumption(Q_total, material_type, start_point, end_point)
+min_path, E_total, Ei, edge_indices, energy_matrix = calculate_energy_consumption(Q_total, material_type, start_point, end_point)
 
 # 输出计算结果
 print(f"最小路径: {min_path}")

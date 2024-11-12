@@ -220,7 +220,7 @@ def dijkstra(energy_matrix, start_point, end_point):
 
 def calculate_energy_matrix(yard_matrix, Q_list_regular, P_list_regular, Q_total, special_connections, material_type):
     n = yard_matrix.shape[0]
-    energy_matrix = np.full((n, n), np.inf)
+    energy_matrix = np.full((n, n), np.inf)  # 初始化为无穷大，表示不可通行
     edge_indices = []
     regular_idx = 0
     special_conn = special_connections.get(material_type, [])
@@ -235,14 +235,25 @@ def calculate_energy_matrix(yard_matrix, Q_list_regular, P_list_regular, Q_total
                 special_key = (i, j) if (i, j) in special_edge_dict else (j, i)
                 if special_key in special_edge_dict:
                     sc = special_edge_dict[special_key]
-                    edge_info = {'nodes': [i + 1, j + 1], 'Q': sc['Q'], 'P': sc['P']}
-                    T_i = Q_total / sc['Q']
+                    Q_value = sc['Q']
+                    P_value = sc['P']
+                    if Q_value == 0:
+                        # 如果 Q 为 0，设置为不可通行
+                        print(f"节点 {i+1} 和 {j+1} 之间的 Q 为 0，无法运输，设置为不可通行。")
+                        continue
+                    T_i = Q_total / Q_value
                     
-                    # 检查无效值
-                    if np.isnan(sc['P']) or np.isnan(T_i) or np.isinf(sc['P']) or np.isinf(T_i):
-                        raise ValueError(f"无效的 P 或 T_i 值：P={sc['P']}, T_i={T_i}，发生在节点 {i+1} 到 {j+1}")
+                    # 处理 P 为 0 的情况
+                    if P_value == 0:
+                        print(f"节点 {i+1} 和 {j+1} 之间的 P 为 0，假设该连接不消耗能量。")
+                        P_value = 1e-6  # 设置一个接近 0 的小值，表示无能耗但避免除零问题
 
-                    energy_matrix[i, j] = energy_matrix[j, i] = sc['P'] * T_i
+                    # 检查无效值
+                    if np.isnan(P_value) or np.isnan(T_i) or np.isinf(P_value) or np.isinf(T_i):
+                        raise ValueError(f"无效的 P 或 T_i 值：P={P_value}, T_i={T_i}，发生在节点 {i+1} 到 {j+1}")
+
+                    energy_matrix[i, j] = energy_matrix[j, i] = P_value * T_i
+                    edge_info = {'nodes': [i + 1, j + 1], 'Q': Q_value, 'P': P_value}
                     edge_indices.append(edge_info)
                 else:
                     if regular_idx >= len(Q_list_regular) or regular_idx >= len(P_list_regular):
@@ -254,9 +265,15 @@ def calculate_energy_matrix(yard_matrix, Q_list_regular, P_list_regular, Q_total
 
                     # 检查 Q_value 是否为零
                     if Q_value == 0:
-                        raise ValueError(f"Q_value 不能为零，发生在节点 {i+1} 到 {j+1}")
-                    
+                        print(f"节点 {i+1} 和 {j+1} 之间的 Q 为 0，无法运输，设置为不可通行。")
+                        continue  # 跳过该连接
+
                     T_i = Q_total / Q_value
+
+                    # 处理 P 为 0 的情况
+                    if P_value == 0:
+                        print(f"节点 {i+1} 和 {j+1} 之间的 P 为 0，假设该连接不消耗能量。")
+                        P_value = 1e-6  # 设置一个接近 0 的小值
 
                     # 检查无效值
                     if np.isnan(P_value) or np.isnan(T_i) or np.isinf(P_value) or np.isinf(T_i):
@@ -396,7 +413,7 @@ E_wind = P_wind * dt
 P_renewable = P_solar + P_wind
 E_renewable = E_solar + E_wind
 
-# 5. 分布式能量储存参数
+
 E_max = 50000  # 储能系统最大容量（kWh）
 E_storage = np.zeros_like(t)
 E_storage[0] = E_max  # 初始储能水平

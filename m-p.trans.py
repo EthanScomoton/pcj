@@ -260,9 +260,9 @@ min_path, E_total, Ei, edge_indices, energy_matrix = calculate_energy_consumptio
 # 输出计算结果
 print(f"最小路径: {min_path}")
 print(f"总能耗: {E_total}")
-print(f"Ei: {Ei}")
-print(f"边索引: {edge_indices}")
-print(f"能耗矩阵: \n{energy_matrix}")
+#print(f"Ei: {Ei}")
+#print(f"边索引: {edge_indices}")
+#print(f"能耗矩阵: \n{energy_matrix}")
 
 
 # 初始化参数
@@ -322,10 +322,10 @@ E_load = np.full_like(t, total_P_edge)
 # 输出运输任务完成时间
 print(f'运输任务在 {T_end:.2f} 小时内完成。')
 
-# 1. 计算日出和日落时间
-day_of_year = 172  # 可根据需要设置
-latitude = 30  # 设置纬度
 
+
+
+latitude = 30  # 设置纬度
 declination = 23.45 * np.sin(np.deg2rad(360 * (284 + day_of_year) / 365))
 hour_angle = np.degrees(np.arccos(-np.tan(np.deg2rad(latitude)) * np.tan(np.deg2rad(declination))))
 
@@ -338,11 +338,11 @@ sunset = min(24, sunset)
 print(f'当天日出时间：{sunrise:.2f} 点')
 print(f'当天日落时间：{sunset:.2f} 点')
 
-# 2. 太阳能发电参数
+
+
 P_solar_one = 0.4  # 单块最大功率（kW）
 P_solar_Panel = 200
 P_solar_max = P_solar_one * P_solar_Panel
-
 P_solar = np.zeros_like(t)
 
 for i in range(len(t)):
@@ -350,10 +350,9 @@ for i in range(len(t)):
     if sunrise <= current_time <= sunset:
         P_solar[i] = P_solar_max * np.sin(np.pi * (current_time - sunrise) / (sunset - sunrise))
 P_solar[P_solar < 0] = 0
-
 E_solar = P_solar * dt
 
-# 3. 风能发电参数
+
 k_weibull = 2  # 形状参数
 c_weibull = 8  # 平均风速
 
@@ -365,7 +364,6 @@ v_rated = 8
 v_out = 12
 P_wind_rated = 1000
 N_wind_turbine = 3
-
 P_wind = np.zeros_like(t)
 
 for i in range(len(v_wind)):
@@ -380,7 +378,7 @@ for i in range(len(v_wind)):
 P_wind *= N_wind_turbine
 E_wind = P_wind * dt
 
-# 4. 总可再生能源发电功率
+
 P_renewable = P_solar + P_wind
 E_renewable = E_solar + E_wind
 
@@ -388,24 +386,19 @@ E_renewable = E_solar + E_wind
 E_max = 50000  # 储能系统最大容量（kWh）
 E_storage = np.zeros_like(t)
 E_storage[0] = E_max  # 初始储能水平
-
 P_charge_max = 1000
 P_discharge_max = P_charge_max
-
 E_charge_max = P_charge_max * dt
 E_discharge_max = P_discharge_max * dt
-
 E_target = E_max * 0.8
 
-# 6. 能量调度
+
 E_solar_supply = np.zeros_like(t)
 E_wind_supply = np.zeros_like(t)
 E_storage_discharge = np.zeros_like(t)
 E_grid_supply = np.zeros_like(t)
-
 E_storage_charge_from_renewable = np.zeros_like(t)
 E_storage_charge_from_grid = np.zeros_like(t)
-
 E_grid_draw = np.zeros_like(t)
 
 for i in range(1, len(t)):
@@ -450,13 +443,12 @@ for i in range(1, len(t)):
 
     E_storage[i] = min(max(E_storage[i], 0), E_max)
 
-# 函数：绘图优化 - 使用面向对象的接口，减少 plt.show() 调用次数
+# 绘图
 def plot_results(t, E_solar_supply, E_wind_supply, E_storage_discharge, E_grid_supply, E_solar, E_wind, E_load, E_storage, E_max, material_type, t0):
     fig, axs = plt.subplots(4, 1, figsize=(10, 16))
     
     # （1）能源供应来源堆叠图
-    axs[0].stackplot(t, E_solar_supply, E_wind_supply, E_storage_discharge, E_grid_supply,
-                     labels=['太阳能供电', '风能供电', '储能放电供电', '电网供电'])
+    axs[0].stackplot(t, E_solar_supply, E_wind_supply, E_storage_discharge, E_grid_supply,labels=['太阳能供电', '风能供电', '储能放电供电', '电网供电'])
     axs[0].set_xlabel('时间（小时）')
     axs[0].set_ylabel('能量（kWh）')
     axs[0].set_title('能源供应来源堆叠图')

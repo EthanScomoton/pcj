@@ -215,10 +215,6 @@ def dijkstra(energy_matrix, start_point, end_point):
     return min_path, E_total
 
 
-
-# 调用计算最小能耗路径的函数
-min_path, E_total, Ei, edge_indices, energy_matrix = calculate_energy_consumption(Q_total, material_type, start_point, end_point)
-
 def calculate_energy_matrix(yard_matrix, Q_list_regular, P_list_regular, Q_total, special_connections, material_type):
     n = yard_matrix.shape[0]
     energy_matrix = np.full((n, n), np.inf)
@@ -254,6 +250,9 @@ def calculate_energy_matrix(yard_matrix, Q_list_regular, P_list_regular, Q_total
                     edge_indices.append(edge_info)
 
     return energy_matrix, edge_indices
+
+# 调用计算最小能耗路径的函数
+min_path, E_total, Ei, edge_indices, energy_matrix = calculate_energy_consumption(Q_total, material_type, start_point, end_point)
 
 # 输出计算结果
 print(f"最小路径: {min_path}")

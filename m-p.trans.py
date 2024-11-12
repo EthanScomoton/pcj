@@ -237,6 +237,11 @@ def calculate_energy_matrix(yard_matrix, Q_list_regular, P_list_regular, Q_total
                     sc = special_edge_dict[special_key]
                     edge_info = {'nodes': [i + 1, j + 1], 'Q': sc['Q'], 'P': sc['P']}
                     T_i = Q_total / sc['Q']
+                    
+                    # 检查无效值
+                    if np.isnan(sc['P']) or np.isnan(T_i) or np.isinf(sc['P']) or np.isinf(T_i):
+                        raise ValueError(f"无效的 P 或 T_i 值：P={sc['P']}, T_i={T_i}，发生在节点 {i+1} 到 {j+1}")
+
                     energy_matrix[i, j] = energy_matrix[j, i] = sc['P'] * T_i
                     edge_indices.append(edge_info)
                 else:
@@ -247,7 +252,16 @@ def calculate_energy_matrix(yard_matrix, Q_list_regular, P_list_regular, Q_total
                     P_value = P_list_regular[regular_idx]
                     regular_idx += 1
 
+                    # 检查 Q_value 是否为零
+                    if Q_value == 0:
+                        raise ValueError(f"Q_value 不能为零，发生在节点 {i+1} 到 {j+1}")
+                    
                     T_i = Q_total / Q_value
+
+                    # 检查无效值
+                    if np.isnan(P_value) or np.isnan(T_i) or np.isinf(P_value) or np.isinf(T_i):
+                        raise ValueError(f"无效的 P_value 或 T_i 值，发生在节点 {i+1} 到 {j+1}。P_value: {P_value}, T_i: {T_i}")
+
                     energy_matrix[i, j] = energy_matrix[j, i] = P_value * T_i
                     edge_info = {'nodes': [i + 1, j + 1], 'Q': Q_value, 'P': P_value}
                     edge_indices.append(edge_info)

@@ -285,7 +285,6 @@ min_path, E_total, Ei = calculate_energy_consumption(Q_total, material_type, sta
 # 输出计算结果
 print(f"最小路径: {min_path}")
 print(f"总能耗: {E_total}")
-#print(f"Ei: {Ei}")
 #print(f"边索引: {edge_indices}")
 #print(f"能耗矩阵: \n{energy_matrix}")
 

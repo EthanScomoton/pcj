@@ -92,13 +92,10 @@ model = MyModel()
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 model.to(device)
 
+
 # 定义损失函数和优化器
 criterion = nn.CrossEntropyLoss()  # 使用交叉熵损失函数
 optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)  # 使用Adam优化器
-
-# =====================================
-# 模拟输入数据和标签（在主代码中进行输入）
-# =====================================
 
 # 生成模拟数据（需要替换为实际数据）
 # 输入数据: (样本数量, 时间步数, 特征数)
@@ -113,9 +110,6 @@ dataset = TensorDataset(inputs, labels)
 data_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 # 此处batch_size已标注为批次大小
 
-# =====================================
-# 训练过程
-# =====================================
 
 for epoch in range(num_epochs):
     model.train()  # 设置模型为训练模式

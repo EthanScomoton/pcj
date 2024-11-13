@@ -9,11 +9,15 @@ from torch.utils.tensorboard import SummaryWriter
 import numpy as np
 from tqdm import tqdm  # 进度条库，用于显示进度条
 from scipy.stats import weibull_min
+import matplotlib.pyplot as plt
 
 # 设置参数
 time_steps = 1000  # 时间步数
 num_features = 6
 num_classes = 2   # 类别数量
+
+train_acc_history = []
+val_acc_history = []
 
 # 超参数
 learning_rate = 1e-4  # 学习率
@@ -374,6 +378,10 @@ for epoch in range(num_epochs):
     writer.add_scalar('Val/Loss', val_loss, epoch)
     writer.add_scalar('Val/Accuracy', val_acc, epoch)
 
+    # 记录训练和验证准确率
+    train_acc_history.append(epoch_acc.cpu().item())
+    val_acc_history.append(val_acc.cpu().item())
+
     # 打印结果
     print(f'\nEpoch {epoch + 1}/{num_epochs}, Train Loss: {epoch_loss:.4f}, Train Acc: {epoch_acc:.4f}, '
           f'Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.4f}')
@@ -390,6 +398,24 @@ for epoch in range(num_epochs):
         if counter >= patience:
             print("验证集损失未降低，提前停止训练")
             break
+
+# 绘制训练和验证集准确率的折线图
+def plot_accuracy(train_acc_history, val_acc_history):
+    epochs = range(1, len(train_acc_history) + 1)
+
+    plt.figure(figsize=(10, 6))
+    plt.plot(epochs, train_acc_history, label='Train Accuracy', marker='o')
+    plt.plot(epochs, val_acc_history, label='Validation Accuracy', marker='o')
+
+    plt.title('Train and Validation Accuracy per Epoch')
+    plt.xlabel('Epochs')
+    plt.ylabel('Accuracy')
+    plt.legend()
+    plt.grid(True)
+    plt.show()
+
+# 在训练完成后调用此函数
+plot_accuracy(train_acc_history, val_acc_history)
 
 # 关闭 TensorBoard
 writer.close()

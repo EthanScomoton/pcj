@@ -73,13 +73,10 @@ class MyModel(nn.Module):
 
         # 转换为 (batch_size, seq_length, features)
         x = x.permute(0, 2, 1)
-
         # BiGRU层
         gru_out, _ = self.bigru(x)
-
         # 注意力机制
         attn_out = self.attention(gru_out)
-
         # 全连接层
         x = F.relu(self.fc1(attn_out))
         x = self.dropout(x)
@@ -92,14 +89,11 @@ num_samples = 2000  # 样本数量
 
 
 def generate_solar_power(time_steps, num_samples, latitude=30):
-
     dt = 1  # 时间步长（小时）
     t = np.arange(0, time_steps) * dt  # 每个时间步对应的时间（小时）
-    
     P_solar_one = 0.4  # 单块最大功率（kW）
     P_solar_Panel = 200  # 光伏面板数量
     P_solar_max = P_solar_one * P_solar_Panel  # 光伏系统的最大功率输出
-
     solar_power = np.zeros((num_samples, time_steps))
     
     for sample in range(num_samples):
@@ -122,21 +116,14 @@ def generate_solar_power(time_steps, num_samples, latitude=30):
     return solar_power
 
 def generate_wind_power(time_steps, num_samples, k_weibull=2, c_weibull=8, v_in=5, v_rated=8, v_out=12, P_wind_rated=1000, N_wind_turbine=3):
-
-    # 时间参数
     dt = 1  # 时间步长 (小时)
     t = np.arange(0, time_steps) * dt  # 每个时间步对应的时间（小时）
-    
-    # 初始化风能发电功率矩阵
     wind_power = np.zeros((num_samples, time_steps))
-    
-    # 生成每个样本的风速和风能发电功率
+
     for sample in range(num_samples):
         # 生成符合Weibull分布的风速
-        np.random.seed(sample)  # 使用样本编号作为随机数种子，确保每个样本的风速不同
+        np.random.seed(sample)  # 随机数种子，确保每个样本的风速不同
         v_wind = weibull_min.rvs(k_weibull, scale=c_weibull, size=len(t))
-        
-        # 初始化当前样本的风能发电功率
         P_wind = np.zeros_like(t)
         
         for i in range(len(v_wind)):
@@ -144,32 +131,23 @@ def generate_wind_power(time_steps, num_samples, k_weibull=2, c_weibull=8, v_in=
             if v < v_in or v >= v_out:
                 P_wind[i] = 0
             elif v_in <= v < v_rated:
-                # 计算风速在启动风速和额定风速之间时的功率
                 P_wind[i] = P_wind_rated * ((v - v_in) / (v_rated - v_in)) ** 3
             else:
-                # 风速在额定风速到停机风速之间时，输出额定功率
                 P_wind[i] = P_wind_rated
-        
-        # 考虑风电机组数量
         P_wind *= N_wind_turbine
-        
-        # 计算发电量 (kWh)，假设每个时间步长为dt小时
         E_wind = P_wind * dt
-        
-        # 将该样本的风能发电数据存储到wind_power矩阵中
-        wind_power[sample, :] = E_wind
-    
+        wind_power[sample, :] = E_wind    
     return wind_power
 
 
 
 
 # 生成模拟数据：随机生成数值，模拟不同能源的发电量与需求
-solar_power = generate_solar_power(time_steps, num_samples, latitude=30)    # 光伏发电
-wind_power = generate_wind_power(time_steps, num_samples, k_weibull=2, c_weibull=8, v_in=5, v_rated=8, v_out=12, P_wind_rated=1000, N_wind_turbine=3)      # 风能发电
-energy_demand = generate_energy_demand(time_steps, num_samples)  # 港口能源需求
-storage_power = generate_storage_power(time_steps, num_samples)  # 储能电量
-grid_power = generate_grid_power(time_steps, num_samples, energy_demand)  # 电网供电
+solar_power = generate_solar_power(time_steps, num_samples, latitude=30)
+wind_power = generate_wind_power(time_steps, num_samples, k_weibull=2, c_weibull=8, v_in=5, v_rated=8, v_out=12, P_wind_rated=1000, N_wind_turbine=3)
+energy_demand = generate_energy_demand(time_steps, num_samples)
+storage_power = generate_storage_power(time_steps, num_samples)
+grid_power = generate_grid_power(time_steps, num_samples, energy_demand)
 
 # 将所有特征组合成输入数据
 inputs = np.stack([solar_power, wind_power, storage_power, grid_power, energy_demand], axis=2)

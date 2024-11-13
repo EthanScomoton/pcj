@@ -16,9 +16,6 @@ time_steps = 1000  # 时间步数
 num_features = 6
 num_classes = 2   # 类别数量
 
-train_acc_history = []
-val_acc_history = []
-
 # 超参数
 learning_rate = 1e-4  # 学习率
 num_epochs = 20        # 训练轮数
@@ -70,13 +67,13 @@ class MyModel(nn.Module):
         self.bigru = nn.GRU(input_size=256, hidden_size=256, batch_first=True, bidirectional=True)
 
         # 注意力机制层
-        self.attention = Attention(input_dim=256)
+        self.attention = Attention(input_dim=512)
 
         # 全连接层和批归一化层
-        self.fc1 = nn.Linear(256, 128)
-        self.bn_fc1 = nn.BatchNorm1d(num_features=64)
+        self.fc1 = nn.Linear(512, 128)
+        self.bn_fc1 = nn.BatchNorm1d(num_features=128)
         self.dropout = nn.Dropout(0.5)
-        self.fc2 = nn.Linear(64, num_classes)
+        self.fc2 = nn.Linear(128, num_classes)
 
     def forward(self, x):
         # x形状: (batch_size, time_steps, features)
@@ -257,8 +254,8 @@ train_size = int(0.8 * len(dataset))
 val_size = len(dataset) - train_size
 train_dataset, val_dataset = torch.utils.data.random_split(dataset, [train_size, val_size])
 
-train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=1, pin_memory=True)
-val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=1, pin_memory=True)
+train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=0, pin_memory=True)
+val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=0, pin_memory=True)
 
 # 首选GPU，也可CPU
 model = MyModel(num_features=num_features, num_classes=num_classes)
@@ -282,7 +279,10 @@ def lr_lambda(current_step):
 scheduler = LambdaLR(optimizer, lr_lambda)
 
 # 使用自动混合精度
-scaler = torch.cuda.amp.GradScaler()
+if device.type == 'cuda':
+    scaler = torch.cuda.amp.GradScaler()  # 仅在 CUDA 可用时启用 GradScaler
+else:
+    scaler = None  # 如果没有 CUDA，不需要使用 GradScaler
 
 # 早停机制参数
 patience = 5  # 在验证集上若干个周期无提升则停止
@@ -319,6 +319,9 @@ def evaluate(model, dataloader, criterion, device):
 
 scheduler = LambdaLR(optimizer, lr_lambda)
 
+train_acc_history = []
+val_acc_history = []
+
 # 训练模型
 for epoch in range(num_epochs):
     model.train()
@@ -339,20 +342,27 @@ for epoch in range(num_epochs):
         # 提前零梯度
         optimizer.zero_grad()
 
-        # 前向传播（使用自动混合精度）
-        with torch.cuda.amp.autocast():
+        # 前向传播和反向传播（根据是否使用 CUDA 选择性使用自动混合精度）
+        if scaler:
+            # 如果使用 GPU 和 GradScaler
+            with torch.cuda.amp.autocast():
+                outputs = model(batch_inputs)
+                loss = criterion(outputs, batch_labels)
+            
+            # 反向传播和优化
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            # 如果是 CPU
             outputs = model(batch_inputs)
             loss = criterion(outputs, batch_labels)
+            
+            # 反向传播和优化
+            loss.backward()
+            optimizer.step()
 
-        # 反向传播和优化
-        scaler.scale(loss).backward()
-
-        # 梯度裁剪
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-
-        # 更新参数和学习率
-        scaler.step(optimizer)
-        scaler.update()
+        # 更新学习率
         scheduler.step()
 
         # 计算损失和准确率

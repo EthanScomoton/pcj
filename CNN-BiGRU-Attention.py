@@ -1,8 +1,12 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.optim import AdamW
+from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader, TensorDataset
+from torch.utils.tensorboard import SummaryWriter
 import numpy as np
+from tqdm import tqdm  # 进度条库，用于显示进度条
 from scipy.stats import weibull_min
 
 # 设置参数
@@ -25,10 +29,12 @@ class Attention(nn.Module):
             nn.Tanh(),
             nn.Linear(input_dim, 1)
         )
+        self.dropout = nn.Dropout(0.5)
 
     def forward(self, x):
         # x: (batch_size, seq_length, input_dim)
         attn_weights = self.attention(x)  # (batch_size, seq_length, 1)
+        attn_weights = self.dropout(attn_weights)
         attn_weights = F.softmax(attn_weights, dim=1)  # 对时间步进行softmax
         weighted = x * attn_weights  # 加权输入
         output = torch.sum(weighted, dim=1)  # 对序列维度求和，得到整体表示
@@ -37,50 +43,80 @@ class Attention(nn.Module):
 
 # 定义模型
 class MyModel(nn.Module):
-    def __init__(self):
+    def __init__(self, num_features, num_classes):
         super(MyModel, self).__init__()
-        # Conv1d卷积层 + 池化层
+        # 卷积层和批归一化层
         self.conv1 = nn.Conv1d(in_channels=num_features, out_channels=64, kernel_size=3, padding=1)
+        self.bn1 = nn.BatchNorm1d(num_features=64)
         self.conv2 = nn.Conv1d(in_channels=64, out_channels=64, kernel_size=3, padding=1)
+        self.bn2 = nn.BatchNorm1d(num_features=64)
         self.pool1 = nn.MaxPool1d(kernel_size=2)
-        self.conv3 = nn.Conv1d(in_channels=64, out_channels=128, kernel_size=3, padding=1)
-        self.conv4 = nn.Conv1d(in_channels=128, out_channels=128, kernel_size=3, padding=1)
-        self.pool2 = nn.MaxPool1d(kernel_size=2)
-        self.conv5 = nn.Conv1d(in_channels=128, out_channels=256, kernel_size=3, padding=1)
 
-        # BiGRU层
+        self.conv3 = nn.Conv1d(in_channels=64, out_channels=128, kernel_size=3, padding=1)
+        self.bn3 = nn.BatchNorm1d(num_features=128)
+        self.conv4 = nn.Conv1d(in_channels=128, out_channels=128, kernel_size=3, padding=1)
+        self.bn4 = nn.BatchNorm1d(num_features=128)
+        self.pool2 = nn.MaxPool1d(kernel_size=2)
+
+        self.conv5 = nn.Conv1d(in_channels=128, out_channels=256, kernel_size=3, padding=1)
+        self.bn5 = nn.BatchNorm1d(num_features=256)
+
+        # 双向GRU层
         self.bigru = nn.GRU(input_size=256, hidden_size=128, batch_first=True, bidirectional=True)
 
-        # 注意力机制
+        # 注意力机制层
         self.attention = Attention(input_dim=256)
 
-        # 全连接层
+        # 全连接层和批归一化层
         self.fc1 = nn.Linear(256, 64)
+        self.bn_fc1 = nn.BatchNorm1d(num_features=64)
         self.dropout = nn.Dropout(0.5)
         self.fc2 = nn.Linear(64, num_classes)
-
 
     def forward(self, x):
         # x形状: (batch_size, time_steps, features)
         x = x.permute(0, 2, 1)  # 转换为 (batch_size, features, time_steps)
 
-        # 卷积 + 池化层
-        x = F.relu(self.conv1(x))
-        x = F.relu(self.conv2(x))
+        # 卷积层1
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = F.relu(x)
+
+        # 卷积层2
+        x = self.conv2(x)
+        x = self.bn2(x)
+        x = F.relu(x)
         x = self.pool1(x)
-        x = F.relu(self.conv3(x))
-        x = F.relu(self.conv4(x))
+
+        # 卷积层3
+        x = self.conv3(x)
+        x = self.bn3(x)
+        x = F.relu(x)
+
+        # 卷积层4
+        x = self.conv4(x)
+        x = self.bn4(x)
+        x = F.relu(x)
         x = self.pool2(x)
-        x = F.relu(self.conv5(x))
+
+        # 卷积层5
+        x = self.conv5(x)
+        x = self.bn5(x)
+        x = F.relu(x)
 
         # 转换为 (batch_size, seq_length, features)
         x = x.permute(0, 2, 1)
-        # BiGRU层
+
+        # 双向GRU层
         gru_out, _ = self.bigru(x)
+
         # 注意力机制
         attn_out = self.attention(gru_out)
+
         # 全连接层
-        x = F.relu(self.fc1(attn_out))
+        x = self.fc1(attn_out)
+        x = self.bn_fc1(x)
+        x = F.relu(x)
         x = self.dropout(x)
         x = self.fc2(x)
 
@@ -219,36 +255,134 @@ model.to(device)
 
 # 定义损失函数和优化器
 criterion = nn.CrossEntropyLoss()
+
 optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+# 定义学习率调度器（线性预热 + 余弦退火）
+total_steps = num_epochs * len(train_loader)
+warmup_steps = int(0.1 * total_steps)  # 前10%步骤用于热身
+
+def lr_lambda(current_step):
+    if current_step < warmup_steps:
+        return float(current_step) / float(max(1, warmup_steps))
+    else:
+        return max(0.0, 0.5 * (1 + torch.cos(
+            torch.pi * (current_step - warmup_steps) / (total_steps - warmup_steps)
+        )))
+
+# 使用自动混合精度
+scaler = torch.cuda.amp.GradScaler()
+
+# 早停机制参数
+patience = 5  # 在验证集上若干个周期无提升则停止
+best_val_loss = float('inf')
+counter = 0
+
+# TensorBoard
+writer = SummaryWriter(log_dir='runs/experiment1')
+
+def evaluate(model, dataloader, criterion, device):
+    model.eval()
+    running_loss = 0.0
+    running_corrects = 0
+    num_samples = 0
+
+    with torch.no_grad():
+        for inputs, labels in dataloader:
+            inputs = inputs.to(device, non_blocking=True)
+            labels = labels.to(device, non_blocking=True)
+
+            with torch.cuda.amp.autocast():
+                outputs = model(inputs)
+                loss = criterion(outputs, labels)
+
+            # 统计损失和准确率
+            running_loss += loss.item() * inputs.size(0)
+            _, preds = torch.max(outputs, 1)
+            running_corrects += torch.sum(preds == labels)
+            num_samples += inputs.size(0)
+
+    val_loss = running_loss / num_samples
+    val_acc = running_corrects.double() / num_samples
+    return val_loss, val_acc
+
+scheduler = LambdaLR(optimizer, lr_lambda)
 
 # 训练模型
 for epoch in range(num_epochs):
     model.train()
     running_loss = 0.0
     running_corrects = 0
+    num_samples = 0
 
-    for batch_inputs, batch_labels in data_loader:
-        # 将数据移动到设备
-        batch_inputs, batch_labels = batch_inputs.to(device), batch_labels.to(device)
+    # 使用 tqdm 包装训练集数据加载器
+    progress_bar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs}")
+    
+    for batch_inputs, batch_labels in progress_bar:
+        # 将数据移动到设备，并使用 non_blocking=True
+        batch_inputs = batch_inputs.to(device, non_blocking=True)
+        batch_labels = batch_labels.to(device, non_blocking=True)
+        batch_size = batch_inputs.size(0)
+        num_samples += batch_size
 
-        # 前向传播
-        outputs = model(batch_inputs)
-        loss = criterion(outputs, batch_labels)
+        # 提前零梯度
+        optimizer.zero_grad()
+
+        # 前向传播（使用自动混合精度）
+        with torch.cuda.amp.autocast():
+            outputs = model(batch_inputs)
+            loss = criterion(outputs, batch_labels)
 
         # 反向传播和优化
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+        scaler.scale(loss).backward()
 
-        # 统计损失和准确率
-        running_loss += loss.item() * batch_inputs.size(0)
+        # 梯度裁剪
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+
+        # 更新参数和学习率
+        scaler.step(optimizer)
+        scaler.update()
+        scheduler.step()
+
+        # 计算损失和准确率
+        running_loss += loss.item() * batch_size
         _, preds = torch.max(outputs, 1)
-        running_corrects += torch.sum(preds == batch_labels.data)
+        running_corrects += torch.sum(preds == batch_labels)
 
-    # 计算平均损失和准确率
+        # 更新进度条描述
+        progress_bar.set_postfix({'Loss': running_loss / num_samples, 'Acc': (running_corrects.double() / num_samples).item()})
+
+    # 计算整个 epoch 的平均损失和准确率
     epoch_loss = running_loss / num_samples
     epoch_acc = running_corrects.double() / num_samples
 
-    print(f'第 {epoch + 1} 个周期，Loss: {epoch_loss:.4f}，Accuracy: {epoch_acc:.4f}')
+    # 在 TensorBoard 中记录训练指标
+    writer.add_scalar('Train/Loss', epoch_loss, epoch)
+    writer.add_scalar('Train/Accuracy', epoch_acc, epoch)
 
+    # 在验证集上评估
+    val_loss, val_acc = evaluate(model, val_loader, criterion, device)
+
+    # 在 TensorBoard 中记录验证指标
+    writer.add_scalar('Val/Loss', val_loss, epoch)
+    writer.add_scalar('Val/Accuracy', val_acc, epoch)
+
+    # 打印结果
+    print(f'\nEpoch {epoch + 1}/{num_epochs}, Train Loss: {epoch_loss:.4f}, Train Acc: {epoch_acc:.4f}, '
+          f'Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.4f}')
+
+    # 早停机制和保存最优模型
+    if val_loss < best_val_loss:
+        best_val_loss = val_loss
+        counter = 0
+        # 保存最优模型
+        torch.save(model.state_dict(), 'best_model.pth')
+        print("模型已保存！")
+    else:
+        counter += 1
+        if counter >= patience:
+            print("验证集损失未降低，提前停止训练")
+            break
+
+# 关闭 TensorBoard
+writer.close()
 print('训练完成。')

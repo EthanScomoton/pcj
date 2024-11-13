@@ -1,4 +1,5 @@
 import torch
+import math
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.optim import AdamW
@@ -45,7 +46,7 @@ class Attention(nn.Module):
 class MyModel(nn.Module):
     def __init__(self, num_features, num_classes):
         super(MyModel, self).__init__()
-        # 卷积层和批归一化层
+        # 卷积层和归一化层
         self.conv1 = nn.Conv1d(in_channels=num_features, out_channels=64, kernel_size=3, padding=1)
         self.bn1 = nn.BatchNorm1d(num_features=64)
         self.conv2 = nn.Conv1d(in_channels=64, out_channels=64, kernel_size=3, padding=1)
@@ -61,7 +62,7 @@ class MyModel(nn.Module):
         self.conv5 = nn.Conv1d(in_channels=128, out_channels=256, kernel_size=3, padding=1)
         self.bn5 = nn.BatchNorm1d(num_features=256)
 
-        # 双向GRU层
+        # BiGRU层
         self.bigru = nn.GRU(input_size=256, hidden_size=128, batch_first=True, bidirectional=True)
 
         # 注意力机制层
@@ -252,10 +253,10 @@ train_size = int(0.8 * len(dataset))
 val_size = len(dataset) - train_size
 train_dataset, val_dataset = torch.utils.data.random_split(dataset, [train_size, val_size])
 
-train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=True)
-val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True)
+train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=0, pin_memory=True)
+val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=0, pin_memory=True)
 
-# 创建模型实例并移动到GPU（如果可用）
+# 首选GPU，也可CPU
 model = MyModel(num_features=num_features, num_classes=num_classes)
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 model.to(device)
@@ -272,7 +273,7 @@ def lr_lambda(current_step):
     if current_step < warmup_steps:
         return float(current_step) / float(max(1, warmup_steps))
     else:
-        return max(0.0, 0.5 * (1 + torch.cos(torch.pi * (current_step - warmup_steps) / (total_steps - warmup_steps))))
+        return max(0.0, 0.5 * (1 + math.cos(math.pi * (current_step - warmup_steps) / (total_steps - warmup_steps))))
 
 scheduler = LambdaLR(optimizer, lr_lambda)
 

@@ -446,7 +446,8 @@ def plot_results(t, E_solar_supply, E_wind_supply, E_storage_discharge, E_grid_s
     axs[0].set_xlabel('Time (hours)')
     axs[0].set_ylabel('Energy (kWh)')
     axs[0].set_title('Energy Supply Sources Stack Plot')
-    axs[0].legend()
+    # Move legend to upper right corner, outside the plot
+    axs[0].legend(loc='upper right', bbox_to_anchor=(1.15, 1), framealpha=0.9, edgecolor="black")
     axs[0].grid(True)
 
     # (2) Supply curves for different energy types
@@ -457,7 +458,8 @@ def plot_results(t, E_solar_supply, E_wind_supply, E_storage_discharge, E_grid_s
     axs[1].set_xlabel('Time (hours)')
     axs[1].set_ylabel('Energy (kWh)')
     axs[1].set_title('Energy Type Supply Curves')
-    axs[1].legend()
+    # Move legend to upper right corner, outside the plot
+    axs[1].legend(loc='upper right', bbox_to_anchor=(1.15, 1), framealpha=0.9, edgecolor="black")
     axs[1].grid(True)
 
     # (3) Renewable energy generation vs load demand curve
@@ -466,7 +468,8 @@ def plot_results(t, E_solar_supply, E_wind_supply, E_storage_discharge, E_grid_s
     axs[2].set_xlabel('Time (hours)')
     axs[2].set_ylabel('Energy (kWh)')
     axs[2].set_title('Renewable Energy Generation vs Load Demand')
-    axs[2].legend()
+    # Move legend to upper right corner, outside the plot
+    axs[2].legend(loc='upper right', bbox_to_anchor=(1.15, 1), framealpha=0.9, edgecolor="black")
     axs[2].grid(True)
 
     # (4) Storage State of Charge (SOC) curve
@@ -476,20 +479,21 @@ def plot_results(t, E_solar_supply, E_wind_supply, E_storage_discharge, E_grid_s
     axs[3].set_title('Storage System SOC Over Time')
     axs[3].grid(True)
 
+    # Adjust layout to prevent overlap
     plt.tight_layout()
 
     # Pie chart for energy source contribution at a specific time point
-    t0 = start_time + T_end / 2
+    t0 = start_time + T_end / 2  # Any time point
     idx = np.argmin(np.abs(t - t0))
     energy_sources = [E_solar_supply[idx], E_wind_supply[idx], E_storage_discharge[idx], E_grid_supply[idx]]
     total_supply = sum(energy_sources)
     energy_percentage = np.array(energy_sources) / total_supply * 100 if total_supply > 0 else np.zeros_like(energy_sources)
-
     energy_labels = ['Solar Power Supply', 'Wind Power Supply', 'Storage Supply', 'Grid Supply']
     energy_labels_with_percent = [f'{lbl}: {pct:.1f}%' for lbl, pct in zip(energy_labels, energy_percentage)]
 
-    plt.figure()
-    plt.pie(energy_sources, labels=energy_labels_with_percent, autopct='%1.1f%%')
+    # Create a new figure for the pie chart
+    plt.figure(figsize=(6, 6))
+    plt.pie(energy_sources, labels=energy_labels_with_percent, autopct='%1.1f%%', startangle=90)
     plt.title(f'{material_type} Energy Contribution at {t[idx]:.2f} Hours')
 
     plt.show()

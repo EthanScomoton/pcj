@@ -124,7 +124,7 @@ class MyModel(nn.Module):
         return x
 
 np.random.seed(42)  # 固定随机数种子，确保结果可复现
-num_samples = 2000  # 样本数量
+num_samples = 300  # 样本数量
 
 
 def generate_solar_power(time_steps, num_samples, latitude=30):
@@ -253,8 +253,8 @@ train_size = int(0.8 * len(dataset))
 val_size = len(dataset) - train_size
 train_dataset, val_dataset = torch.utils.data.random_split(dataset, [train_size, val_size])
 
-train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=0, pin_memory=True)
-val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=0, pin_memory=True)
+train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=1, pin_memory=True)
+val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=1, pin_memory=True)
 
 # 首选GPU，也可CPU
 model = MyModel(num_features=num_features, num_classes=num_classes)

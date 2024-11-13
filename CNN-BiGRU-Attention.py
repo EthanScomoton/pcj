@@ -16,9 +16,9 @@ num_features = 6
 num_classes = 2   # 类别数量
 
 # 超参数
-learning_rate = 1e-3  # 学习率
+learning_rate = 1e-4  # 学习率
 num_epochs = 20        # 训练轮数
-batch_size = 32        # 批次大小
+batch_size = 64        # 批次大小
 weight_decay = 1e-4    # L2正则化防止过拟合
 
 # 自定义注意力机制模块
@@ -63,13 +63,13 @@ class MyModel(nn.Module):
         self.bn5 = nn.BatchNorm1d(num_features=256)
 
         # BiGRU层
-        self.bigru = nn.GRU(input_size=256, hidden_size=128, batch_first=True, bidirectional=True)
+        self.bigru = nn.GRU(input_size=256, hidden_size=256, batch_first=True, bidirectional=True)
 
         # 注意力机制层
         self.attention = Attention(input_dim=256)
 
         # 全连接层和批归一化层
-        self.fc1 = nn.Linear(256, 64)
+        self.fc1 = nn.Linear(256, 128)
         self.bn_fc1 = nn.BatchNorm1d(num_features=64)
         self.dropout = nn.Dropout(0.5)
         self.fc2 = nn.Linear(64, num_classes)

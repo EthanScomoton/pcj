@@ -15,7 +15,7 @@ num_features = 6
 num_classes = 2   # 类别数量
 
 # 超参数
-learning_rate = 0.001  # 学习率
+learning_rate = 1e-3  # 学习率
 num_epochs = 20        # 训练轮数
 batch_size = 32        # 批次大小
 weight_decay = 1e-4    # L2正则化防止过拟合
@@ -127,7 +127,7 @@ num_samples = 2000  # 样本数量
 
 
 def generate_solar_power(time_steps, num_samples, latitude=30):
-    dt = 1  # 时间步长（小时）
+    dt = 0.1  # 时间步长（小时）
     t = np.arange(0, time_steps) * dt  # 每个时间步对应的时间（小时）
     P_solar_one = 0.4  # 单块最大功率（kW）
     P_solar_Panel = 200  # 光伏面板数量
@@ -229,7 +229,7 @@ def generate_grid_power(time_steps, num_samples, energy_demand, renewable_power,
     return grid_power
 
 
-# 生成模拟数据：随机生成数值，模拟不同能源的发电量与需求
+# 生成模数据
 solar_power = generate_solar_power(time_steps, num_samples, latitude=30)
 wind_power = generate_wind_power(time_steps, num_samples, k_weibull=2, c_weibull=8, v_in=5, v_rated=8, v_out=12, P_wind_rated=1000, N_wind_turbine=3)
 renewable_power = solar_power + wind_power

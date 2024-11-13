@@ -59,6 +59,7 @@ class MyModel(nn.Module):
         self.dropout = nn.Dropout(0.5)
         self.fc2 = nn.Linear(64, num_classes)
 
+
     def forward(self, x):
         # x形状: (batch_size, time_steps, features)
         x = x.permute(0, 2, 1)  # 转换为 (batch_size, features, time_steps)
@@ -117,6 +118,7 @@ def generate_solar_power(time_steps, num_samples, latitude=30):
 
     return solar_power
 
+
 def generate_wind_power(time_steps, num_samples, k_weibull=2, c_weibull=8, v_in=5, v_rated=8, v_out=12, P_wind_rated=1000, N_wind_turbine=3):
     dt = 1  # 时间步长 (小时)
     t = np.arange(0, time_steps) * dt  # 每个时间步对应的时间（小时）
@@ -142,6 +144,7 @@ def generate_wind_power(time_steps, num_samples, k_weibull=2, c_weibull=8, v_in=
 
     return wind_power
 
+
 def generate_energy_demand(time_steps, num_samples):
     t = np.linspace(0, 24, time_steps)  # 一天中的时间点
     base_demand = 500  # 平均能源需求基线 (kW)
@@ -155,6 +158,7 @@ def generate_energy_demand(time_steps, num_samples):
         energy_demand[sample, :] = daily_demand
     
     return energy_demand
+
 
 def generate_storage_power(time_steps, num_samples, E_max=50000, P_charge_max=1000, P_discharge_max=1000):
     storage_power = np.zeros((num_samples, time_steps))
@@ -177,6 +181,7 @@ def generate_storage_power(time_steps, num_samples, E_max=50000, P_charge_max=10
 
     return storage_power
 
+
 def generate_grid_power(time_steps, num_samples, energy_demand, renewable_power, storage_power):
     grid_power = np.zeros((num_samples, time_steps))
     
@@ -197,7 +202,7 @@ storage_power = generate_storage_power(time_steps, num_samples)
 grid_power = generate_grid_power(time_steps, num_samples, energy_demand, renewable_power, storage_power)
 
 # 将所有特征组合成输入数据
-inputs = np.stack([solar_power, wind_power, storage_power, grid_power, energy_demand], axis=2)
+inputs = np.stack([solar_power, wind_power, storage_power, grid_power, energy_demand, renewable_power], axis=2)
 inputs = torch.tensor(inputs, dtype=torch.float32)
 
 # 生成随机标签2

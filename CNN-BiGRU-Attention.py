@@ -7,8 +7,8 @@ from scipy.stats import weibull_min
 
 # 设置参数
 time_steps = 1000  # 时间步数
-num_features = 5   # 特征数 (光伏、风能、储能、电网供电、港口能源需求)
-num_classes = 10   # 类别数量
+num_features = 6
+num_classes = 2   # 类别数量
 
 # 超参数
 learning_rate = 0.001  # 学习率
@@ -32,6 +32,7 @@ class Attention(nn.Module):
         attn_weights = F.softmax(attn_weights, dim=1)  # 对时间步进行softmax
         weighted = x * attn_weights  # 加权输入
         output = torch.sum(weighted, dim=1)  # 对序列维度求和，得到整体表示
+
         return output
 
 # 定义模型
@@ -81,9 +82,9 @@ class MyModel(nn.Module):
         x = F.relu(self.fc1(attn_out))
         x = self.dropout(x)
         x = self.fc2(x)
+
         return x
 
-# 输入特征：光伏发电、风能发电、储能电量、电网供电、港口能源需求
 np.random.seed(42)  # 固定随机数种子，确保结果可复现
 num_samples = 2000  # 样本数量
 
@@ -113,6 +114,7 @@ def generate_solar_power(time_steps, num_samples, latitude=30):
         P_solar[P_solar < 0] = 0
         E_solar = P_solar * dt
         solar_power[sample, :] = E_solar
+
     return solar_power
 
 def generate_wind_power(time_steps, num_samples, k_weibull=2, c_weibull=8, v_in=5, v_rated=8, v_out=12, P_wind_rated=1000, N_wind_turbine=3):
@@ -137,23 +139,68 @@ def generate_wind_power(time_steps, num_samples, k_weibull=2, c_weibull=8, v_in=
         P_wind *= N_wind_turbine
         E_wind = P_wind * dt
         wind_power[sample, :] = E_wind    
+
     return wind_power
 
+def generate_energy_demand(time_steps, num_samples):
+    t = np.linspace(0, 24, time_steps)  # 一天中的时间点
+    base_demand = 500  # 平均能源需求基线 (kW)
+    demand_variation = 200  # 能源需求波动 (kW)
+    energy_demand = np.zeros((num_samples, time_steps))
 
+    for sample in range(num_samples):
+        # 基于正弦波模拟一天的需求变化，并添加随机扰动
+        daily_demand = base_demand + demand_variation * np.sin(2 * np.pi * t / 24) + np.random.normal(0, 50, size=time_steps)
+        daily_demand = np.clip(daily_demand, 0, None)  # 需求不能为负
+        energy_demand[sample, :] = daily_demand
+    
+    return energy_demand
+
+def generate_storage_power(time_steps, num_samples, E_max=50000, P_charge_max=1000, P_discharge_max=1000):
+    storage_power = np.zeros((num_samples, time_steps))
+    E_storage = np.zeros((num_samples, time_steps))  # 储能状态 (kWh)
+
+    for sample in range(num_samples):
+        E_storage[sample, 0] = E_max * 0.5  # 初始储能水平为 50%
+        for t in range(1, time_steps):
+            # 随机决定充电或放电
+            if np.random.rand() > 0.5:
+                # 充电
+                charge_power = min(P_charge_max, E_max - E_storage[sample, t-1])
+                E_storage[sample, t] = E_storage[sample, t-1] + charge_power
+                storage_power[sample, t] = charge_power
+            else:
+                # 放电
+                discharge_power = min(P_discharge_max, E_storage[sample, t-1])
+                E_storage[sample, t] = E_storage[sample, t-1] - discharge_power
+                storage_power[sample, t] = -discharge_power
+
+    return storage_power
+
+def generate_grid_power(time_steps, num_samples, energy_demand, renewable_power, storage_power):
+    grid_power = np.zeros((num_samples, time_steps))
+    
+    for sample in range(num_samples):
+        for t in range(time_steps):
+            remaining_demand = energy_demand[sample, t] - renewable_power[sample, t] - storage_power[sample, t]
+            grid_power[sample, t] = max(0, remaining_demand)  # 电网只提供正向功率
+    
+    return grid_power
 
 
 # 生成模拟数据：随机生成数值，模拟不同能源的发电量与需求
 solar_power = generate_solar_power(time_steps, num_samples, latitude=30)
 wind_power = generate_wind_power(time_steps, num_samples, k_weibull=2, c_weibull=8, v_in=5, v_rated=8, v_out=12, P_wind_rated=1000, N_wind_turbine=3)
+renewable_power = solar_power + wind_power
 energy_demand = generate_energy_demand(time_steps, num_samples)
 storage_power = generate_storage_power(time_steps, num_samples)
-grid_power = generate_grid_power(time_steps, num_samples, energy_demand)
+grid_power = generate_grid_power(time_steps, num_samples, energy_demand, renewable_power, storage_power)
 
 # 将所有特征组合成输入数据
 inputs = np.stack([solar_power, wind_power, storage_power, grid_power, energy_demand], axis=2)
 inputs = torch.tensor(inputs, dtype=torch.float32)
 
-# 生成随机标签（假设有10个不同的能源调度策略）
+# 生成随机标签2
 labels = torch.randint(0, num_classes, (num_samples,))
 
 # 创建数据集和数据加载器

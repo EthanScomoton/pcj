@@ -35,7 +35,7 @@ class Attention(nn.Module):
 class MyModel(nn.Module):
     def __init__(self):
         super(MyModel, self).__init__()
-        # 卷积层
+        # conv卷积层 pool池化层
         self.conv1 = nn.Conv1d(in_channels=features, out_channels=64, kernel_size=3, padding=1)
         self.conv2 = nn.Conv1d(in_channels=64, out_channels=64, kernel_size=3, padding=1)
         self.pool1 = nn.MaxPool1d(kernel_size=2)

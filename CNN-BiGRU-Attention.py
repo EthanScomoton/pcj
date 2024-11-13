@@ -246,17 +246,24 @@ labels = torch.randint(0, num_classes, (num_samples,))
 
 # 创建数据集和数据加载器
 dataset = TensorDataset(inputs, labels)
-data_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+
+# 创建数据加载器（优化 num_workers 和 pin_memory）
+train_size = int(0.8 * len(dataset))
+val_size = len(dataset) - train_size
+train_dataset, val_dataset = torch.utils.data.random_split(dataset, [train_size, val_size])
+
+train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=True)
+val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True)
 
 # 创建模型实例并移动到GPU（如果可用）
-model = MyModel()
+model = MyModel(num_features=num_features, num_classes=num_classes)
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 model.to(device)
 
 # 定义损失函数和优化器
 criterion = nn.CrossEntropyLoss()
-
 optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+
 # 定义学习率调度器（线性预热 + 余弦退火）
 total_steps = num_epochs * len(train_loader)
 warmup_steps = int(0.1 * total_steps)  # 前10%步骤用于热身
@@ -265,9 +272,9 @@ def lr_lambda(current_step):
     if current_step < warmup_steps:
         return float(current_step) / float(max(1, warmup_steps))
     else:
-        return max(0.0, 0.5 * (1 + torch.cos(
-            torch.pi * (current_step - warmup_steps) / (total_steps - warmup_steps)
-        )))
+        return max(0.0, 0.5 * (1 + torch.cos(torch.pi * (current_step - warmup_steps) / (total_steps - warmup_steps))))
+
+scheduler = LambdaLR(optimizer, lr_lambda)
 
 # 使用自动混合精度
 scaler = torch.cuda.amp.GradScaler()

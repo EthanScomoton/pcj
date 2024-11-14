@@ -47,7 +47,7 @@ class Attention(nn.Module):
 class MyModel(nn.Module):
     def __init__(self, num_features, num_classes):
         super(MyModel, self).__init__()
-        # 卷积层和归一化层
+        # CNN
         self.conv1 = nn.Conv1d(in_channels=num_features, out_channels=64, kernel_size=3, padding=1)
         self.bn1 = nn.BatchNorm1d(num_features=64)
         self.conv2 = nn.Conv1d(in_channels=64, out_channels=64, kernel_size=3, padding=1)
@@ -128,31 +128,35 @@ np.random.seed(42)  # 固定随机数种子，确保结果可复现
 num_samples = 300  # 样本数量
 
 
-def generate_solar_power(time_steps, num_samples, latitude=30):
+def generate_solar_power(time_steps_per_day, latitude=30):
     dt = 0.1  # 时间步长（小时）
-    t = np.arange(0, time_steps) * dt  # 每个时间步对应的时间（小时）
+    t_per_day = np.arange(0, time_steps_per_day) * dt  # 每天的时间步（小时）
     P_solar_one = 0.4  # 单块最大功率（kW）
     P_solar_Panel = 200  # 光伏面板数量
     P_solar_max = P_solar_one * P_solar_Panel  # 光伏系统的最大功率输出
-    solar_power = np.zeros((num_samples, time_steps))
+    days_in_year = 365  # 一年中的天数
+    solar_power = np.zeros((days_in_year, time_steps_per_day))
     
-    for sample in range(num_samples):
-        day_of_year = np.random.randint(1, 366) # 随机日期
+    for day in range(1, days_in_year + 1):
+        day_of_year = day  # 当前是第几天
+        # 计算太阳赤纬角
         declination = 23.45 * np.sin(np.deg2rad(360 * (284 + day_of_year) / 365))
+        # 计算日角
         hour_angle = np.degrees(np.arccos(-np.tan(np.deg2rad(latitude)) * np.tan(np.deg2rad(declination))))
+        # 计算日出和日落时间
         sunrise = 12 - hour_angle / 15  # 日出时间（小时）
         sunset = 12 + hour_angle / 15   # 日落时间（小时）
         sunrise = max(0, sunrise)
         sunset = min(24, sunset)
         
-        P_solar = np.zeros_like(t)
-        for i in range(len(t)):
-            current_time = t[i] % 24  # 以24小时为周期
+        P_solar = np.zeros_like(t_per_day)
+        for i in range(len(t_per_day)):
+            current_time = t_per_day[i] % 24  # 当前时间（小时）
             if sunrise <= current_time <= sunset:
                 P_solar[i] = P_solar_max * np.sin(np.pi * (current_time - sunrise) / (sunset - sunrise))
         P_solar[P_solar < 0] = 0
         E_solar = P_solar * dt
-        solar_power[sample, :] = E_solar
+        solar_power[day - 1, :] = E_solar
 
     return solar_power
 

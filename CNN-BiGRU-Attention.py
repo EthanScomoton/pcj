@@ -428,17 +428,17 @@ for epoch in range(num_epochs):
           f'Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.4f}')
 
     # 早停机制和保存最优模型
-    if val_loss < best_val_loss:
-        best_val_loss = val_loss
-        counter = 0
+    #if val_loss < best_val_loss:
+        #best_val_loss = val_loss
+        #counter = 0
         # 保存最优模型
-        torch.save(model.state_dict(), 'best_model.pth')
-        print("模型已保存！")
-    else:
-        counter += 1
-        if counter >= patience:
-            print("验证集损失未降低，提前停止训练")
-            break
+        #torch.save(model.state_dict(), 'best_model.pth')
+        #print("模型已保存！")
+    #else:
+        #counter += 1
+        #if counter >= patience:
+            #print("验证集损失未降低，提前停止训练")
+            #break
 
 # 绘制训练和验证集准确率的折线图
 def plot_accuracy(train_acc_history, val_acc_history):

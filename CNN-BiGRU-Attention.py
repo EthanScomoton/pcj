@@ -18,7 +18,7 @@ num_classes = 2   # 类别数量
 
 # 超参数
 learning_rate = 1e-4  # 学习率
-num_epochs = 20        # 训练轮数
+num_epochs = 50        # 训练轮数
 batch_size = 64        # 批次大小
 weight_decay = 1e-4    # L2正则化防止过拟合
 
@@ -47,21 +47,30 @@ class Attention(nn.Module):
 class MyModel(nn.Module):
     def __init__(self, num_features, num_classes):
         super(MyModel, self).__init__()
-        # CNN
+
+        # 第一组卷积层
         self.conv1 = nn.Conv1d(in_channels=num_features, out_channels=64, kernel_size=3, padding=1)
         self.bn1 = nn.BatchNorm1d(num_features=64)
+        self.relu1 = nn.ReLU()
         self.conv2 = nn.Conv1d(in_channels=64, out_channels=64, kernel_size=3, padding=1)
         self.bn2 = nn.BatchNorm1d(num_features=64)
+        self.relu2 = nn.ReLU()
         self.pool1 = nn.MaxPool1d(kernel_size=2)
 
+        # 第二组卷积层
         self.conv3 = nn.Conv1d(in_channels=64, out_channels=128, kernel_size=3, padding=1)
         self.bn3 = nn.BatchNorm1d(num_features=128)
+        self.relu3 = nn.ReLU()
         self.conv4 = nn.Conv1d(in_channels=128, out_channels=128, kernel_size=3, padding=1)
         self.bn4 = nn.BatchNorm1d(num_features=128)
+        self.relu4 = nn.ReLU()
         self.pool2 = nn.MaxPool1d(kernel_size=2)
 
+        # 第三组卷积层
         self.conv5 = nn.Conv1d(in_channels=128, out_channels=256, kernel_size=3, padding=1)
         self.bn5 = nn.BatchNorm1d(num_features=256)
+        self.relu5 = nn.ReLU()
+        self.pool3 = nn.MaxPool1d(kernel_size=2)
 
         # BiGRU层
         self.bigru = nn.GRU(input_size=256, hidden_size=256, batch_first=True, bidirectional=True)
@@ -69,73 +78,73 @@ class MyModel(nn.Module):
         # 注意力机制层
         self.attention = Attention(input_dim=512)
 
-        # 全连接层和批归一化层
+        # 全连接层和归一化层
+        self.dropout = nn.Dropout(0.5)
         self.fc1 = nn.Linear(512, 128)
         self.bn_fc1 = nn.BatchNorm1d(num_features=128)
-        self.dropout = nn.Dropout(0.5)
+        self.relu_fc1 = nn.ReLU()
         self.fc2 = nn.Linear(128, num_classes)
 
     def forward(self, x):
-        # x形状: (batch_size, time_steps, features)
-        x = x.permute(0, 2, 1)  # 转换为 (batch_size, features, time_steps)
-
-        # 卷积层1
+        # 输入 x 的形状: (batch_size, num_features, seq_length)
+        x = x.permute(0, 2, 1)
+        
+        # 第一组卷积层
         x = self.conv1(x)
         x = self.bn1(x)
-        x = F.relu(x)
-
-        # 卷积层2
+        x = self.relu1(x)
         x = self.conv2(x)
         x = self.bn2(x)
-        x = F.relu(x)
-        x = self.pool1(x)
+        x = self.relu2(x)
+        x = self.pool1(x)  # (batch_size, 64, seq_length/2)
 
-        # 卷积层3
+        # 第二组卷积层
         x = self.conv3(x)
         x = self.bn3(x)
-        x = F.relu(x)
-
-        # 卷积层4
+        x = self.relu3(x)
         x = self.conv4(x)
         x = self.bn4(x)
-        x = F.relu(x)
-        x = self.pool2(x)
+        x = self.relu4(x)
+        x = self.pool2(x)  # (batch_size, 128, seq_length/4)
 
-        # 卷积层5
+        # 第三组卷积层
         x = self.conv5(x)
         x = self.bn5(x)
-        x = F.relu(x)
+        x = self.relu5(x)
+        x = self.pool3(x)  # (batch_size, 256, seq_length/8)
 
-        # 转换为 (batch_size, seq_length, features)
-        x = x.permute(0, 2, 1)
+        # 调整形状以适应GRU输入
+        x = x.permute(0, 2, 1)  # 调整为 (batch_size, seq_length/8, 256)
 
-        # 双向GRU层
-        gru_out, _ = self.bigru(x)
+        # BiGRU层
+        r_out, _ = self.bigru(x)  # r_out 形状: (batch_size, seq_length/8, 512)
 
         # 注意力机制
-        attn_out = self.attention(gru_out)
+        attn_output = self.attention(r_out)  # attn_output 形状: (batch_size, 512)
 
         # 全连接层
-        x = self.fc1(attn_out)
+        x = self.dropout(attn_output)
+        x = self.fc1(x)
         x = self.bn_fc1(x)
-        x = F.relu(x)
+        x = self.relu_fc1(x)
         x = self.dropout(x)
         x = self.fc2(x)
-
+        
+        # 输出 x 的形状: (batch_size, num_classes)
         return x
 
 np.random.seed(42)  # 固定随机数种子，确保结果可复现
-num_samples = 300  # 样本数量
+num_samples = 365  # 样本数量
 
 
-def generate_solar_power(time_steps_per_day, latitude=30):
+def generate_solar_power(time_steps, latitude=30):
     dt = 0.1  # 时间步长（小时）
-    t_per_day = np.arange(0, time_steps_per_day) * dt  # 每天的时间步（小时）
+    t_per_day = np.arange(0, time_steps) * dt  # 每天的时间步（小时）
     P_solar_one = 0.4  # 单块最大功率（kW）
     P_solar_Panel = 200  # 光伏面板数量
     P_solar_max = P_solar_one * P_solar_Panel  # 光伏系统的最大功率输出
     days_in_year = 365  # 一年中的天数
-    solar_power = np.zeros((days_in_year, time_steps_per_day))
+    solar_power = np.zeros((days_in_year, time_steps))
     
     for day in range(1, days_in_year + 1):
         day_of_year = day  # 当前是第几天
@@ -202,46 +211,64 @@ def generate_energy_demand(time_steps, num_samples):
     return energy_demand
 
 
-def generate_storage_power(time_steps, num_samples, E_max=50000, P_charge_max=1000, P_discharge_max=1000):
+def generate_storage_power(time_steps, num_samples, E_max=50000, P_charge_max=1000, P_discharge_max=1000, target_soc=0.8, soc_tolerance=0.05):
     storage_power = np.zeros((num_samples, time_steps))
     E_storage = np.zeros((num_samples, time_steps))  # 储能状态 (kWh)
 
     for sample in range(num_samples):
-        E_storage[sample, 0] = E_max * 0.5  # 初始储能水平为 50%
+        E_storage[sample, 0] = E_max * target_soc  # 初始储能水平为80%
+
         for t in range(1, time_steps):
-            # 随机决定充电或放电
-            if np.random.rand() > 0.5:
-                # 充电
+            current_soc = E_storage[sample, t-1] / E_max  # 当前的SOC
+
+            # 如果当前SOC低于目标SOC且电网有多余电力，充电
+            if current_soc < (target_soc - soc_tolerance):
                 charge_power = min(P_charge_max, E_max - E_storage[sample, t-1])
                 E_storage[sample, t] = E_storage[sample, t-1] + charge_power
                 storage_power[sample, t] = charge_power
-            else:
-                # 放电
+            # 如果当前SOC高于目标SOC且有多余的可再生能源，放电
+            elif current_soc > (target_soc + soc_tolerance):
                 discharge_power = min(P_discharge_max, E_storage[sample, t-1])
                 E_storage[sample, t] = E_storage[sample, t-1] - discharge_power
                 storage_power[sample, t] = -discharge_power
+            # 否则，保持当前状态
+            else:
+                E_storage[sample, t] = E_storage[sample, t-1]
+                storage_power[sample, t] = 0
 
-    return storage_power
+    return storage_power, E_storage
 
 
-def generate_grid_power(time_steps, num_samples, energy_demand, renewable_power, storage_power):
+def generate_grid_power(time_steps, num_samples, energy_demand, renewable_power, storage_power, E_storage, E_max, target_soc=0.8, soc_tolerance=0.05, P_charge_max=1000):
     grid_power = np.zeros((num_samples, time_steps))
-    
+
     for sample in range(num_samples):
         for t in range(time_steps):
             remaining_demand = energy_demand[sample, t] - renewable_power[sample, t] - storage_power[sample, t]
-            grid_power[sample, t] = max(0, remaining_demand)  # 电网只提供正向功率
-    
+            
+            # 如果有剩余需求，电网补给供电
+            if remaining_demand > 0:
+                grid_power[sample, t] = remaining_demand  # 电网补充不足的部分
+            else:
+                grid_power[sample, t] = 0
+
+            # 当电力需求较低且储能设备SOC低于目标SOC时，电网为储能设备充电
+            current_soc = E_storage[sample, t] / E_max
+            if current_soc < (target_soc - soc_tolerance) and remaining_demand <= 0:
+                charge_power = min(P_charge_max, E_max - E_storage[sample, t])
+                grid_power[sample, t] += charge_power  # 电网为储能设备充电
+                E_storage[sample, t] += charge_power  # 更新储能设备SOC
+
     return grid_power
 
 
 # 生成模数据
-solar_power = generate_solar_power(time_steps, num_samples, latitude=30)
+solar_power = generate_solar_power(time_steps, latitude=30)
 wind_power = generate_wind_power(time_steps, num_samples, k_weibull=2, c_weibull=8, v_in=5, v_rated=8, v_out=12, P_wind_rated=1000, N_wind_turbine=3)
 renewable_power = solar_power + wind_power
 energy_demand = generate_energy_demand(time_steps, num_samples)
-storage_power = generate_storage_power(time_steps, num_samples)
-grid_power = generate_grid_power(time_steps, num_samples, energy_demand, renewable_power, storage_power)
+storage_power, E_storage = generate_storage_power(time_steps, num_samples, E_max=50000, P_charge_max=1000, P_discharge_max=1000, target_soc=0.8, soc_tolerance=0.05)
+grid_power = generate_grid_power(time_steps, num_samples, energy_demand, renewable_power, storage_power, E_storage, E_max=50000, target_soc=0.8, soc_tolerance=0.05, P_charge_max=1000)
 
 # 将所有特征组合成输入数据
 inputs = np.stack([solar_power, wind_power, storage_power, grid_power, energy_demand, renewable_power], axis=2)

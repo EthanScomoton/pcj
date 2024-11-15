@@ -108,7 +108,7 @@ def calculate_energy_matrix(yard_matrix, Q_list_regular, P_list_regular, Q_total
                     P_value = P_list_regular[regular_idx]
                     regular_idx += 1
 
-                    # 检查 Q_value 是否为零或无穷大
+                    # 处理 Q 为 0 或无穷大的情况
                     if Q_value == 0 or np.isclose(Q_value, 0) or np.isinf(Q_value):
                         print(f"节点 {i+1} 和 {j+1} 之间的 Q 为 0 或无穷大，跳过该连接。")
                         continue  # 跳过该连接
@@ -286,8 +286,6 @@ min_path, E_total, Ei, edge_indices, energy_matrix = calculate_energy_consumptio
 # 输出计算结果
 print(f"最小路径: {min_path}")
 print(f"总能耗: {E_total}")
-#print(f"边索引: {edge_indices}")
-#print(f"能耗矩阵: \n{energy_matrix}")
 
 
 # 初始化参数

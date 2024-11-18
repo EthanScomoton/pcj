@@ -61,6 +61,23 @@ class MyModel(nn.Module):
         # 第二组卷积层
         self.conv3 = nn.Conv1d(in_channels=64, out_channels=128, kernel_size=3, padding=1)
         self.bn3 = nn.BatchNorm1d(num_features=128)
+        self.relu3 = nn.ReLU()# 定义模型
+class MyModel(nn.Module):
+    def __init__(self, num_features, num_classes):
+        super(MyModel, self).__init__()
+
+        # 第一组卷积层
+        self.conv1 = nn.Conv1d(in_channels=num_features, out_channels=64, kernel_size=3, padding=1)
+        self.bn1 = nn.BatchNorm1d(num_features=64)
+        self.relu1 = nn.ReLU()
+        self.conv2 = nn.Conv1d(in_channels=64, out_channels=64, kernel_size=3, padding=1)
+        self.bn2 = nn.BatchNorm1d(num_features=64)
+        self.relu2 = nn.ReLU()
+        self.pool1 = nn.MaxPool1d(kernel_size=2)
+
+        # 第二组卷积层
+        self.conv3 = nn.Conv1d(in_channels=64, out_channels=128, kernel_size=3, padding=1)
+        self.bn3 = nn.BatchNorm1d(num_features=128)
         self.relu3 = nn.ReLU()
         self.conv4 = nn.Conv1d(in_channels=128, out_channels=128, kernel_size=3, padding=1)
         self.bn4 = nn.BatchNorm1d(num_features=128)
@@ -81,7 +98,7 @@ class MyModel(nn.Module):
 
         # 全连接层和归一化层
         self.dropout = nn.Dropout(0.5)
-        self.fc1 = nn.Linear(512 + 256, 128)  # Concatenate Attention output (512) and BiGRU output (256)
+        self.fc1 = nn.Linear(512 + 512, 128)  # 调整为 512 + 512
         self.bn_fc1 = nn.BatchNorm1d(num_features=128)
         self.relu_fc1 = nn.ReLU()
         self.fc2 = nn.Linear(128, num_classes)
@@ -128,7 +145,7 @@ class MyModel(nn.Module):
         attn_output = self.attention(wind_solar_input)  # attn_output 形状: (batch_size, 512)
 
         # 将注意力机制和 BiGRU 的输出拼接在一起
-        combined_output = torch.cat((attn_output, r_out[:, -1, :]), dim=1)  # 拼接 (batch_size, 512 + 256)
+        combined_output = torch.cat((attn_output, r_out[:, -1, :]), dim=1)  # 拼接 (batch_size, 512 + 512)
 
         # 全连接层
         x = self.dropout(combined_output)

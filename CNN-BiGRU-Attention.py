@@ -50,24 +50,7 @@ class MyModel(nn.Module):
         super(MyModel, self).__init__()
 
         # 第一组卷积层
-        self.conv1 = nn.Conv1d(in_channels=num_features, out_channels=64, kernel_size=3, padding=1)
-        self.bn1 = nn.BatchNorm1d(num_features=64)
-        self.relu1 = nn.ReLU()
-        self.conv2 = nn.Conv1d(in_channels=64, out_channels=64, kernel_size=3, padding=1)
-        self.bn2 = nn.BatchNorm1d(num_features=64)
-        self.relu2 = nn.ReLU()
-        self.pool1 = nn.MaxPool1d(kernel_size=2)
-
-        # 第二组卷积层
-        self.conv3 = nn.Conv1d(in_channels=64, out_channels=128, kernel_size=3, padding=1)
-        self.bn3 = nn.BatchNorm1d(num_features=128)
-        self.relu3 = nn.ReLU()# 定义模型
-class MyModel(nn.Module):
-    def __init__(self, num_features, num_classes):
-        super(MyModel, self).__init__()
-
-        # 第一组卷积层
-        self.conv1 = nn.Conv1d(in_channels=num_features, out_channels=64, kernel_size=3, padding=1)
+        self.conv1 = nn.Conv1d(in_channels=num_features - 2, out_channels=64, kernel_size=3, padding=1)
         self.bn1 = nn.BatchNorm1d(num_features=64)
         self.relu1 = nn.ReLU()
         self.conv2 = nn.Conv1d(in_channels=64, out_channels=64, kernel_size=3, padding=1)
@@ -94,7 +77,8 @@ class MyModel(nn.Module):
         self.bigru = nn.GRU(input_size=256, hidden_size=256, batch_first=True, bidirectional=True)
 
         # 注意力机制层 (用于风能和光伏的预测)
-        self.attention = Attention(input_dim=2)  # 这里假设输入的风能和光伏数据有2个维度
+        self.attention = Attention(input_dim=2)  # Wind and solar data have 2 features
+        self.fc_attn = nn.Linear(2, 512)         # Transform attention output to match BiGRU output
 
         # 全连接层和归一化层
         self.dropout = nn.Dropout(0.5)
@@ -104,12 +88,15 @@ class MyModel(nn.Module):
         self.fc2 = nn.Linear(128, num_classes)
 
     def forward(self, x):
-        # 输入 x 的形状: (batch_size, num_features, seq_length)
-        x = x.permute(0, 2, 1)  # 将维度调整为 (batch_size, seq_length, num_features)
+        # 输入 x 的形状: (batch_size, seq_length, num_features)
+        x = x.permute(0, 2, 1)  # (batch_size, num_features, seq_length)
 
         # 分离输入中的风能和光伏数据以及储能和用能设备的数据
-        wind_solar_input = x[:, :, :2]  # 假设前两个特征是 wind_power 和 solar_power
-        storage_demand_input = x[:, :, 2:]  # 剩下的是储能和用能设备的特征
+        wind_solar_input = x[:, :2, :]    # (batch_size, 2, seq_length)
+        storage_demand_input = x[:, 2:, :]  # (batch_size, num_features - 2, seq_length)
+
+        # 调整 wind_solar_input 的形状供注意力机制使用
+        wind_solar_input = wind_solar_input.permute(0, 2, 1)  # (batch_size, seq_length, 2)
 
         # 第一组卷积层
         x = self.conv1(storage_demand_input)
@@ -135,17 +122,16 @@ class MyModel(nn.Module):
         x = self.relu5(x)
         x = self.pool3(x)  # (batch_size, 256, seq_length/8)
 
-        # 调整形状以适应GRU输入
-        x = x.permute(0, 2, 1)  # 调整为 (batch_size, seq_length/8, 256)
+        # BiGRU 层
+        x = x.permute(0, 2, 1)  # (batch_size, seq_length/8, 256)
+        r_out, _ = self.bigru(x)  # (batch_size, seq_length/8, 512)
 
-        # BiGRU层 (用于储能设备和用能设备的协同运行)
-        r_out, _ = self.bigru(x)  # r_out 形状: (batch_size, seq_length/8, 512)
-
-        # 注意力机制 (用于风能和光伏的预测)
-        attn_output = self.attention(wind_solar_input)  # attn_output 形状: (batch_size, 512)
+        # 注意力机制
+        attn_output = self.attention(wind_solar_input)  # (batch_size, 2)
+        attn_output = self.fc_attn(attn_output)         # (batch_size, 512)
 
         # 将注意力机制和 BiGRU 的输出拼接在一起
-        combined_output = torch.cat((attn_output, r_out[:, -1, :]), dim=1)  # 拼接 (batch_size, 512 + 512)
+        combined_output = torch.cat((attn_output, r_out[:, -1, :]), dim=1)  # (batch_size, 512 + 512)
 
         # 全连接层
         x = self.dropout(combined_output)
@@ -155,8 +141,8 @@ class MyModel(nn.Module):
         x = self.dropout(x)
         x = self.fc2(x)
 
-        return x  # 输出 x 形状: (batch_size, num_classes)
-
+        return x  # 输出 x 的形状: (batch_size, num_classes)
+    
 
 def generate_solar_power(time_steps, latitude=30):
     dt = 0.1  # 时间步长（小时）

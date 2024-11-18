@@ -75,22 +75,26 @@ class MyModel(nn.Module):
         # BiGRU层
         self.bigru = nn.GRU(input_size=256, hidden_size=256, batch_first=True, bidirectional=True)
 
-        # 注意力机制层
-        self.attention = Attention(input_dim=512)
+        # 注意力机制层 (用于风能和光伏的预测)
+        self.attention = Attention(input_dim=2)  # 这里假设输入的风能和光伏数据有2个维度
 
         # 全连接层和归一化层
         self.dropout = nn.Dropout(0.5)
-        self.fc1 = nn.Linear(512, 128)
+        self.fc1 = nn.Linear(512 + 256, 128)  # Concatenate Attention output (512) and BiGRU output (256)
         self.bn_fc1 = nn.BatchNorm1d(num_features=128)
         self.relu_fc1 = nn.ReLU()
         self.fc2 = nn.Linear(128, num_classes)
 
     def forward(self, x):
         # 输入 x 的形状: (batch_size, num_features, seq_length)
-        x = x.permute(0, 2, 1)
-        
+        x = x.permute(0, 2, 1)  # 将维度调整为 (batch_size, seq_length, num_features)
+
+        # 分离输入中的风能和光伏数据以及储能和用能设备的数据
+        wind_solar_input = x[:, :, :2]  # 假设前两个特征是 wind_power 和 solar_power
+        storage_demand_input = x[:, :, 2:]  # 剩下的是储能和用能设备的特征
+
         # 第一组卷积层
-        x = self.conv1(x)
+        x = self.conv1(storage_demand_input)
         x = self.bn1(x)
         x = self.relu1(x)
         x = self.conv2(x)
@@ -116,20 +120,23 @@ class MyModel(nn.Module):
         # 调整形状以适应GRU输入
         x = x.permute(0, 2, 1)  # 调整为 (batch_size, seq_length/8, 256)
 
-        # BiGRU层
+        # BiGRU层 (用于储能设备和用能设备的协同运行)
         r_out, _ = self.bigru(x)  # r_out 形状: (batch_size, seq_length/8, 512)
 
-        # 注意力机制
-        attn_output = self.attention(r_out)  # attn_output 形状: (batch_size, 512)
+        # 注意力机制 (用于风能和光伏的预测)
+        attn_output = self.attention(wind_solar_input)  # attn_output 形状: (batch_size, 512)
+
+        # 将注意力机制和 BiGRU 的输出拼接在一起
+        combined_output = torch.cat((attn_output, r_out[:, -1, :]), dim=1)  # 拼接 (batch_size, 512 + 256)
 
         # 全连接层
-        x = self.dropout(attn_output)
+        x = self.dropout(combined_output)
         x = self.fc1(x)
         x = self.bn_fc1(x)
         x = self.relu_fc1(x)
         x = self.dropout(x)
         x = self.fc2(x)
-        
+
         # 输出 x 的形状: (batch_size, num_classes)
         return x
 

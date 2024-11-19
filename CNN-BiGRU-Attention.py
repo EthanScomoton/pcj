@@ -6,7 +6,7 @@ from torch.optim import AdamW
 from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader, TensorDataset
 from torch.utils.tensorboard import SummaryWriter
-import numpy as np
+import numpy as numpy  # 将 np 替换为 numpy
 from tqdm import tqdm  # 进度条库，用于显示进度条
 from scipy.stats import weibull_min
 import matplotlib.pyplot as plt
@@ -146,30 +146,30 @@ class MyModel(nn.Module):
 
 def generate_solar_power(time_steps, latitude=30):
     dt = 0.1  # 时间步长（小时）
-    t_per_day = np.arange(0, time_steps) * dt  # 每天的时间步（小时）
+    t_per_day = numpy.arange(0, time_steps) * dt  # 每天的时间步（小时）
     P_solar_one = 0.4  # 单块最大功率（kW）
     P_solar_Panel = 200  # 光伏面板数量
     P_solar_max = P_solar_one * P_solar_Panel  # 光伏系统的最大功率输出
     days_in_year = 365  # 一年中的天数
-    solar_power = np.zeros((days_in_year, time_steps))
+    solar_power = numpy.zeros((days_in_year, time_steps))
     
     for day in range(1, days_in_year + 1):
         day_of_year = day  # 当前是第几天
         # 计算太阳赤纬角
-        declination = 23.45 * np.sin(np.deg2rad(360 * (284 + day_of_year) / 365))
+        declination = 23.45 * numpy.sin(numpy.deg2rad(360 * (284 + day_of_year) / 365))
         # 计算日角
-        hour_angle = np.degrees(np.arccos(-np.tan(np.deg2rad(latitude)) * np.tan(np.deg2rad(declination))))
+        hour_angle = numpy.degrees(numpy.arccos(-numpy.tan(numpy.deg2rad(latitude)) * numpy.tan(numpy.deg2rad(declination))))
         # 计算日出和日落时间
         sunrise = 12 - hour_angle / 15  # 日出时间（小时）
         sunset = 12 + hour_angle / 15   # 日落时间（小时）
         sunrise = max(0, sunrise)
         sunset = min(24, sunset)
         
-        P_solar = np.zeros_like(t_per_day)
+        P_solar = numpy.zeros_like(t_per_day)
         for i in range(len(t_per_day)):
             current_time = t_per_day[i] % 24  # 当前时间（小时）
             if sunrise <= current_time <= sunset:
-                P_solar[i] = P_solar_max * np.sin(np.pi * (current_time - sunrise) / (sunset - sunrise))
+                P_solar[i] = P_solar_max * numpy.sin(numpy.pi * (current_time - sunrise) / (sunset - sunrise))
         P_solar[P_solar < 0] = 0
         E_solar = P_solar * dt
         solar_power[day - 1, :] = E_solar
@@ -179,14 +179,14 @@ def generate_solar_power(time_steps, latitude=30):
 
 def generate_wind_power(time_steps, num_samples, k_weibull=2, c_weibull=8, v_in=5, v_rated=8, v_out=12, P_wind_rated=1000, N_wind_turbine=3):
     dt = 1  # 时间步长 (小时)
-    t = np.arange(0, time_steps) * dt  # 每个时间步对应的时间（小时）
-    wind_power = np.zeros((num_samples, time_steps))
+    t = numpy.arange(0, time_steps) * dt  # 每个时间步对应的时间（小时）
+    wind_power = numpy.zeros((num_samples, time_steps))
 
     for sample in range(num_samples):
         # 生成符合Weibull分布的风速
-        np.random.seed(sample)  # 随机数种子，确保每个样本的风速不同
+        numpy.random.seed(sample)  # 随机数种子，确保每个样本的风速不同
         v_wind = weibull_min.rvs(k_weibull, scale=c_weibull, size=len(t))
-        P_wind = np.zeros_like(t)
+        P_wind = numpy.zeros_like(t)
         
         for i in range(len(v_wind)):
             v = v_wind[i]
@@ -204,23 +204,23 @@ def generate_wind_power(time_steps, num_samples, k_weibull=2, c_weibull=8, v_in=
 
 
 def generate_energy_demand(time_steps, num_samples):
-    t = np.linspace(0, 24, time_steps)  # 一天中的时间点
+    t = numpy.linspace(0, 24, time_steps)  # 一天中的时间点
     base_demand = 500  # 平均能源需求基线 (kW)
     demand_variation = 200  # 能源需求波动 (kW)
-    energy_demand = np.zeros((num_samples, time_steps))
+    energy_demand = numpy.zeros((num_samples, time_steps))
 
     for sample in range(num_samples):
         # 基于正弦波模拟一天的需求变化，并添加随机扰动
-        daily_demand = base_demand + demand_variation * np.sin(2 * np.pi * t / 24) + np.random.normal(0, 50, size=time_steps)
-        daily_demand = np.clip(daily_demand, 0, None)  # 需求不能为负
+        daily_demand = base_demand + demand_variation * numpy.sin(2 * numpy.pi * t / 24) + numpy.random.normal(0, 50, size=time_steps)
+        daily_demand = numpy.clip(daily_demand, 0, None)  # 需求不能为负
         energy_demand[sample, :] = daily_demand
     
     return energy_demand
 
 
 def generate_storage_power(time_steps, num_samples, E_max=50000, P_charge_max=1000, P_discharge_max=1000, target_soc=0.8, soc_tolerance=0.05):
-    storage_power = np.zeros((num_samples, time_steps))
-    E_storage = np.zeros((num_samples, time_steps))  # 储能状态 (kWh)
+    storage_power = numpy.zeros((num_samples, time_steps))
+    E_storage = numpy.zeros((num_samples, time_steps))  # 储能状态 (kWh)
 
     for sample in range(num_samples):
         E_storage[sample, 0] = E_max * target_soc  # 初始储能水平为80%
@@ -247,7 +247,7 @@ def generate_storage_power(time_steps, num_samples, E_max=50000, P_charge_max=10
 
 
 def generate_grid_power(time_steps, num_samples, energy_demand, renewable_power, storage_power, E_storage, E_max, target_soc=0.8, soc_tolerance=0.05, P_charge_max=1000):
-    grid_power = np.zeros((num_samples, time_steps))
+    grid_power = numpy.zeros((num_samples, time_steps))
 
     for sample in range(num_samples):
         for t in range(time_steps):
@@ -278,10 +278,10 @@ storage_power, E_storage = generate_storage_power(time_steps, num_samples)
 grid_power = generate_grid_power(time_steps, num_samples, energy_demand, renewable_power, storage_power, E_storage, E_max=50000)
 
 # 将所有特征组合成输入数据
-inputs = np.stack([solar_power, wind_power, storage_power, grid_power, energy_demand, renewable_power], axis=2)
+inputs = numpy.stack([solar_power, wind_power, storage_power, grid_power, energy_demand, renewable_power], axis=2)
 inputs = torch.tensor(inputs, dtype=torch.float32)
 
-# 生成随机标签2
+# 生成随机标签
 labels = torch.randint(0, num_classes, (num_samples,))
 
 # 创建数据集和数据加载器

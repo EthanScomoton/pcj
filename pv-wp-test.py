@@ -7,21 +7,140 @@ from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader, TensorDataset
 from torch.utils.tensorboard import SummaryWriter
 import numpy as np
-from tqdm import tqdm
-from scipy.stats import weibull_min
+import pandas as pd
+from tqdm import tqdm  # 进度条库，用于显示进度条
 import matplotlib.pyplot as plt
+import os
 
-# 定义输入数据维度参数
-num_samples = 365         # 样本数量 (天数)
-time_steps = 1000         # 每个样本的时间步长
-num_features = 6          # 输入特征的数量
-num_classes = 2           # 类别数量：二分类问题
+# 设置参数
+num_classes = 2   # 类别数量
 
 # 超参数
-learning_rate = 1e-4
-num_epochs = 50
-batch_size = 64
-weight_decay = 1e-4
+learning_rate = 1e-4  # 学习率
+num_epochs = 50        # 训练轮数
+batch_size = 64        # 批次大小
+weight_decay = 1e-4    # L2正则化防止过拟合
+
+# 设置随机种子以确保可重复性
+torch.manual_seed(42)
+np.random.seed(42)
+
+# 检查CUDA是否可用
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+# 数据读取与预处理
+# 假设数据保存在 data/ 目录下的 CSV 文件中
+def load_and_preprocess_data():
+    # 读取可再生能源数据，包括影响因素
+    renewable_df = pd.read_csv('data/renewable_data.csv')
+    renewable_df['timestamp'] = pd.to_datetime(renewable_df['timestamp'])
+
+    # 读取负荷数据，包括影响因素
+    load_df = pd.read_csv('data/load_data.csv')
+    load_df['timestamp'] = pd.to_datetime(load_df['timestamp'])
+
+    # 合并数据
+    data_df = pd.merge(renewable_df, load_df, on='timestamp', how='inner')
+
+    # 对分类特征进行独热编码
+    from sklearn.preprocessing import OneHotEncoder
+
+    # 列出所有的分类特征
+    categorical_features = ['season', 'holiday', 'weather', 'ship_grade', 'dock_position']
+    encoder = OneHotEncoder(sparse=False)
+    encoded_features = encoder.fit_transform(data_df[categorical_features])
+
+    # 获取新特征的列名
+    encoded_feature_names = encoder.get_feature_names_out(categorical_features)
+
+    # 创建新的DataFrame
+    encoded_df = pd.DataFrame(encoded_features, columns=encoded_feature_names)
+
+    # 将编码后的特征与原数据合并
+    data_df = pd.concat([data_df.reset_index(drop=True), encoded_df.reset_index(drop=True)], axis=1)
+
+    # 删除原始的分类特征列
+    data_df.drop(columns=categorical_features, inplace=True)
+
+    # 处理时间特征，将 time_of_day 转换为正弦和余弦形式
+    data_df['time_of_day_sin'] = np.sin(2 * np.pi * data_df['time_of_day'] / 24)
+    data_df['time_of_day_cos'] = np.cos(2 * np.pi * data_df['time_of_day'] / 24)
+    data_df.drop(columns=['time_of_day'], inplace=True)
+
+    # 数值型特征进行标准化
+    from sklearn.preprocessing import StandardScaler
+
+    # 数值型特征，不包括时间戳和目标变量
+    numeric_features = ['solar_power', 'wind_power', 'unload_time', 'energy_demand']
+
+    scaler = StandardScaler()
+    data_df[numeric_features] = scaler.fit_transform(data_df[numeric_features])
+
+    # 定义输入特征和标签
+    feature_columns = ['solar_power', 'wind_power', 'unload_time', 'energy_demand', 'time_of_day_sin', 'time_of_day_cos'] + list(encoded_feature_names)
+    inputs = data_df[feature_columns].values  # 转换为 NumPy 数组
+
+    # 假设标签为 'target' 列，表示分类目标
+    labels = data_df['target'].values
+
+    # 定义序列长度，例如以一天的数据为一个序列（24小时）
+    seq_length = 24
+
+    # 确保数据长度是序列长度的整数倍
+    num_samples = len(data_df) // seq_length
+    inputs = inputs[:num_samples * seq_length]
+    labels = labels[:num_samples * seq_length]
+
+    # 重塑输入数据和标签
+    inputs = inputs.reshape(num_samples, seq_length, -1)
+    labels = labels.reshape(num_samples, seq_length)
+
+    # 为简单起见，我们采用每个序列最后一个时间步的标签作为整体标签
+    labels = labels[:, -1]
+
+    # 获取特征数量
+    num_features = inputs.shape[2]
+
+    return inputs, labels, num_features
+
+# 调用数据加载函数
+inputs, labels, num_features = load_and_preprocess_data()
+
+# 将 NumPy 数组转换为 Torch 张量
+inputs_tensor = torch.tensor(inputs, dtype=torch.float32)
+labels_tensor = torch.tensor(labels, dtype=torch.long)  # 如果是分类任务
+
+# 创建数据集和数据加载器
+dataset = TensorDataset(inputs_tensor, labels_tensor)
+
+# 划分训练集和验证集
+train_size = int(0.8 * len(dataset))
+val_size = len(dataset) - train_size
+
+train_dataset, val_dataset = torch.utils.data.random_split(dataset, [train_size, val_size])
+
+train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=0, pin_memory=True)
+val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=0, pin_memory=True)
+
+# 定义位置编码（Positional Encoding）
+class PositionalEncoding(nn.Module):
+    def __init__(self, d_model, max_len=5000):
+        super(PositionalEncoding, self).__init__()
+
+        pe = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len, dtype=torch.float32).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
+
+        pe[:, 0::2] = torch.sin(position * div_term)     # 偶数位置
+        pe[:, 1::2] = torch.cos(position * div_term)     # 奇数位置
+
+        pe = pe.unsqueeze(1)  # (max_len, 1, d_model)
+        self.register_buffer('pe', pe)
+
+    def forward(self, x):
+        # x: (seq_length, batch_size, d_model)
+        x = x + self.pe[:x.size(0)]
+        return x
 
 # 自定义注意力机制模块
 class Attention(nn.Module):
@@ -41,15 +160,23 @@ class Attention(nn.Module):
         attn_weights = F.softmax(attn_weights, dim=1)  # 对时间步进行softmax
         weighted = x * attn_weights  # 加权输入
         output = torch.sum(weighted, dim=1)  # 对序列维度求和，得到整体表示
-        return output
+
+        return output  # (batch_size, input_dim)
 
 # 定义模型
 class MyModel(nn.Module):
     def __init__(self, num_features, num_classes):
         super(MyModel, self).__init__()
 
-        # 卷积层用于处理储能设备和用能设备的特征
-        self.conv1 = nn.Conv1d(in_channels=num_features-2, out_channels=64, kernel_size=3, padding=1)
+        # 假设风能和光伏的影响因素有 n_wind_solar_features 个
+        # 根据数据中风能和光伏相关的特征数量来确定
+        n_wind_solar_features = 2  # 例如，这里将前两个特征视为风能和光伏发电量
+
+        # 计算其余特征数量
+        n_other_features = num_features - n_wind_solar_features
+
+        # 卷积层
+        self.conv1 = nn.Conv1d(in_channels=n_other_features, out_channels=64, kernel_size=3, padding=1)
         self.bn1 = nn.BatchNorm1d(num_features=64)
         self.relu1 = nn.ReLU()
         self.conv2 = nn.Conv1d(in_channels=64, out_channels=64, kernel_size=3, padding=1)
@@ -70,56 +197,70 @@ class MyModel(nn.Module):
         self.relu5 = nn.ReLU()
         self.pool3 = nn.MaxPool1d(kernel_size=2)
 
-        # BiGRU层用于储能设备和用能设备的协同运行
-        self.bigru = nn.GRU(input_size=256, hidden_size=256, batch_first=True, bidirectional=True)
+        # Transformer编码器层
+        self.pos_encoder = PositionalEncoding(d_model=256)
+        encoder_layer = nn.TransformerEncoderLayer(d_model=256, nhead=8)
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=6)
 
-        # 注意力机制用于风能和光伏的预测
-        self.attention = Attention(input_dim=2)  # 风能和光伏数据有2个维度
+        # 注意力机制层
+        self.attention = Attention(input_dim=n_wind_solar_features)
+        self.fc_attn = nn.Linear(n_wind_solar_features, 512)
 
-        # 全连接层和归一化层
+        # 全连接层
         self.dropout = nn.Dropout(0.5)
-        self.fc1 = nn.Linear(512 + 256, 128)  # Attention输出(512) + BiGRU输出(256)
+        self.fc1 = nn.Linear(512 + 256, 128)
         self.bn_fc1 = nn.BatchNorm1d(num_features=128)
         self.relu_fc1 = nn.ReLU()
         self.fc2 = nn.Linear(128, num_classes)
 
     def forward(self, x):
-        # 输入 x 的形状: (batch_size, time_steps, num_features)
-        wind_solar_input = x[:, :, :2]  # 前两个特征是风能和光伏
-        storage_demand_input = x[:, :, 2:]  # 剩下的特征是储能设备和用能设备
+        # 输入 x 的形状: (batch_size, seq_length, num_features)
+        x = x.permute(0, 2, 1)  # (batch_size, num_features, seq_length)
 
-        # 处理储能和用能设备数据
-        storage_demand_input = storage_demand_input.permute(0, 2, 1)  # 调整为 (batch_size, num_features-2, time_steps)
-        x = self.conv1(storage_demand_input)
+        # 根据特征的排列方式，分割输入
+        n_wind_solar_features = 2  # 风能和光伏特征数量
+        wind_solar_input = x[:, :n_wind_solar_features, :]    # (batch_size, n_wind_solar_features, seq_length)
+        other_input = x[:, n_wind_solar_features:, :]         # (batch_size, n_other_features, seq_length)
+
+        # 调整 wind_solar_input 的形状供注意力机制使用
+        wind_solar_input = wind_solar_input.permute(0, 2, 1)  # (batch_size, seq_length, n_wind_solar_features)
+
+        # 第一组卷积层
+        x = self.conv1(other_input)  # 输入维度 (batch_size, n_other_features, seq_length)
         x = self.bn1(x)
         x = self.relu1(x)
         x = self.conv2(x)
         x = self.bn2(x)
         x = self.relu2(x)
-        x = self.pool1(x)
+        x = self.pool1(x)  # (batch_size, 64, seq_length/2)
 
+        # 第二组卷积层
         x = self.conv3(x)
         x = self.bn3(x)
         x = self.relu3(x)
         x = self.conv4(x)
         x = self.bn4(x)
         x = self.relu4(x)
-        x = self.pool2(x)
+        x = self.pool2(x)  # (batch_size, 128, seq_length/4)
 
+        # 第三组卷积层
         x = self.conv5(x)
         x = self.bn5(x)
         x = self.relu5(x)
-        x = self.pool3(x)
+        x = self.pool3(x)  # (batch_size, 256, seq_length/8)
 
-        # 调整形状以适应GRU输入
-        x = x.permute(0, 2, 1)  # 调整为 (batch_size, seq_length/8, 256)
-        r_out, _ = self.bigru(x)  # r_out 形状: (batch_size, seq_length/8, 512)
+        # Transformer编码器
+        x = x.permute(2, 0, 1)  # (seq_length/8, batch_size, 256)
+        x = self.pos_encoder(x)
+        x = self.transformer_encoder(x)
+        x = x[-1, :, :]  # 取最后一个时间步的输出 (batch_size, 256)
 
-        # 注意力机制处理风能和光伏数据
-        attn_output = self.attention(wind_solar_input)  # attn_output 形状: (batch_size, 512)
+        # 注意力机制
+        attn_output = self.attention(wind_solar_input)  # (batch_size, n_wind_solar_features)
+        attn_output = self.fc_attn(attn_output)         # (batch_size, 512)
 
-        # 拼接Attention输出和BiGRU输出
-        combined_output = torch.cat((attn_output, r_out[:, -1, :]), dim=1)  # (batch_size, 512 + 256)
+        # 将注意力机制和 Transformer 的输出拼接在一起
+        combined_output = torch.cat((attn_output, x), dim=1)  # (batch_size, 512 + 256)
 
         # 全连接层
         x = self.dropout(combined_output)
@@ -129,158 +270,19 @@ class MyModel(nn.Module):
         x = self.dropout(x)
         x = self.fc2(x)
 
-        return x
+        return x  # (batch_size, num_classes)
 
-
-# 生成数据的函数
-def generate_solar_power(time_steps, latitude=30):
-    dt = 0.1  # 时间步长
-    t_per_day = np.arange(0, time_steps) * dt
-    P_solar_one = 0.4  # 单块最大功率
-    P_solar_Panel = 200
-    P_solar_max = P_solar_one * P_solar_Panel
-    days_in_year = 365
-    solar_power = np.zeros((days_in_year, time_steps))
-    
-    for day in range(1, days_in_year + 1):
-        day_of_year = day
-        declination = 23.45 * np.sin(np.deg2rad(360 * (284 + day_of_year) / 365))
-        hour_angle = np.degrees(np.arccos(-np.tan(np.deg2rad(latitude)) * np.tan(np.deg2rad(declination))))
-        sunrise = max(0, 12 - hour_angle / 15)
-        sunset = min(24, 12 + hour_angle / 15)
-        
-        P_solar = np.zeros_like(t_per_day)
-        for i in range(len(t_per_day)):
-            current_time = t_per_day[i] % 24
-            if sunrise <= current_time <= sunset:
-                P_solar[i] = P_solar_max * np.sin(np.pi * (current_time - sunrise) / (sunset - sunrise))
-        P_solar[P_solar < 0] = 0
-        E_solar = P_solar * dt
-        solar_power[day - 1, :] = E_solar
-
-    return solar_power
-
-
-def generate_wind_power(time_steps, num_samples, k_weibull=2, c_weibull=8, v_in=5, v_rated=8, v_out=12, P_wind_rated=1000, N_wind_turbine=3):
-    dt = 1
-    t = np.arange(0, time_steps) * dt
-    wind_power = np.zeros((num_samples, time_steps))
-
-    for sample in range(num_samples):
-        np.random.seed(sample)
-        v_wind = weibull_min.rvs(k_weibull, scale=c_weibull, size=len(t))
-        P_wind = np.zeros_like(t)
-        
-        for i in range(len(v_wind)):
-            v = v_wind[i]
-            if v < v_in or v >= v_out:
-                P_wind[i] = 0
-            elif v_in <= v < v_rated:
-                P_wind[i] = P_wind_rated * ((v - v_in) / (v_rated - v_in)) ** 3
-            else:
-                P_wind[i] = P_wind_rated
-        P_wind *= N_wind_turbine
-        E_wind = P_wind * dt
-        wind_power[sample, :] = E_wind    
-
-    return wind_power
-
-
-def generate_energy_demand(time_steps, num_samples):
-    t = np.linspace(0, 24, time_steps)
-    base_demand = 500
-    demand_variation = 200
-    energy_demand = np.zeros((num_samples, time_steps))
-
-    for sample in range(num_samples):
-        daily_demand = base_demand + demand_variation * np.sin(2 * np.pi * t / 24) + np.random.normal(0, 50, size=time_steps)
-        daily_demand = np.clip(daily_demand, 0, None)
-        energy_demand[sample, :] = daily_demand
-    
-    return energy_demand
-
-
-def generate_storage_power(time_steps, num_samples, E_max=50000, P_charge_max=1000, P_discharge_max=1000, target_soc=0.8, soc_tolerance=0.05):
-    storage_power = np.zeros((num_samples, time_steps))
-    E_storage = np.zeros((num_samples, time_steps))
-
-    for sample in range(num_samples):
-        E_storage[sample, 0] = E_max * target_soc
-
-        for t in range(1, time_steps):
-            current_soc = E_storage[sample, t-1] / E_max
-
-            if current_soc < (target_soc - soc_tolerance):
-                charge_power = min(P_charge_max, E_max - E_storage[sample, t-1])
-                E_storage[sample, t] = E_storage[sample, t-1] + charge_power
-                storage_power[sample, t] = charge_power
-            elif current_soc > (target_soc + soc_tolerance):
-                discharge_power = min(P_discharge_max, E_storage[sample, t-1])
-                E_storage[sample, t] = E_storage[sample, t-1] - discharge_power
-                storage_power[sample, t] = -discharge_power
-            else:
-                E_storage[sample, t] = E_storage[sample, t-1]
-                storage_power[sample, t] = 0
-
-    return storage_power, E_storage
-
-def generate_grid_power(time_steps, num_samples, energy_demand, renewable_power, storage_power, E_storage, E_max, target_soc=0.8, soc_tolerance=0.05, P_charge_max=1000):
-    grid_power = np.zeros((num_samples, time_steps))
-
-    for sample in range(num_samples):
-        for t in range(time_steps):
-            remaining_demand = energy_demand[sample, t] - renewable_power[sample, t] - storage_power[sample, t]
-            
-            if remaining_demand > 0:
-                grid_power[sample, t] = remaining_demand
-            else:
-                grid_power[sample, t] = 0
-
-            current_soc = E_storage[sample, t] / E_max
-            if current_soc < (target_soc - soc_tolerance) and remaining_demand <= 0:
-                charge_power = min(P_charge_max, E_max - E_storage[sample, t])
-                grid_power[sample, t] += charge_power
-                E_storage[sample, t] += charge_power
-
-    return grid_power
-
-
-# 生成模拟数据
-solar_power = generate_solar_power(time_steps, latitude=30)
-wind_power = generate_wind_power(time_steps, num_samples)
-renewable_power = solar_power + wind_power
-energy_demand = generate_energy_demand(time_steps, num_samples)
-storage_power, E_storage = generate_storage_power(time_steps, num_samples)
-grid_power = generate_grid_power(time_steps, num_samples, energy_demand, renewable_power, storage_power, E_storage, E_max=50000)
-
-# 将所有特征组合成输入数据
-inputs = np.stack([solar_power, wind_power, storage_power, grid_power, energy_demand, renewable_power], axis=2)
-inputs = torch.tensor(inputs, dtype=torch.float32)
-
-# 生成随机标签
-labels = torch.randint(0, num_classes, (num_samples,))
-
-# 创建数据集和数据加载器
-dataset = TensorDataset(inputs, labels)
-train_size = int(0.8 * len(dataset))
-val_size = len(dataset) - train_size
-train_dataset, val_dataset = torch.utils.data.random_split(dataset, [train_size, val_size])
-
-train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
-
-# 选择设备
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+# 实例化模型
 model = MyModel(num_features=num_features, num_classes=num_classes)
 model.to(device)
 
 # 定义损失函数和优化器
 criterion = nn.CrossEntropyLoss()
-optimizer = AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
 
-# 学习率调度器
+# 定义学习率调度器
 total_steps = num_epochs * len(train_loader)
-warmup_steps = int(0.1 * total_steps)
+warmup_steps = int(0.1 * total_steps)  # 前10%步骤用于热身
 
 def lr_lambda(current_step):
     if current_step < warmup_steps:
@@ -290,9 +292,54 @@ def lr_lambda(current_step):
 
 scheduler = LambdaLR(optimizer, lr_lambda)
 
-# 训练和验证模型
+# 使用自动混合精度
+if device.type == 'cuda':
+    scaler = torch.cuda.amp.GradScaler()
+else:
+    scaler = None
+
+# 早停机制参数
+patience = 5  # 在验证集上若干个周期无提升则停止
+best_val_loss = float('inf')
+counter = 0
+
+# TensorBoard
+writer = SummaryWriter(log_dir='runs/experiment1')
+
+# 训练和验证函数
+def evaluate(model, dataloader, criterion, device):
+    model.eval()
+    running_loss = 0.0
+    running_corrects = 0
+    num_samples = 0
+
+    with torch.no_grad():
+        for inputs, labels in dataloader:
+            inputs = inputs.to(device, non_blocking=True)
+            labels = labels.to(device, non_blocking=True)
+
+            if device.type == 'cuda':
+                with torch.cuda.amp.autocast():
+                    outputs = model(inputs)
+                    loss = criterion(outputs, labels)
+            else:
+                outputs = model(inputs)
+                loss = criterion(outputs, labels)
+
+            # 统计损失和准确率
+            running_loss += loss.item() * inputs.size(0)
+            _, preds = torch.max(outputs, 1)
+            running_corrects += torch.sum(preds == labels)
+            num_samples += inputs.size(0)
+
+    val_loss = running_loss / num_samples
+    val_acc = running_corrects.double() / num_samples
+    return val_loss, val_acc
+
+# 训练模型
 train_acc_history = []
 val_acc_history = []
+global_step = 0
 
 for epoch in range(num_epochs):
     model.train()
@@ -300,8 +347,9 @@ for epoch in range(num_epochs):
     running_corrects = 0
     num_samples = 0
 
+    # 使用 tqdm 包装训练集数据加载器
     progress_bar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs}")
-    
+
     for batch_inputs, batch_labels in progress_bar:
         batch_inputs = batch_inputs.to(device, non_blocking=True)
         batch_labels = batch_labels.to(device, non_blocking=True)
@@ -310,59 +358,88 @@ for epoch in range(num_epochs):
 
         optimizer.zero_grad()
 
-        outputs = model(batch_inputs)
-        loss = criterion(outputs, batch_labels)
-        loss.backward()
-        optimizer.step()
+        if scaler:
+            # 使用自动混合精度
+            with torch.cuda.amp.autocast():
+                outputs = model(batch_inputs)
+                loss = criterion(outputs, batch_labels)
 
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            outputs = model(batch_inputs)
+            loss = criterion(outputs, batch_labels)
+            loss.backward()
+            optimizer.step()
+
+        # 更新学习率
         scheduler.step()
 
+        # 计算损失和准确率
         running_loss += loss.item() * batch_size
         _, preds = torch.max(outputs, 1)
         running_corrects += torch.sum(preds == batch_labels)
 
+        # 更新进度条描述
         progress_bar.set_postfix({'Loss': running_loss / num_samples, 'Acc': (running_corrects.double() / num_samples).item()})
 
+        global_step += 1
+
+    # 计算整个 epoch 的平均损失和准确率
     epoch_loss = running_loss / num_samples
     epoch_acc = running_corrects.double() / num_samples
+
+    # 在 TensorBoard 中记录训练指标
+    writer.add_scalar('Train/Loss', epoch_loss, epoch)
+    writer.add_scalar('Train/Accuracy', epoch_acc, epoch)
+
+    # 在验证集上评估
+    val_loss, val_acc = evaluate(model, val_loader, criterion, device)
+
+    # 在 TensorBoard 中记录验证指标
+    writer.add_scalar('Val/Loss', val_loss, epoch)
+    writer.add_scalar('Val/Accuracy', val_acc, epoch)
+
+    # 记录训练和验证准确率
     train_acc_history.append(epoch_acc.cpu().item())
-
-    # 验证
-    model.eval()
-    val_loss = 0.0
-    val_corrects = 0
-    val_samples = 0
-
-    with torch.no_grad():
-        for val_inputs, val_labels in val_loader:
-            val_inputs = val_inputs.to(device, non_blocking=True)
-            val_labels = val_labels.to(device, non_blocking=True)
-            val_size = val_inputs.size(0)
-            val_samples += val_size
-
-            outputs = model(val_inputs)
-            loss = criterion(outputs, val_labels)
-
-            val_loss += loss.item() * val_size
-            _, preds = torch.max(outputs, 1)
-            val_corrects += torch.sum(preds == val_labels)
-
-    val_loss /= val_samples
-    val_acc = val_corrects.double() / val_samples
     val_acc_history.append(val_acc.cpu().item())
 
-    print(f'Epoch {epoch + 1}/{num_epochs}, Train Loss: {epoch_loss:.4f}, Train Acc: {epoch_acc:.4f}, Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.4f}')
+    # 打印结果
+    print(f'\nEpoch {epoch + 1}/{num_epochs}, Train Loss: {epoch_loss:.4f}, Train Acc: {epoch_acc:.4f}, '
+          f'Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.4f}')
 
-# 训练完成后绘制准确率曲线
+    # 早停机制和保存最优模型
+    if val_loss < best_val_loss:
+        best_val_loss = val_loss
+        counter = 0
+        # 保存最优模型
+        torch.save(model.state_dict(), 'best_model.pth')
+        print("模型已保存！")
+    else:
+        counter += 1
+        if counter >= patience:
+            print("验证集损失未降低，提前停止训练")
+            break
+
+# 绘制训练和验证集准确率的折线图
 def plot_accuracy(train_acc_history, val_acc_history):
     epochs = range(1, len(train_acc_history) + 1)
-    plt.plot(epochs, train_acc_history, 'bo-', label='Training Accuracy')
-    plt.plot(epochs, val_acc_history, 'ro-', label='Validation Accuracy')
-    plt.title('Training and Validation Accuracy over Epochs')
+
+    plt.figure(figsize=(10, 6))
+    plt.plot(epochs, train_acc_history, label='Train Accuracy', marker='o')
+    plt.plot(epochs, val_acc_history, label='Validation Accuracy', marker='o')
+
+    plt.title('Train and Validation Accuracy per Epoch')
     plt.xlabel('Epochs')
     plt.ylabel('Accuracy')
     plt.legend()
     plt.grid(True)
     plt.show()
 
+# 在训练完成后调用此函数
 plot_accuracy(train_acc_history, val_acc_history)
+
+# 关闭 TensorBoard
+writer.close()
+print('训练完成。')

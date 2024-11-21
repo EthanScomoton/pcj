@@ -12,7 +12,7 @@ from scipy.stats import weibull_min
 import matplotlib.pyplot as plt
 
 # 设置参数
-num_samples = 365         # 样本数量 (天数)
+num_samples = 365  # 样本数量 (天数)
 time_steps = 1000  # 时间步数
 num_features = 6
 num_classes = 2   # 类别数量

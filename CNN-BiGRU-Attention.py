@@ -6,7 +6,7 @@ from torch.optim import AdamW
 from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader, TensorDataset
 from torch.utils.tensorboard import SummaryWriter
-import numpy as numpy  # 将 np 替换为 numpy
+import numpy as numpy  
 from tqdm import tqdm  # 进度条库，用于显示进度条
 from scipy.stats import weibull_min
 import matplotlib.pyplot as plt

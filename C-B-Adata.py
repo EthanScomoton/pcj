@@ -123,7 +123,7 @@ class PositionalEncoding(nn.Module):
         super(PositionalEncoding, self).__init__()
 
         #初始化
-        pe = torch.zeros(max_len, d_model) #d_model每个时间步的特征数 max_len最多支持5000个时间步 pe初始化一个大小为 (max_len, d_model) 的零矩阵，用于存储每个时间步的编码值
+        pe = torch.zeros(max_len, d_model) #d_model每个时间步的特征数 max_len最多5000个时间步 pe初始化一个大小为 (max_len, d_model) 的零矩阵，用于存储每个时间步的编码值
         position = torch.arange(0, max_len, dtype=torch.float32).unsqueeze(1)
         div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
 

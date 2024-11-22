@@ -40,8 +40,8 @@ def load_and_preprocess_data():
 
     data_df = pd.merge(renewable_df, load_df, on='timestamp', how='inner')  # 根据时间戳合并数据，inner内连接表示时间戳都存在的列才会被保留
 
-    # 对分类特征进行独热编码
-    from sklearn.preprocessing import OneHotEncoder #将分类特征转换为数值特征
+    # 对分类特征进行独热编码，将分类特征转换为数值特征
+    from sklearn.preprocessing import OneHotEncoder
 
     categorical_features = ['season', 'holiday', 'weather', 'temperature', 'hour', 'ship_grade', 'work_time', 'dock_position']   #Total features
     encoder = OneHotEncoder(sparse=False) #结果将以密集矩阵的形式返回
@@ -70,17 +70,18 @@ def load_and_preprocess_data():
     scaler = StandardScaler()
     data_df[numeric_features] = scaler.fit_transform(data_df[numeric_features]) #fit: 学习数据的均值和标准差。transform: 使用这些统计量将数据归一化。
 
-    # 定义输入特征和标签
-    feature_columns = ['solar_power', 'wind_power', 'unload_time', 'energy_demand', 'time_of_day_sin', 'time_of_day_cos'] + list(encoded_feature_names)
-    inputs = data_df[feature_columns].values  # 转换为 NumPy 数组
+    #feature_columns：定义模型的输入特征列表，标准化后的数值特征：solar_power, wind_power, unload_time, energy_demand。时间特征的周期性表示：time_of_day_sin, time_of_day_cos。独热编码后的分类特征：encoded_feature_names。
+    feature_columns = ['solar_power', 'wind_power', 'unload_time', 'energy_demand', 'time_of_day_sin', 'time_of_day_cos'] + list(encoded_feature_names)  
 
-    # 假设标签为 'target' 列，表示分类目标
+    inputs = data_df[feature_columns].values  # 转换为 NumPy 数组。inputs 是一个二维数组，形状为 (num_rows, num_features)
+
+    # 假设标签为 'target' 列，表示分类目标。labels 是一个一维数组，长度为 num_rows
     labels = data_df['target'].values
 
     # 定义序列长度，例如以一天的数据为一个序列（24小时）
     seq_length = 24
 
-    # 确保数据长度是序列长度的整数倍
+    # 确保数据长度是序列长度的整数倍。如果数据的总行数 len(data_df) 不是 seq_length 的整数倍，最后的部分数据无法构成完整的序列，因此需要截取到最接近的整数倍
     num_samples = len(data_df) // seq_length
     inputs = inputs[:num_samples * seq_length]
     labels = labels[:num_samples * seq_length]
@@ -101,19 +102,19 @@ def load_and_preprocess_data():
 inputs, labels, num_features = load_and_preprocess_data()
 
 # 将 NumPy 数组转换为 Torch 张量
-inputs_tensor = torch.tensor(inputs, dtype=torch.float32)
-labels_tensor = torch.tensor(labels, dtype=torch.long)  # 如果是分类任务
+inputs_tensor = torch.tensor(inputs, dtype=torch.float32) #适合神经网络中的浮点运算
+labels_tensor = torch.tensor(labels, dtype=torch.long)  # 分类任务中的目标变量
 
 # 创建数据集和数据加载器
-dataset = TensorDataset(inputs_tensor, labels_tensor)
+dataset = TensorDataset(inputs_tensor, labels_tensor)  #将inputs_tensor 和 labels_tensor 打包成一个数据集对象，方便后续按批次加载
 
-# 划分训练集和验证集
+# 划分训练集和验证集，将数据集按比例划分为训练集（80%）和验证集（20%）。使用 torch.utils.data.random_split，随机划分数据
 train_size = int(0.8 * len(dataset))
 val_size = len(dataset) - train_size
 
 train_dataset, val_dataset = torch.utils.data.random_split(dataset, [train_size, val_size])
 
-train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=0, pin_memory=True)
+#创建训练集和验证集的加载器，支持按批次加载数据。batch_size: 每批次加载的样本数量。shuffle: 是否随机打乱数据（训练集通常需要打乱，验证集不需要）。num_workers: 数据加载的工作线程数量，0 表示在主线程中加载。pin_memory: 如果使用 GPU，可以启用以提高数据传输效率。train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=0, pin_memory=True)
 val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=0, pin_memory=True)
 
 # 定义位置编码（Positional Encoding）

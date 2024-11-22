@@ -117,23 +117,25 @@ train_dataset, val_dataset = torch.utils.data.random_split(dataset, [train_size,
 #创建训练集和验证集的加载器，支持按批次加载数据。batch_size: 每批次加载的样本数量。shuffle: 是否随机打乱数据（训练集通常需要打乱，验证集不需要）。num_workers: 数据加载的工作线程数量，0 表示在主线程中加载。pin_memory: 如果使用 GPU，可以启用以提高数据传输效率。train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=0, pin_memory=True)
 val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=0, pin_memory=True)
 
-# 定义位置编码（Positional Encoding）
+# 定义位置编码（Positional Encoding）因为transformer本身不具备内置的顺序感知能力
 class PositionalEncoding(nn.Module):
     def __init__(self, d_model, max_len=5000):
         super(PositionalEncoding, self).__init__()
 
-        pe = torch.zeros(max_len, d_model)
+        #初始化
+        pe = torch.zeros(max_len, d_model) #d_model每个时间步的特征数 max_len最多支持5000个时间步 pe初始化一个大小为 (max_len, d_model) 的零矩阵，用于存储每个时间步的编码值
         position = torch.arange(0, max_len, dtype=torch.float32).unsqueeze(1)
         div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
 
-        pe[:, 0::2] = torch.sin(position * div_term)     # 偶数位置
+        pe[:, 0::2] = torch.sin(position * div_term)     # 偶数位置，正弦和余弦提供了周期性，使得模型能够捕捉序列中时间步之间的相对关系。不同频率（由 div_term 控制）使得模型能够感知短期和长期依赖
         pe[:, 1::2] = torch.cos(position * div_term)     # 奇数位置
 
+        #增加 Batch 维度并注册为缓冲区
         pe = pe.unsqueeze(1)  # (max_len, 1, d_model)
         self.register_buffer('pe', pe)
 
     def forward(self, x):
-        # x: (seq_length, batch_size, d_model)
+        # x: (seq_length, batch_size, d_model)。seq_length: 当前序列的长度（注意可能比 max_len 小）。batch_size: 序列的批次大小。d_model: 每个时间步的特征维度。
         x = x + self.pe[:x.size(0)]
         return x
 

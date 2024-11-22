@@ -16,7 +16,7 @@ import os
 num_classes = 2   # 类别数量
 
 # 超参数
-learning_rate = 1e-4  # 学习率
+learning_rate = 1e-4   # 学习率
 num_epochs = 50        # 训练轮数
 batch_size = 64        # 批次大小
 weight_decay = 1e-4    # L2正则化防止过拟合
@@ -25,56 +25,50 @@ weight_decay = 1e-4    # L2正则化防止过拟合
 torch.manual_seed(42)
 np.random.seed(42)
 
-# 检查CUDA是否可用
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')    # 检查CUDA是否可用
 
-# 数据读取与预处理
-# 假设数据保存在 data/ 目录下的 CSV 文件中
+
+# 数据读取与预处理,数据保存在 data/ 目录下的 CSV 文件中
 def load_and_preprocess_data():
     # 读取可再生能源数据，包括影响因素
-    renewable_df = pd.read_csv('data/renewable_data.csv')
+    renewable_df = pd.read_csv('data/renewable_data.csv')   
     renewable_df['timestamp'] = pd.to_datetime(renewable_df['timestamp'])
 
     # 读取负荷数据，包括影响因素
-    load_df = pd.read_csv('data/load_data.csv')
+    load_df = pd.read_csv('data/load_data.csv')   
     load_df['timestamp'] = pd.to_datetime(load_df['timestamp'])
 
-    # 合并数据
-    data_df = pd.merge(renewable_df, load_df, on='timestamp', how='inner')
+    data_df = pd.merge(renewable_df, load_df, on='timestamp', how='inner')  # 根据时间戳合并数据，inner内连接表示时间戳都存在的列才会被保留
 
     # 对分类特征进行独热编码
-    from sklearn.preprocessing import OneHotEncoder
+    from sklearn.preprocessing import OneHotEncoder #将分类特征转换为数值特征
 
-    # 列出所有的分类特征
-    categorical_features = ['season', 'holiday', 'weather', 'ship_grade', 'dock_position']
-    encoder = OneHotEncoder(sparse=False)
-    encoded_features = encoder.fit_transform(data_df[categorical_features])
+    categorical_features = ['season', 'holiday', 'weather', 'temperature', 'hour', 'ship_grade', 'work_time', 'dock_position']   #Total features
+    encoder = OneHotEncoder(sparse=False) #结果将以密集矩阵的形式返回
+    encoded_features = encoder.fit_transform(data_df[categorical_features])   #fit：分析 categorical_features 的所有可能值（即分类的类别）。transform：将这些分类特征转换为独热编码格式。encoded_features：返回一个 NumPy 数组，表示独热编码后的特征矩阵。
 
-    # 获取新特征的列名
-    encoded_feature_names = encoder.get_feature_names_out(categorical_features)
+    encoded_feature_names = encoder.get_feature_names_out(categorical_features)  # 获取新特征的列名 
 
-    # 创建新的DataFrame
-    encoded_df = pd.DataFrame(encoded_features, columns=encoded_feature_names)
+    encoded_df = pd.DataFrame(encoded_features, columns=encoded_feature_names)  # 创建新的DataFrame，pd.DataFrame将独热编码结果（encoded_features）转换为一个新的 DataFrame，列名为 encoded_feature_names
 
-    # 将编码后的特征与原数据合并
-    data_df = pd.concat([data_df.reset_index(drop=True), encoded_df.reset_index(drop=True)], axis=1)
+    data_df = pd.concat([data_df.reset_index(drop=True), encoded_df.reset_index(drop=True)], axis=1)  # pd.concat将编码后的特征与原数据合并，将原始数据框 data_df 和新的编码结果 encoded_df 按列（axis=1）合并。使用 reset_index(drop=True) 确保合并时索引对齐。
 
-    # 删除原始的分类特征列
-    data_df.drop(columns=categorical_features, inplace=True)
+    data_df.drop(columns=categorical_features, inplace=True)  # 删除原始的分类特征列
 
-    # 处理时间特征，将 time_of_day 转换为正弦和余弦形式
+    # 处理时间特征，将 time_of_day 转换为正弦和余弦形式，这些转换可以将时间特征映射到一个单位圆上，捕捉时间的周期性
     data_df['time_of_day_sin'] = np.sin(2 * np.pi * data_df['time_of_day'] / 24)
     data_df['time_of_day_cos'] = np.cos(2 * np.pi * data_df['time_of_day'] / 24)
-    data_df.drop(columns=['time_of_day'], inplace=True)
+    data_df.drop(columns=['time_of_day'], inplace=True)  #删除原始的 time_of_day 列，因为它已经被 time_of_day_sin 和 time_of_day_cos 替代
 
-    # 数值型特征进行标准化
+
+    # 数值型特征进行标准化，变成 N（0，1）分布
     from sklearn.preprocessing import StandardScaler
 
     # 数值型特征，不包括时间戳和目标变量
     numeric_features = ['solar_power', 'wind_power', 'unload_time', 'energy_demand']
 
     scaler = StandardScaler()
-    data_df[numeric_features] = scaler.fit_transform(data_df[numeric_features])
+    data_df[numeric_features] = scaler.fit_transform(data_df[numeric_features]) #fit: 学习数据的均值和标准差。transform: 使用这些统计量将数据归一化。
 
     # 定义输入特征和标签
     feature_columns = ['solar_power', 'wind_power', 'unload_time', 'energy_demand', 'time_of_day_sin', 'time_of_day_cos'] + list(encoded_feature_names)

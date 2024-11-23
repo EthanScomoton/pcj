@@ -11,6 +11,7 @@ import pandas as pd
 from tqdm import tqdm  # 进度条库，用于显示进度条
 import matplotlib.pyplot as plt
 import os
+from collections import Counter
 
 # 设置参数
 num_classes = 2   # 类别数量
@@ -55,51 +56,100 @@ def load_and_preprocess_data():
 
     data_df.drop(columns=categorical_features, inplace=True)  # 删除原始的分类特征列
 
-    # 处理时间特征，将 time_of_day 转换为正弦和余弦形式，这些转换可以将时间特征映射到一个单位圆上，捕捉时间的周期性
-    data_df['time_of_day_sin'] = np.sin(2 * np.pi * data_df['time_of_day'] / 24)
-    data_df['time_of_day_cos'] = np.cos(2 * np.pi * data_df['time_of_day'] / 24)
-    data_df.drop(columns=['time_of_day'], inplace=True)  #删除原始的 time_of_day 列，因为它已经被 time_of_day_sin 和 time_of_day_cos 替代
-
-
-    # 数值型特征进行标准化，变成 N（0，1）分布
-    from sklearn.preprocessing import StandardScaler
-
-    # 数值型特征，不包括时间戳和目标变量
-    numeric_features = ['solar_power', 'wind_power', 'unload_time', 'energy_demand']
-
-    scaler = StandardScaler()
-    data_df[numeric_features] = scaler.fit_transform(data_df[numeric_features]) #fit: 学习数据的均值和标准差。transform: 使用这些统计量将数据归一化。
-
-    #feature_columns：定义模型的输入特征列表，标准化后的数值特征：solar_power, wind_power, unload_time, energy_demand。时间特征的周期性表示：time_of_day_sin, time_of_day_cos。独热编码后的分类特征：encoded_feature_names。
-    feature_columns = ['solar_power', 'wind_power', 'unload_time', 'energy_demand', 'time_of_day_sin', 'time_of_day_cos'] + list(encoded_feature_names)  
-
-    inputs = data_df[feature_columns].values  # 转换为 NumPy 数组。inputs 是一个二维数组，形状为 (num_rows, num_features)
-
-    # 假设标签为 'target' 列，表示分类目标。labels 是一个一维数组，长度为 num_rows
-    labels = data_df['target'].values
-
-    # 定义序列长度，例如以一天的数据为一个序列（24小时）
+    # 1. 时间特征处理优化
+    data_df['hour'] = data_df['timestamp'].dt.hour
+    data_df['month'] = data_df['timestamp'].dt.month
+    data_df['day'] = data_df['timestamp'].dt.day
+    data_df['weekday'] = data_df['timestamp'].dt.weekday
+    
+    # 周期性时间特征
+    data_df['hour_sin'] = np.sin(2 * np.pi * data_df['hour'] / 24)
+    data_df['hour_cos'] = np.cos(2 * np.pi * data_df['hour'] / 24)
+    data_df['month_sin'] = np.sin(2 * np.pi * data_df['month'] / 12)
+    data_df['month_cos'] = np.cos(2 * np.pi * data_df['month'] / 12)
+    data_df['day_sin'] = np.sin(2 * np.pi * data_df['day'] / 31)
+    data_df['day_cos'] = np.cos(2 * np.pi * data_df['day'] / 31)
+    
+    # 2. 添加滞后特征
+    lag_features = ['solar_power', 'wind_power', 'energy_demand']
+    for feature in lag_features:
+        # 1小时、3小时、24小时的滞后
+        for lag in [1, 3, 24]:
+            data_df[f'{feature}_lag_{lag}'] = data_df.groupby(['month', 'day'])[feature].shift(lag)
+    
+    # 3. 添加滑动统计特征
+    window_sizes = [3, 6, 24]
+    for feature in lag_features:
+        for window in window_sizes:
+            # 移动平均
+            data_df[f'{feature}_rolling_mean_{window}'] = data_df[feature].rolling(window=window).mean()
+            # 移动标准差
+            data_df[f'{feature}_rolling_std_{window}'] = data_df[feature].rolling(window=window).std()
+    
+    # 4. 处理缺失值
+    data_df.fillna(method='ffill', inplace=True)
+    data_df.fillna(method='bfill', inplace=True)
+    
+    # 5. 特征标准化优化
+    from sklearn.preprocessing import StandardScaler, RobustScaler
+    
+    # 对不同类型的特征使用不同的缩放器
+    # RobustScaler对异常值更稳健
+    power_features = ['solar_power', 'wind_power'] + [col for col in data_df.columns if 'power_lag' in col]
+    demand_features = ['energy_demand'] + [col for col in data_df.columns if 'demand_lag' in col]
+    
+    robust_scaler = RobustScaler()
+    standard_scaler = StandardScaler()
+    
+    data_df[power_features] = robust_scaler.fit_transform(data_df[power_features])
+    data_df[demand_features] = standard_scaler.fit_transform(data_df[demand_features])
+    
+    # 6. 特征选择
+    feature_columns = (
+        power_features +
+        demand_features +
+        ['hour_sin', 'hour_cos', 'month_sin', 'month_cos', 'day_sin', 'day_cos'] +
+        [col for col in data_df.columns if 'rolling' in col] +
+        list(encoded_feature_names)
+    )
+    
+    # 7. 序列准备优化
     seq_length = 24
+    
+    # 确保数据长度是序列长度的整数倍
+    num_samples = (len(data_df) - seq_length) // 1  # 改用滑动窗口方式
+    
+    # 创建序列数据
+    inputs = []
+    labels = []
+    
+    for i in range(num_samples):
+        # 获取当前序列
+        sequence = data_df[feature_columns].values[i:i+seq_length]
+        target = data_df['target'].values[i+seq_length-1]  # 使用序列最后一个时间步的标签
+        
+        inputs.append(sequence)
+        labels.append(target)
+    
+    inputs = np.array(inputs)
+    labels = np.array(labels)
+    
+    # 8. 数据平衡检查
+    label_counts = Counter(labels)
+    print("类别分布:", label_counts)
+    
+    # 如果类别不平衡，可以考虑使用权重
+    class_weights = torch.tensor([
+        len(labels) / (len(np.unique(labels)) * count) 
+        for count in label_counts.values()
+    ]).float()
+    
+    num_features = inputs.shape[2]  # 特征维度
+    
+    return inputs, labels, num_features, class_weights
 
-    # 确保数据长度是序列长度的整数倍。如果数据的总行数 len(data_df) 不是 seq_length 的整数倍，最后的部分数据无法构成完整的序列，因此需要截取到最接近的整数倍
-    num_samples = len(data_df) // seq_length
-    inputs = inputs[:num_samples * seq_length]
-    labels = labels[:num_samples * seq_length]
-
-    # 重塑输入数据和标签
-    inputs = inputs.reshape(num_samples, seq_length, -1)
-    labels = labels.reshape(num_samples, seq_length)
-
-    # 为简单起见，我们采用每个序列最后一个时间步的标签作为整体标签
-    labels = labels[:, -1]
-
-    # 获取特征数量
-    num_features = inputs.shape[2]
-
-    return inputs, labels, num_features
-
-# 调用数据加载函数
-inputs, labels, num_features = load_and_preprocess_data()
+# 调用优化后的数据加载函数
+inputs, labels, num_features, class_weights = load_and_preprocess_data()
 
 # 将 NumPy 数组转换为 Torch 张量
 inputs_tensor = torch.tensor(inputs, dtype=torch.float32) #适合神经网络中的浮点运算
@@ -114,7 +164,8 @@ val_size = len(dataset) - train_size
 
 train_dataset, val_dataset = torch.utils.data.random_split(dataset, [train_size, val_size])
 
-#创建训练集和验证集的加载器，支持按批次加载数据。batch_size: 每批次加载的样本数量。shuffle: 是否随机打乱数据（训练集通常需要打乱，验证集不需要）。num_workers: 数据加载的工作线程数量，0 表示在主线程中加载。pin_memory: 如果使用 GPU，可以启用以提高数据传输效率。train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=0, pin_memory=True)
+#创建训练集和验证集的加载器，支持按批次加载数据。batch_size: 每批次加载的样本数量。shuffle: 是否随机打乱数据（训练集通常需要打乱，验证集不需要）。num_workers: 数据加载的工作线程数量，0 表示在主线程中加载。pin_memory: 如果使用 GPU，可以启用以提高数据传输效率。
+train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=0, pin_memory=True)
 val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=0, pin_memory=True)
 
 # 定义位置编码（Positional Encoding）因为transformer本身不具备内置的顺序感知能力
@@ -274,7 +325,7 @@ model = MyModel(num_features=num_features, num_classes=num_classes)
 model.to(device)
 
 # 定义损失函数和优化器
-criterion = nn.CrossEntropyLoss()
+criterion = nn.CrossEntropyLoss(weight=class_weights.to(device))
 optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
 
 # 定义学习率调度器

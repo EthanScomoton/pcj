@@ -12,6 +12,7 @@ from tqdm import tqdm  # 进度条库，用于显示进度条
 import matplotlib.pyplot as plt
 import os
 from collections import Counter
+from sklearn.preprocessing import OneHotEncoder
 
 # 设置参数
 num_classes = 2   # 类别数量
@@ -225,6 +226,22 @@ class MyModel(nn.Module):
         output = self.fc(combined)
         
         return output
+
+def calculate_class_weights(labels):
+    label_counts = Counter(labels.numpy())
+    total_samples = len(labels)
+    num_classes = len(label_counts)
+    
+    weights = torch.zeros(num_classes)
+    for label, count in label_counts.items():
+        weights[label] = total_samples / (num_classes * count)
+    
+    print("类别分布:", dict(label_counts))
+    print("类别权重:", weights)
+    
+    return weights
+
+class_weights = calculate_class_weights(labels_tensor)
 
 # 实例化模型
 model = MyModel(num_features=data_df.shape[1], num_classes=num_classes, renewable_dim=len(renewable_feature_names), load_dim=len(load_feature_names))

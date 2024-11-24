@@ -216,14 +216,9 @@ class MyModel(nn.Module):
     def __init__(self, num_features, num_classes):
         super(MyModel, self).__init__()
 
-        # 假设风能和光伏的影响因素有 n_wind_solar_features 个
-        # 根据数据中风能和光伏相关的特征数量来确定
-        n_wind_solar_features = 2  # 例如，这里将前两个特征视为风能和光伏发电量
-
-        # 计算其余特征数量
+        n_wind_solar_features = 2  
         n_other_features = num_features - n_wind_solar_features
-
-        # 卷积层
+        
         self.conv1 = nn.Conv1d(in_channels=n_other_features, out_channels=64, kernel_size=3, padding=1)
         self.bn1 = nn.BatchNorm1d(num_features=64)
         self.relu1 = nn.ReLU()
@@ -245,6 +240,16 @@ class MyModel(nn.Module):
         self.relu5 = nn.ReLU()
         self.pool3 = nn.MaxPool1d(kernel_size=2)
 
+        # BiGRU层
+        self.bigru = nn.GRU(
+            input_size=256,
+            hidden_size=128,
+            num_layers=2,
+            batch_first=True,
+            bidirectional=True,
+            dropout=0.2
+        )
+        
         # Transformer编码器层
         self.pos_encoder = PositionalEncoding(d_model=256)
         encoder_layer = nn.TransformerEncoderLayer(d_model=256, nhead=8)
@@ -254,9 +259,10 @@ class MyModel(nn.Module):
         self.attention = Attention(input_dim=n_wind_solar_features)
         self.fc_attn = nn.Linear(n_wind_solar_features, 512)
 
-        # 全连接层
+        # 修改全连接层以适应BiGRU的输出
         self.dropout = nn.Dropout(0.5)
-        self.fc1 = nn.Linear(512 + 256, 128)
+        # 256 (transformer) + 256 (bigru: 128*2 due to bidirectional) + 512 (attention)
+        self.fc1 = nn.Linear(1024, 128)
         self.bn_fc1 = nn.BatchNorm1d(num_features=128)
         self.relu_fc1 = nn.ReLU()
         self.fc2 = nn.Linear(128, num_classes)
@@ -265,50 +271,51 @@ class MyModel(nn.Module):
         # 输入 x 的形状: (batch_size, seq_length, num_features)
         x = x.permute(0, 2, 1)  # (batch_size, num_features, seq_length)
 
-        # 根据特征的排列方式，分割输入
-        n_wind_solar_features = 2  # 风能和光伏特征数量
-        wind_solar_input = x[:, :n_wind_solar_features, :]    # (batch_size, n_wind_solar_features, seq_length)
-        other_input = x[:, n_wind_solar_features:, :]         # (batch_size, n_other_features, seq_length)
+        # 分割输入
+        n_wind_solar_features = 2
+        wind_solar_input = x[:, :n_wind_solar_features, :]
+        other_input = x[:, n_wind_solar_features:, :]
+        wind_solar_input = wind_solar_input.permute(0, 2, 1)
 
-        # 调整 wind_solar_input 的形状供注意力机制使用
-        wind_solar_input = wind_solar_input.permute(0, 2, 1)  # (batch_size, seq_length, n_wind_solar_features)
-
-        # 第一组卷积层
-        x = self.conv1(other_input)  # 输入维度 (batch_size, n_other_features, seq_length)
+        # CNN处理
+        x = self.conv1(other_input)
         x = self.bn1(x)
         x = self.relu1(x)
         x = self.conv2(x)
         x = self.bn2(x)
         x = self.relu2(x)
-        x = self.pool1(x)  # (batch_size, 64, seq_length/2)
+        x = self.pool1(x)
 
-        # 第二组卷积层
         x = self.conv3(x)
         x = self.bn3(x)
         x = self.relu3(x)
         x = self.conv4(x)
         x = self.bn4(x)
         x = self.relu4(x)
-        x = self.pool2(x)  # (batch_size, 128, seq_length/4)
+        x = self.pool2(x)
 
-        # 第三组卷积层
         x = self.conv5(x)
         x = self.bn5(x)
         x = self.relu5(x)
         x = self.pool3(x)  # (batch_size, 256, seq_length/8)
 
-        # Transformer编码器
-        x = x.permute(2, 0, 1)  # (seq_length/8, batch_size, 256)
-        x = self.pos_encoder(x)
-        x = self.transformer_encoder(x)
-        x = x[-1, :, :]  # 取最后一个时间步的输出 (batch_size, 256)
+        # BiGRU处理
+        x_gru = x.permute(0, 2, 1)  # (batch_size, seq_length/8, 256)
+        gru_out, _ = self.bigru(x_gru)  # (batch_size, seq_length/8, 256)
+        gru_out = gru_out[:, -1, :]  # 取最后一个时间步的输出
 
-        # 注意力机制
-        attn_output = self.attention(wind_solar_input)  # (batch_size, n_wind_solar_features)
-        attn_output = self.fc_attn(attn_output)         # (batch_size, 512)
+        # Transformer处理
+        x_transformer = x.permute(2, 0, 1)  # (seq_length/8, batch_size, 256)
+        x_transformer = self.pos_encoder(x_transformer)
+        x_transformer = self.transformer_encoder(x_transformer)
+        x_transformer = x_transformer[-1, :, :]  # (batch_size, 256)
 
-        # 将注意力机制和 Transformer 的输出拼接在一起
-        combined_output = torch.cat((attn_output, x), dim=1)  # (batch_size, 512 + 256)
+        # 注意力机制处理
+        attn_output = self.attention(wind_solar_input)
+        attn_output = self.fc_attn(attn_output)
+
+        # 合并所有特征
+        combined_output = torch.cat((attn_output, x_transformer, gru_out), dim=1)
 
         # 全连接层
         x = self.dropout(combined_output)
@@ -318,7 +325,7 @@ class MyModel(nn.Module):
         x = self.dropout(x)
         x = self.fc2(x)
 
-        return x  # (batch_size, num_classes)
+        return x
 
 # 实例化模型
 model = MyModel(num_features=num_features, num_classes=num_classes)

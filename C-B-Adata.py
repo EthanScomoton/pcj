@@ -41,119 +41,42 @@ def load_and_preprocess_data():
 
     data_df = pd.merge(renewable_df, load_df, on='timestamp', how='inner')  # 根据时间戳合并数据，inner内连接表示时间戳都存在的列才会被保留
 
-    # 对分类特征进行独热编码，将分类特征转换为数值特征
-    from sklearn.preprocessing import OneHotEncoder
-
-    categorical_features = ['season', 'holiday', 'weather', 'temperature', 'hour', 'ship_grade', 'work_time', 'dock_position']   #Total features
-    encoder = OneHotEncoder(sparse=False) #结果将以密集矩阵的形式返回
-    encoded_features = encoder.fit_transform(data_df[categorical_features])   #fit：分析 categorical_features 的所有可能值（即分类的类别）。transform：将这些分类特征转换为独热编码格式。encoded_features：返回一个 NumPy 数组，表示独热编码后的特征矩阵。
-
-    encoded_feature_names = encoder.get_feature_names_out(categorical_features)  # 获取新特征的列名 
-
-    encoded_df = pd.DataFrame(encoded_features, columns=encoded_feature_names)  # 创建新的DataFrame，pd.DataFrame将独热编码结果（encoded_features）转换为一个新的 DataFrame，列名为 encoded_feature_names
-
-    data_df = pd.concat([data_df.reset_index(drop=True), encoded_df.reset_index(drop=True)], axis=1)  # pd.concat将编码后的特征与原数据合并，将原始数据框 data_df 和新的编码结果 encoded_df 按列（axis=1）合并。使用 reset_index(drop=True) 确保合并时索引对齐。
-
-    data_df.drop(columns=categorical_features, inplace=True)  # 删除原始的分类特征列
-
-    # 1. 时间特征处理优化
-    data_df['hour'] = data_df['timestamp'].dt.hour
-    data_df['month'] = data_df['timestamp'].dt.month
-    data_df['day'] = data_df['timestamp'].dt.day
-    data_df['weekday'] = data_df['timestamp'].dt.weekday
+    # 分离特征组
+    renewable_features = ['season', 'holiday', 'weather', 'temperature', 'hour']
+    load_features = ['ship_grade', 'work_time', 'dock_position']
     
-    # 周期性时间特征
-    data_df['hour_sin'] = np.sin(2 * np.pi * data_df['hour'] / 24)
-    data_df['hour_cos'] = np.cos(2 * np.pi * data_df['hour'] / 24)
-    data_df['month_sin'] = np.sin(2 * np.pi * data_df['month'] / 12)
-    data_df['month_cos'] = np.cos(2 * np.pi * data_df['month'] / 12)
-    data_df['day_sin'] = np.sin(2 * np.pi * data_df['day'] / 31)
-    data_df['day_cos'] = np.cos(2 * np.pi * data_df['day'] / 31)
+    # 分别进行独热编码
+    encoder_renewable = OneHotEncoder(sparse=False)
+    encoder_load = OneHotEncoder(sparse=False)
     
-    # 2. 添加滞后特征
-    lag_features = ['solar_power', 'wind_power', 'energy_demand']
-    for feature in lag_features:
-        # 1小时、3小时、24小时的滞后
-        for lag in [1, 3, 24]:
-            data_df[f'{feature}_lag_{lag}'] = data_df.groupby(['month', 'day'])[feature].shift(lag)
+    encoded_renewable = encoder_renewable.fit_transform(data_df[renewable_features])
+    encoded_load = encoder_load.fit_transform(data_df[load_features])
     
-    # 3. 添加滑动统计特征
-    window_sizes = [3, 6, 24]
-    for feature in lag_features:
-        for window in window_sizes:
-            # 移动平均
-            data_df[f'{feature}_rolling_mean_{window}'] = data_df[feature].rolling(window=window).mean()
-            # 移动标准差
-            data_df[f'{feature}_rolling_std_{window}'] = data_df[feature].rolling(window=window).std()
+    renewable_feature_names = encoder_renewable.get_feature_names_out(renewable_features)
+    load_feature_names = encoder_load.get_feature_names_out(load_features)
     
-    # 4. 处理缺失值
-    data_df.fillna(method='ffill', inplace=True)
-    data_df.fillna(method='bfill', inplace=True)
+    # 创建对应的DataFrame
+    renewable_df = pd.DataFrame(encoded_renewable, columns=renewable_feature_names)
+    load_df = pd.DataFrame(encoded_load, columns=load_feature_names)
     
-    # 5. 特征标准化优化
-    from sklearn.preprocessing import StandardScaler, RobustScaler
+    # 合并数据
+    data_df = pd.concat([
+        data_df.reset_index(drop=True),
+        renewable_df.reset_index(drop=True),
+        load_df.reset_index(drop=True)
+    ], axis=1)
     
-    # 对不同类型的特征使用不同的缩放器
-    # RobustScaler对异常值更稳健
-    power_features = ['solar_power', 'wind_power'] + [col for col in data_df.columns if 'power_lag' in col]
-    demand_features = ['energy_demand'] + [col for col in data_df.columns if 'demand_lag' in col]
+    # 删除原始分类列
+    data_df.drop(columns=renewable_features + load_features, inplace=True)
     
-    robust_scaler = RobustScaler()
-    standard_scaler = StandardScaler()
-    
-    data_df[power_features] = robust_scaler.fit_transform(data_df[power_features])
-    data_df[demand_features] = standard_scaler.fit_transform(data_df[demand_features])
-    
-    # 6. 特征选择
-    feature_columns = (
-        power_features +
-        demand_features +
-        ['hour_sin', 'hour_cos', 'month_sin', 'month_cos', 'day_sin', 'day_cos'] +
-        [col for col in data_df.columns if 'rolling' in col] +
-        list(encoded_feature_names)
-    )
-    
-    # 7. 序列准备优化
-    seq_length = 24
-    
-    # 确保数据长度是序列长度的整数倍
-    num_samples = (len(data_df) - seq_length) // 1  # 改用滑动窗口方式
-    
-    # 创建序列数据
-    inputs = []
-    labels = []
-    
-    for i in range(num_samples):
-        # 获取当前序列
-        sequence = data_df[feature_columns].values[i:i+seq_length]
-        target = data_df['target'].values[i+seq_length-1]  # 使用序列最后一个时间步的标签
-        
-        inputs.append(sequence)
-        labels.append(target)
-    
-    inputs = np.array(inputs)
-    labels = np.array(labels)
-    
-    # 8. 数据平衡检查
-    label_counts = Counter(labels)
-    print("类别分布:", label_counts)
-    
-    # 如果类别不平衡，可以考虑使用权重
-    class_weights = torch.tensor([
-        len(labels) / (len(np.unique(labels)) * count) 
-        for count in label_counts.values()
-    ]).float()
-    
-    num_features = inputs.shape[2]  # 特征维度
-    
-    return inputs, labels, num_features, class_weights
+    return renewable_feature_names, load_feature_names, data_df
 
 # 调用优化后的数据加载函数
-inputs, labels, num_features, class_weights = load_and_preprocess_data()
+renewable_feature_names, load_feature_names, data_df = load_and_preprocess_data()
 
 # 将 NumPy 数组转换为 Torch 张量
-inputs_tensor = torch.tensor(inputs, dtype=torch.float32) #适合神经网络中的浮点运算
-labels_tensor = torch.tensor(labels, dtype=torch.long)  # 分类任务中的目标变量
+inputs_tensor = torch.tensor(data_df.values, dtype=torch.float32) #适合神经网络中的浮点运算
+labels_tensor = torch.tensor(data_df['target'].values, dtype=torch.long)  # 分类任务中的目标变量
 
 # 创建数据集和数据加载器
 dataset = TensorDataset(inputs_tensor, labels_tensor)  #将inputs_tensor 和 labels_tensor 打包成一个数据集对象，方便后续按批次加载
@@ -213,36 +136,38 @@ class Attention(nn.Module):
 
 # 定义模型
 class MyModel(nn.Module):
-    def __init__(self, num_features, num_classes):
+    def __init__(self, num_features, num_classes, renewable_dim, load_dim):
         super(MyModel, self).__init__()
-
-        n_wind_solar_features = 2  
-        n_other_features = num_features - n_wind_solar_features
         
-        self.conv1 = nn.Conv1d(in_channels=n_other_features, out_channels=64, kernel_size=3, padding=1)
-        self.bn1 = nn.BatchNorm1d(num_features=64)
-        self.relu1 = nn.ReLU()
-        self.conv2 = nn.Conv1d(in_channels=64, out_channels=64, kernel_size=3, padding=1)
-        self.bn2 = nn.BatchNorm1d(num_features=64)
-        self.relu2 = nn.ReLU()
-        self.pool1 = nn.MaxPool1d(kernel_size=2)
-
-        self.conv3 = nn.Conv1d(in_channels=64, out_channels=128, kernel_size=3, padding=1)
-        self.bn3 = nn.BatchNorm1d(num_features=128)
-        self.relu3 = nn.ReLU()
-        self.conv4 = nn.Conv1d(in_channels=128, out_channels=128, kernel_size=3, padding=1)
-        self.bn4 = nn.BatchNorm1d(num_features=128)
-        self.relu4 = nn.ReLU()
-        self.pool2 = nn.MaxPool1d(kernel_size=2)
-
-        self.conv5 = nn.Conv1d(in_channels=128, out_channels=256, kernel_size=3, padding=1)
-        self.bn5 = nn.BatchNorm1d(num_features=256)
-        self.relu5 = nn.ReLU()
-        self.pool3 = nn.MaxPool1d(kernel_size=2)
-
-        # BiGRU层
-        self.bigru = nn.GRU(
-            input_size=256,
+        # 可再生能源特征处理
+        self.renewable_encoder = nn.Sequential(
+            nn.Linear(renewable_dim, 128),
+            nn.ReLU(),
+            nn.Dropout(0.3),
+            nn.Linear(128, 64)
+        )
+        
+        # 负荷特征处理
+        self.load_encoder = nn.Sequential(
+            nn.Linear(load_dim, 128),
+            nn.ReLU(),
+            nn.Dropout(0.3),
+            nn.Linear(128, 64)
+        )
+        
+        # BiGRU用于建模负荷和可再生能源的关系
+        self.interaction_bigru = nn.GRU(
+            input_size=128,  # 64(renewable) + 64(load)
+            hidden_size=64,
+            num_layers=2,
+            batch_first=True,
+            bidirectional=True,
+            dropout=0.2
+        )
+        
+        # 时序特征处理
+        self.temporal_bigru = nn.GRU(
+            input_size=num_features,
             hidden_size=128,
             num_layers=2,
             batch_first=True,
@@ -250,85 +175,59 @@ class MyModel(nn.Module):
             dropout=0.2
         )
         
-        # Transformer编码器层
+        # Transformer编码器
         self.pos_encoder = PositionalEncoding(d_model=256)
         encoder_layer = nn.TransformerEncoderLayer(d_model=256, nhead=8)
         self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=6)
-
-        # 注意力机制层
-        self.attention = Attention(input_dim=n_wind_solar_features)
-        self.fc_attn = nn.Linear(n_wind_solar_features, 512)
-
-        # 修改全连接层以适应BiGRU的输出
-        self.dropout = nn.Dropout(0.5)
-        # 256 (transformer) + 256 (bigru: 128*2 due to bidirectional) + 512 (attention)
-        self.fc1 = nn.Linear(1024, 128)
-        self.bn_fc1 = nn.BatchNorm1d(num_features=128)
-        self.relu_fc1 = nn.ReLU()
-        self.fc2 = nn.Linear(128, num_classes)
-
-    def forward(self, x):
-        # 输入 x 的形状: (batch_size, seq_length, num_features)
-        x = x.permute(0, 2, 1)  # (batch_size, num_features, seq_length)
-
-        # 分割输入
-        n_wind_solar_features = 2
-        wind_solar_input = x[:, :n_wind_solar_features, :]
-        other_input = x[:, n_wind_solar_features:, :]
-        wind_solar_input = wind_solar_input.permute(0, 2, 1)
-
-        # CNN处理
-        x = self.conv1(other_input)
-        x = self.bn1(x)
-        x = self.relu1(x)
-        x = self.conv2(x)
-        x = self.bn2(x)
-        x = self.relu2(x)
-        x = self.pool1(x)
-
-        x = self.conv3(x)
-        x = self.bn3(x)
-        x = self.relu3(x)
-        x = self.conv4(x)
-        x = self.bn4(x)
-        x = self.relu4(x)
-        x = self.pool2(x)
-
-        x = self.conv5(x)
-        x = self.bn5(x)
-        x = self.relu5(x)
-        x = self.pool3(x)  # (batch_size, 256, seq_length/8)
-
-        # BiGRU处理
-        x_gru = x.permute(0, 2, 1)  # (batch_size, seq_length/8, 256)
-        gru_out, _ = self.bigru(x_gru)  # (batch_size, seq_length/8, 256)
-        gru_out = gru_out[:, -1, :]  # 取最后一个时间步的输出
-
+        
+        # 注意力层
+        self.attention = Attention(input_dim=128)  # 64*2 due to bidirectional
+        
+        # 输出层
+        self.fc = nn.Sequential(
+            nn.Linear(512, 256),
+            nn.ReLU(),
+            nn.Dropout(0.5),
+            nn.Linear(256, num_classes)
+        )
+        
+    def forward(self, x, renewable_features, load_features):
+        # 编码可再生能源和负荷特征
+        renewable_encoded = self.renewable_encoder(renewable_features)
+        load_encoded = self.load_encoder(load_features)
+        
+        # 合并特征
+        combined_features = torch.cat([renewable_encoded, load_encoded], dim=-1)
+        
+        # 使用BiGRU建模交互关系
+        interaction_out, _ = self.interaction_bigru(combined_features)
+        
+        # 处理时序特征
+        temporal_out, _ = self.temporal_bigru(x)
+        
         # Transformer处理
-        x_transformer = x.permute(2, 0, 1)  # (seq_length/8, batch_size, 256)
-        x_transformer = self.pos_encoder(x_transformer)
-        x_transformer = self.transformer_encoder(x_transformer)
-        x_transformer = x_transformer[-1, :, :]  # (batch_size, 256)
-
-        # 注意力机制处理
-        attn_output = self.attention(wind_solar_input)
-        attn_output = self.fc_attn(attn_output)
-
-        # 合并所有特征
-        combined_output = torch.cat((attn_output, x_transformer, gru_out), dim=1)
-
-        # 全连接层
-        x = self.dropout(combined_output)
-        x = self.fc1(x)
-        x = self.bn_fc1(x)
-        x = self.relu_fc1(x)
-        x = self.dropout(x)
-        x = self.fc2(x)
-
-        return x
+        transformer_input = temporal_out.permute(1, 0, 2)
+        transformer_input = self.pos_encoder(transformer_input)
+        transformer_out = self.transformer_encoder(transformer_input)
+        transformer_out = transformer_out.permute(1, 0, 2)
+        
+        # 注意力机制
+        attention_out = self.attention(interaction_out)
+        
+        # 特征融合
+        combined = torch.cat([
+            attention_out,
+            temporal_out[:, -1, :],  # 最后时间步
+            transformer_out[:, -1, :]  # 最后时间步
+        ], dim=1)
+        
+        # 输出预测
+        output = self.fc(combined)
+        
+        return output
 
 # 实例化模型
-model = MyModel(num_features=num_features, num_classes=num_classes)
+model = MyModel(num_features=data_df.shape[1], num_classes=num_classes, renewable_dim=len(renewable_feature_names), load_dim=len(load_feature_names))
 model.to(device)
 
 # 定义损失函数和优化器

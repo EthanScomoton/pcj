@@ -13,6 +13,7 @@ import matplotlib.pyplot as plt
 import os
 from collections import Counter
 from sklearn.preprocessing import OneHotEncoder
+from sklearn.metrics import classification_report
 
 # 设置参数
 num_classes = 2   # 类别数量
@@ -69,15 +70,37 @@ def load_and_preprocess_data():
     
     # 删除原始分类列
     data_df.drop(columns=renewable_features + load_features, inplace=True)
-    
+   
+    # 提取特征和目标
+    feature_columns = list(renewable_feature_names) + list(load_feature_names)
+    inputs = data_df[feature_columns].values
+    labels = data_df['target'].values  # 假设目标列为 'target'
+
     return renewable_feature_names, load_feature_names, data_df
 
-# 调用优化后的数据加载函数
-renewable_feature_names, load_feature_names, data_df = load_and_preprocess_data()
+# 调用数据加载函数
+inputs, labels, renewable_feature_names, load_feature_names = load_and_preprocess_data()
 
 # 将 NumPy 数组转换为 Torch 张量
-inputs_tensor = torch.tensor(data_df.values, dtype=torch.float32) #适合神经网络中的浮点运算
-labels_tensor = torch.tensor(data_df['target'].values, dtype=torch.long)  # 分类任务中的目标变量
+inputs_tensor = torch.tensor(inputs, dtype=torch.float32)
+labels_tensor = torch.tensor(labels, dtype=torch.long)
+
+# 计算类别权重
+def calculate_class_weights(labels):
+    label_counts = Counter(labels.numpy())
+    total_samples = len(labels)
+    num_classes = len(label_counts)
+
+    weights = torch.zeros(num_classes)
+    for label, count in label_counts.items():
+        weights[label] = (total_samples / (num_classes * count)) ** 0.5  # 平滑处理，避免权重过大
+
+    print("类别分布:", dict(label_counts))
+    print("类别权重:", weights)
+
+    return weights
+
+class_weights = calculate_class_weights(labels_tensor).to(device)
 
 # 创建数据集和数据加载器
 dataset = TensorDataset(inputs_tensor, labels_tensor)  #将inputs_tensor 和 labels_tensor 打包成一个数据集对象，方便后续按批次加载
@@ -243,12 +266,12 @@ def calculate_class_weights(labels):
 
 class_weights = calculate_class_weights(labels_tensor)
 
-# 实例化模型
-model = MyModel(num_features=data_df.shape[1], num_classes=num_classes, renewable_dim=len(renewable_feature_names), load_dim=len(load_feature_names))
+# 模型初始化
+model = MyModel(num_features=inputs_tensor.size(1), num_classes=num_classes, renewable_dim=len(renewable_feature_names), load_dim=len(load_feature_names))
 model.to(device)
 
-# 定义损失函数和优化器
-criterion = nn.CrossEntropyLoss(weight=class_weights.to(device))
+# 损失函数和优化器
+criterion = nn.CrossEntropyLoss(weight=class_weights)
 optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
 
 # 定义学习率调度器
@@ -259,15 +282,12 @@ def lr_lambda(current_step):
     if current_step < warmup_steps:
         return float(current_step) / float(max(1, warmup_steps))
     else:
-        return max(0.0, 0.5 * (1 + math.cos(math.pi * (current_step - warmup_steps) / (total_steps - warmup_steps))))
+        return max(0.0, 1 - (current_step - warmup_steps) / (total_steps - warmup_steps))
 
 scheduler = LambdaLR(optimizer, lr_lambda)
 
-# 使用自动混合精度
-if device.type == 'cuda':
-    scaler = torch.cuda.amp.GradScaler()
-else:
-    scaler = None
+# 自动混合精度
+scaler = torch.cuda.amp.GradScaler() if device.type == 'cuda' else None
 
 # 早停机制参数
 patience = 5  # 在验证集上若干个周期无提升则停止
@@ -283,6 +303,8 @@ def evaluate(model, dataloader, criterion, device):
     running_loss = 0.0
     running_corrects = 0
     num_samples = 0
+    all_preds = []
+    all_labels = []
 
     with torch.no_grad():
         for inputs, labels in dataloader:
@@ -303,8 +325,17 @@ def evaluate(model, dataloader, criterion, device):
             running_corrects += torch.sum(preds == labels)
             num_samples += inputs.size(0)
 
+            # 记录所有预测和真实标签
+            all_preds.extend(preds.cpu().numpy())
+            all_labels.extend(labels.cpu().numpy())
+
     val_loss = running_loss / num_samples
     val_acc = running_corrects.double() / num_samples
+
+    # 生成分类报告
+    print("\nClassification Report:")
+    print(classification_report(all_labels, all_preds, target_names=['Class 0', 'Class 1']))
+
     return val_loss, val_acc
 
 # 训练模型
@@ -344,17 +375,16 @@ for epoch in range(num_epochs):
             loss.backward()
             optimizer.step()
 
-        # 更新学习率
-        scheduler.step()
-
         # 计算损失和准确率
-        running_loss += loss.item() * batch_size
+        running_loss += loss.item() * batch_inputs.size(0)
         _, preds = torch.max(outputs, 1)
-        running_corrects += torch.sum(preds == batch_labels)
+        running_corrects += torch.sum(preds == batch_labels).item()
 
         # 更新进度条描述
         progress_bar.set_postfix({'Loss': running_loss / num_samples, 'Acc': (running_corrects.double() / num_samples).item()})
 
+        # 更新学习率
+        scheduler.step()
         global_step += 1
 
     # 计算整个 epoch 的平均损失和准确率
@@ -394,22 +424,36 @@ for epoch in range(num_epochs):
             break
 
 # 绘制训练和验证集准确率的折线图
-def plot_accuracy(train_acc_history, val_acc_history):
+def plot_metrics(train_acc_history, val_acc_history, train_loss_history, val_loss_history):
     epochs = range(1, len(train_acc_history) + 1)
 
-    plt.figure(figsize=(10, 6))
+    plt.figure(figsize=(12, 6))
+
+    # 准确率
+    plt.subplot(1, 2, 1)
     plt.plot(epochs, train_acc_history, label='Train Accuracy', marker='o')
     plt.plot(epochs, val_acc_history, label='Validation Accuracy', marker='o')
-
     plt.title('Train and Validation Accuracy per Epoch')
     plt.xlabel('Epochs')
     plt.ylabel('Accuracy')
     plt.legend()
     plt.grid(True)
+
+    # 损失
+    plt.subplot(1, 2, 2)
+    plt.plot(epochs, train_loss_history, label='Train Loss', marker='o')
+    plt.plot(epochs, val_loss_history, label='Validation Loss', marker='o')
+    plt.title('Train and Validation Loss per Epoch')
+    plt.xlabel('Epochs')
+    plt.ylabel('Loss')
+    plt.legend()
+    plt.grid(True)
+
+    plt.tight_layout()
     plt.show()
 
 # 在训练完成后调用此函数
-plot_accuracy(train_acc_history, val_acc_history)
+plot_metrics(train_acc_history, val_acc_history)
 
 # 关闭 TensorBoard
 writer.close()

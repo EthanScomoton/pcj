@@ -76,7 +76,7 @@ def load_and_preprocess_data():
     inputs = data_df[feature_columns].values
     labels = data_df['target'].values  # 假设目标列为 'target'
 
-    return renewable_feature_names, load_feature_names, data_df
+    return renewable_feature_names, load_feature_names, data_df, inputs, labels
 
 # 调用数据加载函数
 inputs, labels, renewable_feature_names, load_feature_names = load_and_preprocess_data()

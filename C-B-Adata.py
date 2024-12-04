@@ -170,24 +170,24 @@ class MyModel(nn.Module):
 
         self.renewable_dim = renewable_dim
         self.load_dim = load_dim
-        
+
         # 可再生能源特征处理
         self.renewable_encoder = nn.Sequential(
-            nn.Linear(renewable_dim, 128),
+            nn.Linear(self.renewable_dim, 128),
             nn.ReLU(),
             nn.Dropout(0.3),
             nn.Linear(128, 64)
         )
-        
+
         # 负荷特征处理
         self.load_encoder = nn.Sequential(
-            nn.Linear(load_dim, 128),
+            nn.Linear(self.load_dim, 128),
             nn.ReLU(),
             nn.Dropout(0.3),
             nn.Linear(128, 64)
         )
-        
-        # BiGRU用于建模负荷和可再生能源的关系
+
+        # 交互关系的BiGRU
         self.interaction_bigru = nn.GRU(
             input_size=128,  # 64(renewable) + 64(load)
             hidden_size=64,
@@ -196,37 +196,42 @@ class MyModel(nn.Module):
             bidirectional=True,
             dropout=0.2
         )
-        
-        # 时序特征处理
-        self.temporal_bigru = nn.GRU(
-            input_size=num_features,
-            hidden_size=128,
-            num_layers=2,
-            batch_first=True,
-            bidirectional=True,
-            dropout=0.2
-        )
-        
+
+        # 时序特征处理的BiGRU（如果有时序特征）
+        temporal_input_dim = num_features - self.renewable_dim - self.load_dim
+        if temporal_input_dim > 0:
+            self.temporal_bigru = nn.GRU(
+                input_size=temporal_input_dim,
+                hidden_size=128,
+                num_layers=2,
+                batch_first=True,
+                bidirectional=True,
+                dropout=0.2
+            )
+        else:
+            self.temporal_bigru = None
+
         # Transformer编码器
         self.pos_encoder = PositionalEncoding(d_model=256)
         encoder_layer = nn.TransformerEncoderLayer(d_model=256, nhead=8)
         self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=6)
-        
+
         # 注意力层
         self.attention = Attention(input_dim=128)  # 64*2 due to bidirectional
-        
+
         # 输出层
         self.fc = nn.Sequential(
-            nn.Linear(128 + 256 + 256, 256),
+            nn.Linear(128 + (256 if self.temporal_bigru else 0) + 256, 256),
             nn.ReLU(),
             nn.Dropout(0.5),
             nn.Linear(256, num_classes)
         )
-        
+
     def forward(self, x):
+        # 提取特征
         renewable_features = x[:, :self.renewable_dim]
         load_features = x[:, self.renewable_dim:self.renewable_dim + self.load_dim]
-        temporal_features = x[:, self.renewable_dim + self.load_dim:]  # 如果有其他时序特征
+        temporal_features = x[:, self.renewable_dim + self.load_dim:]
 
         # 编码可再生能源和负荷特征
         renewable_encoded = self.renewable_encoder(renewable_features)  # (batch_size, 64)
@@ -235,37 +240,45 @@ class MyModel(nn.Module):
         # 合并编码后的特征
         combined_features = torch.cat([renewable_encoded, load_encoded], dim=-1)  # (batch_size, 128)
         combined_features = combined_features.unsqueeze(1)  # (batch_size, 1, 128)
-        
+
         # 使用BiGRU建模交互关系
-        interaction_out, _ = self.interaction_bigru(combined_features)
-        
-        # 处理时序特征
-        temporal_features = temporal_features.unsqueeze(1)  # (batch_size, 1, feature_dim)
-        temporal_out, _ = self.temporal_bigru(temporal_features)  # (batch_size, 1, 256)
-        
-        # Transformer处理
-        transformer_input = temporal_out.permute(1, 0, 2)
-        transformer_input = self.pos_encoder(transformer_input)
-        transformer_out = self.transformer_encoder(transformer_input)
-        transformer_out = transformer_out.permute(1, 0, 2)
-        
+        interaction_out, _ = self.interaction_bigru(combined_features)  # (batch_size, 1, 128)
+
         # 注意力机制
-        attention_out = self.attention(interaction_out)
-        
+        attention_out = self.attention(interaction_out)  # (batch_size, 128)
+
+        # 处理时序特征（如果有）
+        if self.temporal_bigru:
+            temporal_features = temporal_features.unsqueeze(1)  # (batch_size, 1, feature_dim)
+            temporal_out, _ = self.temporal_bigru(temporal_features)  # (batch_size, 1, 256)
+
+            # Transformer处理
+            transformer_input = temporal_out.permute(1, 0, 2)  # (seq_len=1, batch_size, 256)
+            transformer_input = self.pos_encoder(transformer_input)
+            transformer_out = self.transformer_encoder(transformer_input)  # (seq_len=1, batch_size, 256)
+            transformer_out = transformer_out.permute(1, 0, 2)  # (batch_size, seq_len=1, 256)
+
+            temporal_out = temporal_out[:, -1, :]  # (batch_size, 256)
+            transformer_out = transformer_out[:, -1, :]  # (batch_size, 256)
+        else:
+            # 如果没有时序特征，用零填充
+            temporal_out = torch.zeros(x.size(0), 256).to(x.device)
+            transformer_out = torch.zeros(x.size(0), 256).to(x.device)
+
         # 特征融合
         combined = torch.cat([
-            attention_out,
-            temporal_out[:, -1, :],  # 最后时间步
-            transformer_out[:, -1, :]  # 最后时间步
-        ], dim=1)
-        
+            attention_out,        # (batch_size, 128)
+            temporal_out,         # (batch_size, 256)
+            transformer_out       # (batch_size, 256)
+        ], dim=1)  # (batch_size, 128 + 256 + 256)
+
         # 输出预测
-        output = self.fc(combined)
-        
+        output = self.fc(combined)  # (batch_size, num_classes)
+
         return output
 
-# 模型初始化
-model = MyModel(num_features=inputs_tensor.size(1), num_classes=num_classes, renewable_dim=len(renewable_feature_names), load_dim=len(load_feature_names))
+# 初始化模型
+model = MyModel(num_features=num_features, num_classes=num_classes, renewable_dim=renewable_dim, load_dim=load_dim)
 model.to(device)
 
 # 损失函数和优化器
@@ -350,13 +363,12 @@ for epoch in range(num_epochs):
     # 使用 tqdm 包装训练集数据加载器
     progress_bar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs}")
 
-    for batch_inputs, batch_labels in progress_bar:
+    for batch_inputs, batch_labels in train_loader:
         batch_inputs = batch_inputs.to(device, non_blocking=True)
         batch_labels = batch_labels.to(device, non_blocking=True)
-        batch_size = batch_inputs.size(0)
-        num_samples += batch_size
 
         optimizer.zero_grad()
+
 
         if scaler:
             # 使用自动混合精度

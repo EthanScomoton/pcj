@@ -81,6 +81,11 @@ def load_and_preprocess_data():
 # 调用数据加载函数
 inputs, labels, renewable_feature_names, load_feature_names = load_and_preprocess_data()
 
+# 定义特征维度
+renewable_dim = len(renewable_feature_names)
+load_dim = len(load_feature_names)
+num_features = inputs.shape[1]
+
 # 将 NumPy 数组转换为 Torch 张量
 inputs_tensor = torch.tensor(inputs, dtype=torch.float32)
 labels_tensor = torch.tensor(labels, dtype=torch.long)
@@ -133,8 +138,6 @@ class PositionalEncoding(nn.Module):
         self.register_buffer('pe', pe)
 
     def forward(self, x):
-        renewable_features = x[:, :renewable_dim]
-        load_features = x[:, renewable_dim:renewable_dim + load_dim]
         # x: (seq_length, batch_size, d_model)。seq_length: 当前序列的长度（注意可能比 max_len 小）。batch_size: 序列的批次大小。d_model: 每个时间步的特征维度。
         x = x + self.pe[:x.size(0)]
         return x
@@ -211,25 +214,31 @@ class MyModel(nn.Module):
         
         # 输出层
         self.fc = nn.Sequential(
-            nn.Linear(512, 256),
+            nn.Linear(128 + 256 + 256, 256),
             nn.ReLU(),
             nn.Dropout(0.5),
             nn.Linear(256, num_classes)
         )
         
-    def forward(self, x, renewable_features, load_features):
+    def forward(self, x):
+        renewable_features = x[:, :renewable_dim]
+        load_features = x[:, renewable_dim:renewable_dim + load_dim]
+        temporal_features = x[:, renewable_dim + load_dim:]  # 其余的为时序特征
+
         # 编码可再生能源和负荷特征
-        renewable_encoded = self.renewable_encoder(renewable_features)
-        load_encoded = self.load_encoder(load_features)
-        
-        # 合并特征
-        combined_features = torch.cat([renewable_encoded, load_encoded], dim=-1)
+        renewable_encoded = self.renewable_encoder(renewable_features)  # (batch_size, 64)
+        load_encoded = self.load_encoder(load_features)  # (batch_size, 64)
+
+        # 合并编码后的特征
+        combined_features = torch.cat([renewable_encoded, load_encoded], dim=-1)  # (batch_size, 128)
+        combined_features = combined_features.unsqueeze(1)  # (batch_size, 1, 128)
         
         # 使用BiGRU建模交互关系
         interaction_out, _ = self.interaction_bigru(combined_features)
         
         # 处理时序特征
-        temporal_out, _ = self.temporal_bigru(x)
+        temporal_features = temporal_features.unsqueeze(1)  # (batch_size, 1, feature_dim)
+        temporal_out, _ = self.temporal_bigru(temporal_features)  # (batch_size, 1, 256)
         
         # Transformer处理
         transformer_input = temporal_out.permute(1, 0, 2)

@@ -167,6 +167,9 @@ class Attention(nn.Module):
 class MyModel(nn.Module):
     def __init__(self, num_features, num_classes, renewable_dim, load_dim):
         super(MyModel, self).__init__()
+
+        self.renewable_dim = renewable_dim
+        self.load_dim = load_dim
         
         # 可再生能源特征处理
         self.renewable_encoder = nn.Sequential(
@@ -221,9 +224,9 @@ class MyModel(nn.Module):
         )
         
     def forward(self, x):
-        renewable_features = x[:, :renewable_dim]
-        load_features = x[:, renewable_dim:renewable_dim + load_dim]
-        temporal_features = x[:, renewable_dim + load_dim:]  # 其余的为时序特征
+        renewable_features = x[:, :self.renewable_dim]
+        load_features = x[:, self.renewable_dim:self.renewable_dim + self.load_dim]
+        temporal_features = x[:, self.renewable_dim + self.load_dim:]  # 如果有其他时序特征
 
         # 编码可再生能源和负荷特征
         renewable_encoded = self.renewable_encoder(renewable_features)  # (batch_size, 64)

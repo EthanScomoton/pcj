@@ -133,6 +133,8 @@ class PositionalEncoding(nn.Module):
         self.register_buffer('pe', pe)
 
     def forward(self, x):
+        renewable_features = x[:, :renewable_dim]
+        load_features = x[:, renewable_dim:renewable_dim + load_dim]
         # x: (seq_length, batch_size, d_model)。seq_length: 当前序列的长度（注意可能比 max_len 小）。batch_size: 序列的批次大小。d_model: 每个时间步的特征维度。
         x = x + self.pe[:x.size(0)]
         return x
@@ -249,22 +251,6 @@ class MyModel(nn.Module):
         output = self.fc(combined)
         
         return output
-
-def calculate_class_weights(labels):
-    label_counts = Counter(labels.numpy())
-    total_samples = len(labels)
-    num_classes = len(label_counts)
-    
-    weights = torch.zeros(num_classes)
-    for label, count in label_counts.items():
-        weights[label] = total_samples / (num_classes * count)
-    
-    print("类别分布:", dict(label_counts))
-    print("类别权重:", weights)
-    
-    return weights
-
-class_weights = calculate_class_weights(labels_tensor)
 
 # 模型初始化
 model = MyModel(num_features=inputs_tensor.size(1), num_classes=num_classes, renewable_dim=len(renewable_feature_names), load_dim=len(load_feature_names))

@@ -14,6 +14,9 @@ from collections import Counter
 from sklearn.preprocessing import OneHotEncoder
 from sklearn.metrics import classification_report
 
+import heapq
+from scipy.stats import weibull_min
+
 # 设置参数
 num_classes = 2   # 类别数量
 
@@ -28,6 +31,9 @@ torch.manual_seed(42)
 np.random.seed(42)
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')    # 检查CUDA是否可用
+
+
+# =================== 1. 数据准备 ======================
 
 
 # 数据读取与预处理,数据保存在 data/ 目录下的 CSV 文件中
@@ -76,6 +82,12 @@ def load_and_preprocess_data():
     labels = data_df['target'].values  # 假设目标列为 'target'
 
     return renewable_feature_names, load_feature_names, data_df, inputs, labels
+
+
+# =================== 2. 路线和再生能源计算 ======================
+
+
+# =================== 3. 特征合并 ======================
 
 # 调用数据加载函数
 inputs, labels, renewable_feature_names, load_feature_names = load_and_preprocess_data()

@@ -19,7 +19,7 @@ num_classes = 2   # 类别数量
 
 # 超参数
 learning_rate = 1e-4   # 学习率
-num_epochs = 50        # 训练轮数
+num_epochs = 100        # 训练轮数
 batch_size = 64        # 批次大小
 weight_decay = 1e-4    # L2正则化防止过拟合
 
@@ -43,7 +43,7 @@ def load_and_preprocess_data():
     data_df = pd.merge(renewable_df, load_df, on='timestamp', how='inner')  # 根据时间戳合并数据，inner内连接表示时间戳都存在的列才会被保留
 
     # 分离特征组
-    renewable_features = ['season', 'holiday', 'weather', 'temperature', 'hour']
+    renewable_features = ['season', 'holiday', 'weather', 'temperature', 'working_hours']
     load_features = ['ship_grade', 'work_time', 'dock_position']
     
     # 分别进行独热编码

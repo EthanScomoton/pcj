@@ -33,7 +33,7 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')    # 检�
 # 数据读取与预处理,数据保存在 data/ 目录下的 CSV 文件中
 def load_and_preprocess_data():
     # 读取可再生能源数据，包括影响因素
-    renewable_df = pd.read_csv('data/renewable_data.csv')   
+    renewable_df = pd.read_csv('/Users/ethan/Desktop/renewable_data.csv ')   
     renewable_df['timestamp'] = pd.to_datetime(renewable_df['timestamp'])
 
     # 读取负荷数据，包括影响因素

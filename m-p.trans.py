@@ -449,15 +449,14 @@ def plot_results(t, E_solar_supply, E_wind_supply, E_storage_discharge, E_grid_s
     axs[0].grid(True)
 
     # (2) Supply curves for different energy types
-    axs[1].plot(t, E_solar_supply, 'g', label='Solar Power Supply')
-    axs[1].plot(t, E_wind_supply, 'c', label='Wind Power Supply')
-    axs[1].plot(t, E_storage_discharge, 'm', label='Storage Discharge Supply')
-    axs[1].plot(t, E_grid_supply, 'r', label='Grid Power Supply')
+    axs[1].plot(t, E_solar_supply, label='Solar Power Supply', linestyle='-')
+    axs[1].plot(t, E_wind_supply, label='Wind Power Supply', linestyle='--')
+    axs[1].plot(t, E_storage_discharge, label='Storage Discharge', linestyle='-.')
+    axs[1].plot(t, E_grid_supply, label='Grid Power Supply', linestyle=':')
     axs[1].set_xlabel('Time (hours)')
-    axs[1].set_ylabel('Energy (kWh)')
-    axs[1].set_title('Energy Type Supply Curves')
-    # Move legend to upper right corner, outside the plot
-    axs[1].legend(loc='upper right', bbox_to_anchor=(1.15, 1), framealpha=0.9, edgecolor="black")
+    axs[1].set_ylabel('Power Supply (kW)')
+    axs[1].legend(loc='upper right')
+    axs[1].set_title('Energy Supply over Time')
     axs[1].grid(True)
 
     # (3) Renewable energy generation vs load demand curve
@@ -490,7 +489,7 @@ def plot_results(t, E_solar_supply, E_wind_supply, E_storage_discharge, E_grid_s
     energy_labels_with_percent = [f'{lbl}: {pct:.1f}%' for lbl, pct in zip(energy_labels, energy_percentage)]
 
     # Create a new figure for the pie chart
-    plt.figure(figsize=(6, 6))
+    plt.figure(figsize=(8, 8))
     plt.pie(energy_sources, labels=energy_labels_with_percent, autopct='%1.1f%%', startangle=90)
     plt.title(f'{material_type} Energy Contribution at {t[idx]:.2f} Hours')
 

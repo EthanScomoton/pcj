@@ -33,22 +33,22 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')    # 检�
 # 数据读取与预处理,数据保存在 data/ 目录下的 CSV 文件中
 def load_and_preprocess_data():
     # 读取可再生能源数据，包括影响因素
-    renewable_df = pd.read_csv('/Users/ethan/Desktop/renewable_data.csv ')   
+    renewable_df = pd.read_csv('/Users/ethan/Desktop/renewable_data.csv')   
     renewable_df['timestamp'] = pd.to_datetime(renewable_df['timestamp'])
 
     # 读取负荷数据，包括影响因素
-    load_df = pd.read_csv('data/load_data.csv')   
+    load_df = pd.read_csv('/Users/ethan/Desktop/load_data.csv')   
     load_df['timestamp'] = pd.to_datetime(load_df['timestamp'])
 
     data_df = pd.merge(renewable_df, load_df, on='timestamp', how='inner')  # 根据时间戳合并数据，inner内连接表示时间戳都存在的列才会被保留
 
     # 分离特征组
     renewable_features = ['season', 'holiday', 'weather', 'temperature', 'working_hours']
-    load_features = ['ship_grade', 'work_time', 'dock_position']
+    load_features = ['ship_grade', 'work_hours', 'dock_position']
     
     # 分别进行独热编码
-    encoder_renewable = OneHotEncoder(sparse=False)
-    encoder_load = OneHotEncoder(sparse=False)
+    encoder_renewable = OneHotEncoder(sparse_output=False)
+    encoder_load = OneHotEncoder(sparse_output=False)
     
     encoded_renewable = encoder_renewable.fit_transform(data_df[renewable_features])
     encoded_load = encoder_load.fit_transform(data_df[load_features])
@@ -69,7 +69,7 @@ def load_and_preprocess_data():
     
     # 删除原始分类列
     data_df.drop(columns=renewable_features + load_features, inplace=True)
-   
+
     # 提取特征和目标
     feature_columns = list(renewable_feature_names) + list(load_feature_names)
     inputs = data_df[feature_columns].values

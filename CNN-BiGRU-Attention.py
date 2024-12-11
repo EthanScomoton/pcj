@@ -19,8 +19,8 @@ num_classes = 2   # 类别数量
 
 # 超参数
 learning_rate = 1e-4  # 学习率
-num_epochs = 50        # 训练轮数
-batch_size = 64        # 批次大小
+num_epochs = 200        # 训练轮数
+batch_size = 256        # 批次大小
 weight_decay = 1e-4    # L2正则化防止过拟合
 
 # 自定义注意力机制模块

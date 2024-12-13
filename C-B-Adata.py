@@ -19,8 +19,8 @@ num_classes = 2   # 类别数量
 
 # 超参数
 learning_rate = 1e-4   # 学习率
-num_epochs = 100        # 训练轮数
-batch_size = 64        # 批次大小
+num_epochs = 200        # 训练轮数
+batch_size = 128        # 批次大小
 weight_decay = 1e-4    # L2正则化防止过拟合
 
 # 设置随机种子以确保可重复性
@@ -28,7 +28,6 @@ torch.manual_seed(42)
 np.random.seed(42)
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')    # 检查CUDA是否可用
-
 
 # 数据读取与预处理,数据保存在 data/ 目录下的 CSV 文件中
 def load_and_preprocess_data():

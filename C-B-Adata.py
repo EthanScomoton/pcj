@@ -43,10 +43,10 @@ def load_and_preprocess_data():
 
     # 分离特征组
     renewable_features = ['season', 'holiday', 'weather', 'temperature', 'working_hours']
-    load_features = ['ship_grade', 'work_hours', 'dock_position']
+    load_features = ['ship_grade', 'dock_position', 'destination', 'work_hours','target']
     
     # 分别进行独热编码
-    encoder_renewable = OneHotEncoder(sparse_output=False)
+    encoder_renewable = OneHotEncoder(sparse=False)
     encoder_load = OneHotEncoder(sparse_output=False)
     
     encoded_renewable = encoder_renewable.fit_transform(data_df[renewable_features])
@@ -72,9 +72,9 @@ def load_and_preprocess_data():
     # 提取特征和目标
     feature_columns = list(renewable_feature_names) + list(load_feature_names)
     inputs = data_df[feature_columns].values
-    labels = data_df['target'].values  # 假设目标列为 'target'
+    labels = data_df['target'].values  # 目标列为 'target'
 
-    return renewable_feature_names, load_feature_names, data_df, inputs, labels
+    return inputs, labels, renewable_feature_names, load_feature_names
 
 # 调用数据加载函数
 inputs, labels, renewable_feature_names, load_feature_names = load_and_preprocess_data()
@@ -90,13 +90,14 @@ labels_tensor = torch.tensor(labels, dtype=torch.long)
 
 # 计算类别权重
 def calculate_class_weights(labels):
-    label_counts = Counter(labels.numpy())
+    # 确保 labels 在 CPU 上并转换为 NumPy 数组
+    label_counts = Counter(labels.cpu().numpy())
     total_samples = len(labels)
     num_classes = len(label_counts)
 
-    weights = torch.zeros(num_classes)
+    weights = torch.zeros(num_classes, device=labels.device)  # 确保 weights 与设备匹配
     for label, count in label_counts.items():
-        weights[label] = (total_samples / (num_classes * count)) ** 0.5  # 平滑处理，避免权重过大
+        weights[label] = (total_samples / (num_classes * count)) ** 0.5  # 平滑处理
 
     print("类别分布:", dict(label_counts))
     print("类别权重:", weights)
@@ -137,7 +138,7 @@ class PositionalEncoding(nn.Module):
 
     def forward(self, x):
         # x: (seq_length, batch_size, d_model)。seq_length: 当前序列的长度（注意可能比 max_len 小）。batch_size: 序列的批次大小。d_model: 每个时间步的特征维度。
-        x = x + self.pe[:x.size(0)]
+        x = x + self.pe[:x.size(0), :]
         return x
 
 # 自定义注意力机制模块
@@ -226,7 +227,7 @@ class MyModel(nn.Module):
         )
 
     def forward(self, x):
-        # 提取特征
+        # 分离特征
         renewable_features = x[:, :self.renewable_dim]
         load_features = x[:, self.renewable_dim:self.renewable_dim + self.load_dim]
         temporal_features = x[:, self.renewable_dim + self.load_dim:]
@@ -245,8 +246,8 @@ class MyModel(nn.Module):
         # 注意力机制
         attention_out = self.attention(interaction_out)  # (batch_size, 128)
 
-        # 处理时序特征（如果有）
-        if self.temporal_bigru:
+        # 动态检查时序特征是否为空
+        if temporal_features.size(1) > 0:  # 判断是否有时序特征
             temporal_features = temporal_features.unsqueeze(1)  # (batch_size, 1, feature_dim)
             temporal_out, _ = self.temporal_bigru(temporal_features)  # (batch_size, 1, 256)
 

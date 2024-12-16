@@ -281,7 +281,7 @@ model.to(device)
 
 # 损失函数和优化器
 criterion = nn.CrossEntropyLoss(weight=class_weights)
-optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
 
 # 定义学习率调度器
 total_steps = num_epochs * len(train_loader)

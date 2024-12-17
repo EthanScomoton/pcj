@@ -43,7 +43,7 @@ def load_and_preprocess_data():
 
     # 分离特征组
     renewable_features = ['season', 'holiday', 'weather', 'temperature', 'working_hours']
-    load_features = ['ship_grade', 'dock_position', 'destination', 'work_hours','target']
+    load_features = ['ship_grade', 'dock_position', 'destination', 'work_hours','energyconsumption']
     
     # 分别进行独热编码
     encoder_renewable = OneHotEncoder(sparse=False)
@@ -72,7 +72,7 @@ def load_and_preprocess_data():
     # 提取特征和目标
     feature_columns = list(renewable_feature_names) + list(load_feature_names)
     inputs = data_df[feature_columns].values
-    labels = data_df['target'].values  # 目标列为 'target'
+    labels = data_df['energyconsumption'].values  # 目标列为 'energyconsumption'
 
     return inputs, labels, renewable_feature_names, load_feature_names
 
@@ -344,7 +344,7 @@ def evaluate(model, dataloader, criterion, device):
 
     # 生成分类报告
     print("\nClassification Report:")
-    print(classification_report(all_labels, all_preds, target_names=['Class 0', 'Class 1']))
+    print(classification_report(all_labels, all_preds, energyconsumption_names=['Class 0', 'Class 1']))
 
     return val_loss, val_acc
 

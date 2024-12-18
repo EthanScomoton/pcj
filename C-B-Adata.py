@@ -46,7 +46,7 @@ def load_and_preprocess_data():
     load_features = ['ship_grade', 'dock_position', 'destination', 'energyconsumption']
     
     # 分别进行独热编码
-    encoder_renewable = OneHotEncoder(sparse=False)
+    encoder_renewable = OneHotEncoder(sparse_output=False)
     encoder_load = OneHotEncoder(sparse_output=False)
     
     encoded_renewable = encoder_renewable.fit_transform(data_df[renewable_features])

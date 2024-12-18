@@ -42,8 +42,8 @@ def load_and_preprocess_data():
     data_df = pd.merge(renewable_df, load_df, on='timestamp', how='inner')  # 根据时间戳合并数据，inner内连接表示时间戳都存在的列才会被保留
 
     # 分离特征组
-    renewable_features = ['season', 'holiday', 'weather', 'temperature', 'working_hours']
-    load_features = ['ship_grade', 'dock_position', 'destination', 'work_hours','energyconsumption']
+    renewable_features = ['season', 'holiday', 'weather', 'temperature', 'working_hours','E_PV', 'E_storage_discharge', 'E_grid', 'ESCFR', 'ESCFG']
+    load_features = ['ship_grade', 'dock_position', 'destination', 'energyconsumption']
     
     # 分别进行独热编码
     encoder_renewable = OneHotEncoder(sparse=False)

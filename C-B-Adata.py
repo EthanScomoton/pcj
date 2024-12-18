@@ -8,7 +8,7 @@ from torch.utils.data import DataLoader, TensorDataset
 from torch.utils.tensorboard import SummaryWriter
 import numpy as np
 import pandas as pd
-from tqdm import tqdm  # 进度条库，用于显示进度条
+from tqdm import tqdm  
 import matplotlib.pyplot as plt
 from collections import Counter
 from sklearn.preprocessing import OneHotEncoder
@@ -27,7 +27,7 @@ weight_decay = 1e-4    # L2正则化防止过拟合
 torch.manual_seed(42)
 np.random.seed(42)
 
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')    # 检查CUDA是否可用
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')    
 
 # 数据读取与预处理,数据保存在 data/ 目录下的 CSV 文件中
 def load_and_preprocess_data():
@@ -43,7 +43,8 @@ def load_and_preprocess_data():
 
     # 分离特征组
     renewable_features = ['season', 'holiday', 'weather', 'temperature', 'working_hours','E_PV', 'E_storage_discharge', 'E_grid', 'ESCFR', 'ESCFG']
-    load_features = ['ship_grade', 'dock_position', 'destination', 'energyconsumption']
+    load_features = ['ship_grade', 'dock_position', 'destination']
+    labels = data_df['energyconsumption'].values
     
     # 分别进行独热编码
     encoder_renewable = OneHotEncoder(sparse_output=False)
@@ -72,7 +73,6 @@ def load_and_preprocess_data():
     # 提取特征和目标
     feature_columns = list(renewable_feature_names) + list(load_feature_names)
     inputs = data_df[feature_columns].values
-    labels = data_df['energyconsumption'].values  # 目标列为 'energyconsumption'
 
     return inputs, labels, renewable_feature_names, load_feature_names
 

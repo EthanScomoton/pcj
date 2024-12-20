@@ -14,8 +14,7 @@ from collections import Counter
 from sklearn.preprocessing import OneHotEncoder
 from sklearn.metrics import classification_report
 
-# 设置参数
-num_classes = 2   # 类别数量
+
 
 # 超参数
 learning_rate = 1e-4   # 学习率
@@ -45,6 +44,7 @@ def load_and_preprocess_data():
     renewable_features = ['season', 'holiday', 'weather', 'temperature', 'working_hours','E_PV', 'E_storage_discharge', 'E_grid', 'ESCFR', 'ESCFG']
     load_features = ['ship_grade', 'dock_position', 'destination']
     labels = data_df['energyconsumption'].values
+    num_classes = len(np.unique(labels))
     
     # 分别进行独热编码
     encoder_renewable = OneHotEncoder(sparse_output=False)
@@ -74,10 +74,10 @@ def load_and_preprocess_data():
     feature_columns = list(renewable_feature_names) + list(load_feature_names)
     inputs = data_df[feature_columns].values
 
-    return inputs, labels, renewable_feature_names, load_feature_names
+    return inputs, labels, renewable_feature_names, load_feature_names, num_classes
 
 # 调用数据加载函数
-inputs, labels, renewable_feature_names, load_feature_names = load_and_preprocess_data()
+inputs, labels, renewable_feature_names, load_feature_names, num_classes = load_and_preprocess_data()
 
 # 定义特征维度
 renewable_dim = len(renewable_feature_names)
@@ -351,6 +351,8 @@ def evaluate(model, dataloader, criterion, device):
 # 训练模型
 train_acc_history = []
 val_acc_history = []
+train_loss_history = []
+val_loss_history = []
 global_step = 0
 
 for epoch in range(num_epochs):
@@ -388,6 +390,7 @@ for epoch in range(num_epochs):
         running_loss += loss.item() * batch_inputs.size(0)
         _, preds = torch.max(outputs, 1)
         running_corrects += torch.sum(preds == batch_labels).item()
+        num_samples += batch_inputs.size(0)  # Add this line to update num_samples
 
         # 更新进度条描述
         progress_bar.set_postfix({'Loss': running_loss / num_samples, 'Acc': (running_corrects.double() / num_samples).item()})
@@ -411,9 +414,11 @@ for epoch in range(num_epochs):
     writer.add_scalar('Val/Loss', val_loss, epoch)
     writer.add_scalar('Val/Accuracy', val_acc, epoch)
 
-    # 记录训练和验证准确率
+    # 记录训练和验证准确率和损失
     train_acc_history.append(epoch_acc.cpu().item())
     val_acc_history.append(val_acc.cpu().item())
+    train_loss_history.append(epoch_loss)
+    val_loss_history.append(val_loss)
 
     # 打印结果
     print(f'\nEpoch {epoch + 1}/{num_epochs}, Train Loss: {epoch_loss:.4f}, Train Acc: {epoch_acc:.4f}, '
@@ -432,7 +437,7 @@ for epoch in range(num_epochs):
             print("验证集损失未降低，提前停止训练")
             break
 
-# 绘制训练和验证集准确率的折线图
+# 绘制训练和验证集准确率和损失的折线图
 def plot_metrics(train_acc_history, val_acc_history, train_loss_history, val_loss_history):
     epochs = range(1, len(train_acc_history) + 1)
 
@@ -462,7 +467,7 @@ def plot_metrics(train_acc_history, val_acc_history, train_loss_history, val_los
     plt.show()
 
 # 在训练完成后调用此函数
-plot_metrics(train_acc_history, val_acc_history)
+plot_metrics(train_acc_history, val_acc_history, train_loss_history, val_loss_history)
 
 # 关闭 TensorBoard
 writer.close()

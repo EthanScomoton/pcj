@@ -13,6 +13,7 @@ import matplotlib.pyplot as plt
 from collections import Counter
 from sklearn.preprocessing import OneHotEncoder
 from sklearn.metrics import classification_report
+from sklearn.preprocessing import LabelEncoder
 
 
 
@@ -45,7 +46,11 @@ def load_and_preprocess_data():
     renewable_features = ['season', 'holiday', 'weather', 'temperature', 'working_hours', 'E_PV', 'E_storage_discharge', 'E_grid', 'ESCFR', 'ESCFG']
     load_features = ['ship_grade', 'dock_position', 'destination']
     labels = data_df['energyconsumption'].values
-    num_classes = len(np.unique(labels))
+    
+    # 标签编码
+    label_encoder = LabelEncoder()
+    labels = label_encoder.fit_transform(labels)
+    num_classes = len(label_encoder.classes_)
 
     # 分别进行独热编码
     encoder_renewable = OneHotEncoder(sparse_output=False)
@@ -220,7 +225,7 @@ class EModel(nn.Module):
 
         # 输出层
         self.fc = nn.Sequential(
-            nn.Linear(128 + (256 if self.temporal_bigru else 0) + 256, 256),
+            nn.Linear(128 + 256 + 256, 256),  # 128 + 256 + 256 = 640
             nn.ReLU(),
             nn.Dropout(0.5),
             nn.Linear(256, num_classes)

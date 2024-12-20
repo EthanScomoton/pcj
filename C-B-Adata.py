@@ -30,43 +30,40 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 # 数据读取与预处理,数据保存在 data/ 目录下的 CSV 文件中
 def load_and_preprocess_data():
-    # 读取可再生能源数据，包括影响因素
-    renewable_df = pd.read_csv('/Users/ethan/Desktop/renewable_data.csv')   
-    renewable_df['timestamp'] = pd.to_datetime(renewable_df['timestamp'])
+    # 读取可再生能源数据和负荷数据，包括影响因素
+    renewable_df = pd.read_csv('/Users/ethan/Desktop/renewable_data.csv')
+    load_df = pd.read_csv('/Users/ethan/Desktop/load_data.csv')
 
-    # 读取负荷数据，包括影响因素
-    load_df = pd.read_csv('/Users/ethan/Desktop/load_data.csv')   
+    # 转换时间戳
+    renewable_df['timestamp'] = pd.to_datetime(renewable_df['timestamp'])
     load_df['timestamp'] = pd.to_datetime(load_df['timestamp'])
 
-    data_df = pd.merge(renewable_df, load_df, on='timestamp', how='inner')  # 根据时间戳合并数据，inner内连接表示时间戳都存在的列才会被保留
+    # 合并数据
+    data_df = pd.concat([renewable_df, load_df], axis=1)
 
     # 分离特征组
-    renewable_features = ['season', 'holiday', 'weather', 'temperature', 'working_hours','E_PV', 'E_storage_discharge', 'E_grid', 'ESCFR', 'ESCFG']
+    renewable_features = ['season', 'holiday', 'weather', 'temperature', 'working_hours', 'E_PV', 'E_storage_discharge', 'E_grid', 'ESCFR', 'ESCFG']
     load_features = ['ship_grade', 'dock_position', 'destination']
     labels = data_df['energyconsumption'].values
     num_classes = len(np.unique(labels))
-    
+
     # 分别进行独热编码
     encoder_renewable = OneHotEncoder(sparse_output=False)
     encoder_load = OneHotEncoder(sparse_output=False)
-    
+
     encoded_renewable = encoder_renewable.fit_transform(data_df[renewable_features])
     encoded_load = encoder_load.fit_transform(data_df[load_features])
-    
+
     renewable_feature_names = encoder_renewable.get_feature_names_out(renewable_features)
     load_feature_names = encoder_load.get_feature_names_out(load_features)
-    
+
     # 创建对应的DataFrame
     renewable_df = pd.DataFrame(encoded_renewable, columns=renewable_feature_names)
     load_df = pd.DataFrame(encoded_load, columns=load_feature_names)
-    
+
     # 合并数据
-    data_df = pd.concat([
-        data_df.reset_index(drop=True),
-        renewable_df.reset_index(drop=True),
-        load_df.reset_index(drop=True)
-    ], axis=1)
-    
+    data_df = pd.concat([data_df, renewable_df, load_df], axis=1)
+
     # 删除原始分类列
     data_df.drop(columns=renewable_features + load_features, inplace=True)
 
@@ -91,13 +88,16 @@ labels_tensor = torch.tensor(labels, dtype=torch.long)
 # 计算类别权重
 def calculate_class_weights(labels):
     # 确保 labels 在 CPU 上并转换为 NumPy 数组
-    label_counts = Counter(labels.cpu().numpy())
-    total_samples = len(labels)
+    labels_np = labels.cpu().numpy()
+    label_counts = Counter(labels_np)
+    total_samples = len(labels_np)
     num_classes = len(label_counts)
 
-    weights = torch.zeros(num_classes, device=labels.device)  # 确保 weights 与设备匹配
-    for label, count in label_counts.items():
-        weights[label] = (total_samples / (num_classes * count)) ** 0.5  # 平滑处理
+    # 使用 torch.tensor 直接计算权重
+    weights = torch.tensor(
+        [(total_samples / (num_classes * count)) ** 0.5 for count in label_counts.values()],
+        device=labels.device
+    )
 
     print("类别分布:", dict(label_counts))
     print("类别权重:", weights)
@@ -163,9 +163,9 @@ class Attention(nn.Module):
         return output  # (batch_size, input_dim)
 
 # 定义模型
-class MyModel(nn.Module):
+class EModel(nn.Module):
     def __init__(self, num_features, num_classes, renewable_dim, load_dim):
-        super(MyModel, self).__init__()
+        super(EModel, self).__init__()
 
         self.renewable_dim = renewable_dim
         self.load_dim = load_dim
@@ -277,7 +277,7 @@ class MyModel(nn.Module):
         return output
 
 # 初始化模型
-model = MyModel(num_features=num_features, num_classes=num_classes, renewable_dim=renewable_dim, load_dim=load_dim)
+model = EModel(num_features=num_features, num_classes=num_classes, renewable_dim=renewable_dim, load_dim=load_dim)
 model.to(device)
 
 # 损失函数和优化器

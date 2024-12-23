@@ -46,11 +46,12 @@ def load_and_preprocess_data():
     renewable_features = ['season', 'holiday', 'weather', 'temperature', 'working_hours', 'E_PV', 'E_storage_discharge', 'E_grid', 'ESCFR', 'ESCFG']
     load_features = ['ship_grade', 'dock_position', 'destination']
     labels = data_df['energyconsumption'].values
-    
+
     # 标签编码
     label_encoder = LabelEncoder()
     labels = label_encoder.fit_transform(labels)
     num_classes = len(label_encoder.classes_)
+    energyconsumption_names = [f'Class {i}' for i in range(num_classes)]
 
     # 分别进行独热编码
     encoder_renewable = OneHotEncoder(sparse_output=False)
@@ -63,11 +64,11 @@ def load_and_preprocess_data():
     load_feature_names = encoder_load.get_feature_names_out(load_features)
 
     # 创建对应的DataFrame
-    renewable_df = pd.DataFrame(encoded_renewable, columns=renewable_feature_names)
-    load_df = pd.DataFrame(encoded_load, columns=load_feature_names)
+    renewable_df_encoded = pd.DataFrame(encoded_renewable, columns=renewable_feature_names)
+    load_df_encoded = pd.DataFrame(encoded_load, columns=load_feature_names)
 
     # 合并数据
-    data_df = pd.concat([data_df, renewable_df, load_df], axis=1)
+    data_df = pd.concat([data_df, renewable_df_encoded, load_df_encoded], axis=1)
 
     # 删除原始分类列
     data_df.drop(columns=renewable_features + load_features, inplace=True)
@@ -76,10 +77,10 @@ def load_and_preprocess_data():
     feature_columns = list(renewable_feature_names) + list(load_feature_names)
     inputs = data_df[feature_columns].values
 
-    return inputs, labels, renewable_feature_names, load_feature_names, num_classes
+    return inputs, labels, renewable_feature_names, load_feature_names, num_classes, energyconsumption_names
 
 # 调用数据加载函数
-inputs, labels, renewable_feature_names, load_feature_names, num_classes = load_and_preprocess_data()
+inputs, labels, renewable_feature_names, load_feature_names, num_classes, energyconsumption_names = load_and_preprocess_data()
 
 # 定义特征维度
 renewable_dim = len(renewable_feature_names)
@@ -217,7 +218,7 @@ class EModel(nn.Module):
 
         # Transformer编码器
         self.pos_encoder = PositionalEncoding(d_model=256)
-        encoder_layer = nn.TransformerEncoderLayer(d_model=256, nhead=8)
+        encoder_layer = nn.TransformerEncoderLayer(d_model=256, nhead=8, batch_first=True)
         self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=6)
 
         # 注意力层
@@ -313,10 +314,10 @@ counter = 0
 writer = SummaryWriter(log_dir='runs/experiment1')
 
 # 训练和验证函数
-def evaluate(model, dataloader, criterion, device):
+def evaluate(model, dataloader, criterion, device, energyconsumption_names):
     model.eval()
     running_loss = 0.0
-    running_corrects = 0
+    running_corrects = 0.0
     num_samples = 0
     all_preds = []
     all_labels = []
@@ -337,7 +338,7 @@ def evaluate(model, dataloader, criterion, device):
             # 统计损失和准确率
             running_loss += loss.item() * inputs.size(0)
             _, preds = torch.max(outputs, 1)
-            running_corrects += torch.sum(preds == labels)
+            running_corrects += torch.sum(preds == labels).item()
             num_samples += inputs.size(0)
 
             # 记录所有预测和真实标签
@@ -345,11 +346,11 @@ def evaluate(model, dataloader, criterion, device):
             all_labels.extend(labels.cpu().numpy())
 
     val_loss = running_loss / num_samples
-    val_acc = running_corrects.double() / num_samples
+    val_acc = running_corrects / num_samples
 
     # 生成分类报告
     print("\nClassification Report:")
-    print(classification_report(all_labels, all_preds, energyconsumption_names=['Class 0', 'Class 1']))
+    print(classification_report(all_labels, all_preds, target_names=energyconsumption_names))
 
     return val_loss, val_acc
 
@@ -363,18 +364,17 @@ global_step = 0
 for epoch in range(num_epochs):
     model.train()
     running_loss = 0.0
-    running_corrects = 0
+    running_corrects = 0.0  # 修改为浮点数
     num_samples = 0
 
     # 使用 tqdm 包装训练集数据加载器
     progress_bar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs}")
 
-    for batch_inputs, batch_labels in train_loader:
+    for batch_inputs, batch_labels in progress_bar:  # 修改为使用 progress_bar
         batch_inputs = batch_inputs.to(device, non_blocking=True)
         batch_labels = batch_labels.to(device, non_blocking=True)
 
         optimizer.zero_grad()
-
 
         if scaler:
             # 使用自动混合精度
@@ -394,11 +394,11 @@ for epoch in range(num_epochs):
         # 计算损失和准确率
         running_loss += loss.item() * batch_inputs.size(0)
         _, preds = torch.max(outputs, 1)
-        running_corrects += torch.sum(preds == batch_labels).item()
-        num_samples += batch_inputs.size(0)  # Add this line to update num_samples
+        running_corrects += torch.sum(preds == batch_labels).item()  # 累加为浮点数
+        num_samples += batch_inputs.size(0)
 
         # 更新进度条描述
-        progress_bar.set_postfix({'Loss': running_loss / num_samples, 'Acc': (running_corrects.double() / num_samples).item()})
+        progress_bar.set_postfix({'Loss': running_loss / num_samples, 'Acc': running_corrects / num_samples})
 
         # 更新学习率
         scheduler.step()
@@ -406,21 +406,21 @@ for epoch in range(num_epochs):
 
     # 计算整个 epoch 的平均损失和准确率
     epoch_loss = running_loss / num_samples
-    epoch_acc = running_corrects.double() / num_samples
+    epoch_acc = running_corrects / num_samples  # 已经是浮点数
 
     # 在 TensorBoard 中记录训练指标
     writer.add_scalar('Train/Loss', epoch_loss, epoch)
     writer.add_scalar('Train/Accuracy', epoch_acc, epoch)
 
     # 在验证集上评估
-    val_loss, val_acc = evaluate(model, val_loader, criterion, device)
+    val_loss, val_acc = evaluate(model, val_loader, criterion, device, energyconsumption_names)
 
     # 在 TensorBoard 中记录验证指标
     writer.add_scalar('Val/Loss', val_loss, epoch)
     writer.add_scalar('Val/Accuracy', val_acc, epoch)
 
     # 记录训练和验证准确率和损失
-    train_acc_history.append(epoch_acc.cpu().item())
+    train_acc_history.append(epoch_acc)
     val_acc_history.append(val_acc.cpu().item())
     train_loss_history.append(epoch_loss)
     val_loss_history.append(val_loss)

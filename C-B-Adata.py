@@ -17,21 +17,20 @@ from sklearn.preprocessing import LabelEncoder
 
 
 
-# 超参数
+# 定义超参数
 learning_rate = 1e-4   # 学习率
 num_epochs = 200        # 训练轮数
 batch_size = 128        # 批次大小
 weight_decay = 1e-4    # L2正则化防止过拟合
 
-# 设置随机种子以确保可重复性
+# 设置随机种子
 torch.manual_seed(42)
 np.random.seed(42)
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')    
 
-# 数据读取与预处理,数据保存在 data/ 目录下的 CSV 文件中
+# 加载和预处理数据
 def load_and_preprocess_data():
-    # 读取可再生能源数据和负荷数据，包括影响因素
     renewable_df = pd.read_csv('/Users/ethan/Desktop/renewable_data.csv')
     load_df = pd.read_csv('/Users/ethan/Desktop/load_data.csv')
 
@@ -51,7 +50,7 @@ def load_and_preprocess_data():
     label_encoder = LabelEncoder()
     labels = label_encoder.fit_transform(labels)
     num_classes = len(label_encoder.classes_)
-    energyconsumption_names = [f'Class {i}' for i in range(num_classes)]
+    energyconsumption_names = [str(cls) for cls in label_encoder.classes_]
 
     # 分别进行独热编码
     encoder_renewable = OneHotEncoder(sparse_output=False)
@@ -93,7 +92,7 @@ labels_tensor = torch.tensor(labels, dtype=torch.long)
 
 # 计算类别权重
 def calculate_class_weights(labels):
-    # 确保 labels 在 CPU 上并转换为 NumPy 数组
+    # 确保labels转换为 NumPy 数组
     labels_np = labels.cpu().numpy()
     label_counts = Counter(labels_np)
     total_samples = len(labels_np)
@@ -350,9 +349,10 @@ def evaluate(model, dataloader, criterion, device, energyconsumption_names):
 
     # 生成分类报告
     print("\nClassification Report:")
-    print(classification_report(all_labels, all_preds, target_names=energyconsumption_names))
+    print(classification_report(all_labels, all_preds, labels=range(num_classes), target_names=energyconsumption_names))
 
     return val_loss, val_acc
+
 
 # 训练模型
 train_acc_history = []
@@ -421,7 +421,7 @@ for epoch in range(num_epochs):
 
     # 记录训练和验证准确率和损失
     train_acc_history.append(epoch_acc)
-    val_acc_history.append(val_acc.cpu().item())
+    val_acc_history.append(val_acc)
     train_loss_history.append(epoch_loss)
     val_loss_history.append(val_loss)
 

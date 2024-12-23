@@ -18,7 +18,7 @@ from sklearn.preprocessing import StandardScaler
 # 定义超参数
 learning_rate = 1e-5   # 学习率
 num_epochs = 200       # 训练轮数
-batch_size = 128       # 批次大小
+batch_size = 256       # 批次大小
 weight_decay = 1e-4    # L2正则化防止过拟合
 patience = 5           # 早停轮数
 
@@ -30,32 +30,24 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 # 加载和预处理数据
 def load_and_preprocess_data():
-    # 1) 读取数据
     renewable_df = pd.read_csv('/Users/ethan/Desktop/renewable_data.csv')
     load_df = pd.read_csv('/Users/ethan/Desktop/load_data.csv')
 
-    # 2) 转换时间戳（如果确有需要）
     renewable_df['timestamp'] = pd.to_datetime(renewable_df['timestamp'])
     load_df['timestamp'] = pd.to_datetime(load_df['timestamp'])
 
-    # 3) 合并数据
     data_df = pd.concat([renewable_df, load_df], axis=1)
 
-    # 4) 分离特征列
-    renewable_features = [
-        'season','holiday','weather','temperature','working_hours',
-        'E_PV','E_storage_discharge','E_grid','ESCFR','ESCFG'
+    renewable_features = ['season','holiday','weather','temperature','working_hours','E_PV','E_storage_discharge','E_grid','ESCFR','ESCFG'
     ]
     load_features = ['ship_grade','dock_position','destination']
 
     # 提取目标(能耗)
-    # ---------- 核心：对目标做对数变换 ----------
-    # 首先取原始值
+
     y_raw = data_df['energyconsumption'].values.astype(float)
     # 对数变换: log( y + 1 )
     y_log = np.log1p(y_raw)
 
-    # 5) 独热编码
     encoder_renewable = OneHotEncoder(sparse_output=False)
     encoder_load = OneHotEncoder(sparse_output=False)
 
@@ -65,24 +57,19 @@ def load_and_preprocess_data():
     renewable_feature_names = encoder_renewable.get_feature_names_out(renewable_features)
     load_feature_names = encoder_load.get_feature_names_out(load_features)
 
-    # 创建新DF
     renewable_df_encoded = pd.DataFrame(encoded_renewable, columns=renewable_feature_names)
     load_df_encoded = pd.DataFrame(encoded_load, columns=load_feature_names)
 
-    # 合并
     data_df = pd.concat([data_df, renewable_df_encoded, load_df_encoded], axis=1)
 
-    # 删掉原始的类别列
     data_df.drop(columns=renewable_features + load_features, inplace=True)
 
-    # 6) 对输入特征做标准化(可选, 强烈推荐)
     feature_columns = list(renewable_feature_names) + list(load_feature_names)
     X_raw = data_df[feature_columns].values
 
     scaler_X = StandardScaler()
     X_scaled = scaler_X.fit_transform(X_raw)
 
-    # 返回 处理后的 X / y,  以及特征名、scaler
     return X_scaled, y_log, renewable_feature_names, load_feature_names, scaler_X
 
 # 调用数据加载函数

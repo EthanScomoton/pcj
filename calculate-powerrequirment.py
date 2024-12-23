@@ -1,9 +1,6 @@
 import numpy as np
 import heapq
-import matplotlib.pyplot as plt
-from scipy.stats import weibull_min
 import pandas as pd
-from datetime import datetime
 
 ## main
 latitude = None
@@ -238,7 +235,7 @@ def calculate_total_energy(input_row):
             P_list_regular = P_list_coal
         else:
             raise ValueError('未识别的堆放种类!')
-        if start_point < 1 or start_point > yard_matrix.shape[0] or end_point < 1 or end_point > yard_matrix.shape[0]:
+        if end_point < 1 or end_point > yard_matrix.shape[0]:
             raise ValueError('起始点或终止点超出矩阵范围！')
 
         # 定义特殊连接的信息
@@ -272,15 +269,27 @@ def calculate_total_energy(input_row):
     
     Ei = calculate_energy_consumption(Q_total, material_type, start_point, end_point)
 
-
     return Ei
 
+results = []
 
+for idx, row in load_data_df.iterrows():
+    Ei = calculate_total_energy(row)  # 你上面定义的函数
+    dock_pos = row["dock_position"]
+    grade = row["ship_grade"]
+    dest = row["destination"]
 
-# 使用 load_data_df 的数据逐行计算总能耗
-load_data_df["target"] = load_data_df.apply(calculate_total_energy, axis=1)
-pd.set_option('display.max_rows', None)        # 显示所有行
-pd.set_option('display.max_columns', None)     # 显示所有列
-pd.set_option('display.width', None)           # 根据窗口自动调整宽度
-pd.set_option('display.max_colwidth', None)    # 不限制列宽
-print(load_data_df)
+    results.append({
+        "dock_position": dock_pos,
+        "ship_grade": grade,
+        "destination": dest,
+        "Ei": Ei
+    })
+
+# 把 results 做成新的 DataFrame
+output_df = pd.DataFrame(results)
+
+output_path = "/Users/ethan/Desktop/output_Ei.csv"
+output_df.to_csv(output_path, index=False)  
+
+print(f"已将结果保存到 {output_path}")

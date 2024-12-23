@@ -13,13 +13,14 @@ import matplotlib.pyplot as plt
 from collections import Counter
 from sklearn.preprocessing import OneHotEncoder
 from sklearn.metrics import mean_squared_error
-# from sklearn.preprocessing import LabelEncoder  # 现在不需要对目标做分类编码了
+from sklearn.preprocessing import StandardScaler
 
 # 定义超参数
-learning_rate = 1e-4   # 学习率
+learning_rate = 1e-5   # 学习率
 num_epochs = 200       # 训练轮数
 batch_size = 128       # 批次大小
 weight_decay = 1e-4    # L2正则化防止过拟合
+patience = 5           # 早停轮数
 
 # 设置随机种子
 torch.manual_seed(42)
@@ -29,25 +30,32 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 # 加载和预处理数据
 def load_and_preprocess_data():
+    # 1) 读取数据
     renewable_df = pd.read_csv('/Users/ethan/Desktop/renewable_data.csv')
     load_df = pd.read_csv('/Users/ethan/Desktop/load_data.csv')
 
-    # 转换时间戳
+    # 2) 转换时间戳（如果确有需要）
     renewable_df['timestamp'] = pd.to_datetime(renewable_df['timestamp'])
     load_df['timestamp'] = pd.to_datetime(load_df['timestamp'])
 
-    # 合并数据
+    # 3) 合并数据
     data_df = pd.concat([renewable_df, load_df], axis=1)
 
-    # 分离特征组
-    renewable_features = ['season', 'holiday', 'weather', 'temperature', 'working_hours', 
-                          'E_PV', 'E_storage_discharge', 'E_grid', 'ESCFR', 'ESCFG']
-    load_features = ['ship_grade', 'dock_position', 'destination']
-    
-    # 这里的 energyconsumption 为数值型目标，不做编码
-    labels = data_df['energyconsumption'].values.astype(float)
+    # 4) 分离特征列
+    renewable_features = [
+        'season','holiday','weather','temperature','working_hours',
+        'E_PV','E_storage_discharge','E_grid','ESCFR','ESCFG'
+    ]
+    load_features = ['ship_grade','dock_position','destination']
 
-    # 分别进行独热编码
+    # 提取目标(能耗)
+    # ---------- 核心：对目标做对数变换 ----------
+    # 首先取原始值
+    y_raw = data_df['energyconsumption'].values.astype(float)
+    # 对数变换: log( y + 1 )
+    y_log = np.log1p(y_raw)
+
+    # 5) 独热编码
     encoder_renewable = OneHotEncoder(sparse_output=False)
     encoder_load = OneHotEncoder(sparse_output=False)
 
@@ -57,24 +65,28 @@ def load_and_preprocess_data():
     renewable_feature_names = encoder_renewable.get_feature_names_out(renewable_features)
     load_feature_names = encoder_load.get_feature_names_out(load_features)
 
-    # 创建对应的DataFrame
+    # 创建新DF
     renewable_df_encoded = pd.DataFrame(encoded_renewable, columns=renewable_feature_names)
     load_df_encoded = pd.DataFrame(encoded_load, columns=load_feature_names)
 
-    # 合并数据
+    # 合并
     data_df = pd.concat([data_df, renewable_df_encoded, load_df_encoded], axis=1)
 
-    # 删除原始分类列
+    # 删掉原始的类别列
     data_df.drop(columns=renewable_features + load_features, inplace=True)
 
-    # 提取特征和目标
+    # 6) 对输入特征做标准化(可选, 强烈推荐)
     feature_columns = list(renewable_feature_names) + list(load_feature_names)
-    inputs = data_df[feature_columns].values
+    X_raw = data_df[feature_columns].values
 
-    return inputs, labels, renewable_feature_names, load_feature_names
+    scaler_X = StandardScaler()
+    X_scaled = scaler_X.fit_transform(X_raw)
+
+    # 返回 处理后的 X / y,  以及特征名、scaler
+    return X_scaled, y_log, renewable_feature_names, load_feature_names, scaler_X
 
 # 调用数据加载函数
-inputs, labels, renewable_feature_names, load_feature_names = load_and_preprocess_data()
+inputs, labels_log, renewable_feature_names, load_feature_names, scaler_X = load_and_preprocess_data()
 
 # 定义特征维度
 renewable_dim = len(renewable_feature_names)
@@ -83,21 +95,21 @@ num_features = inputs.shape[1]
 
 # 将 NumPy 数组转换为 Torch 张量
 inputs_tensor = torch.tensor(inputs, dtype=torch.float32)
-labels_tensor = torch.tensor(labels, dtype=torch.float32)  # 回归：float32
+labels_tensor = torch.tensor(labels_log, dtype=torch.float32)
 
 # 创建数据集和数据加载器
 dataset = TensorDataset(inputs_tensor, labels_tensor)
 
 # 划分训练集和验证集
+dataset = TensorDataset(inputs_tensor, labels_tensor)
 train_size = int(0.8 * len(dataset))
 val_size = len(dataset) - train_size
-
 train_dataset, val_dataset = torch.utils.data.random_split(dataset, [train_size, val_size])
 
 train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=0, pin_memory=True)
 val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=0, pin_memory=True)
 
-# 定义位置编码（Positional Encoding），如果你时序特征不多或不需要，也可酌情去掉
+# 定义位置编码（Positional Encoding）
 class PositionalEncoding(nn.Module):
     def __init__(self, d_model, max_len=5000):
         super(PositionalEncoding, self).__init__()
@@ -113,7 +125,7 @@ class PositionalEncoding(nn.Module):
         x = x + self.pe[:x.size(0), :]
         return x
 
-# 自定义注意力模块（如不需要可删除）
+# 自定义注意力模块
 class Attention(nn.Module):
     def __init__(self, input_dim):
         super(Attention, self).__init__()
@@ -158,34 +170,34 @@ class EModel(nn.Module):
 
         # 交互关系的BiGRU
         self.interaction_bigru = nn.GRU(
-            input_size=128,  
-            hidden_size=64,
-            num_layers=2,
-            batch_first=True,
-            bidirectional=True,
-            dropout=0.2
+            input_size = 128,  
+            hidden_size = 64,
+            num_layers = 1,
+            batch_first = True,
+            bidirectional = True,
+            dropout = 0.3
         )
 
-        # 时序特征处理的BiGRU（如果有时序特征）
+        # 时序特征处理的BiGRU
         temporal_input_dim = num_features - self.renewable_dim - self.load_dim
         if temporal_input_dim > 0:
             self.temporal_bigru = nn.GRU(
-                input_size=temporal_input_dim,
-                hidden_size=128,
-                num_layers=2,
-                batch_first=True,
-                bidirectional=True,
-                dropout=0.2
+                input_size = temporal_input_dim,
+                hidden_size = 128,
+                num_layers = 2,
+                batch_first = True,
+                bidirectional = True,
+                dropout = 0.2
             )
         else:
             self.temporal_bigru = None
 
-        # Transformer编码器
-        self.pos_encoder = PositionalEncoding(d_model=256)
-        encoder_layer = nn.TransformerEncoderLayer(d_model=256, nhead=8, batch_first=True)
-        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=6)
+        # Transformer
+        self.pos_encoder = PositionalEncoding(d_model = 256)
+        encoder_layer = nn.TransformerEncoderLayer(d_model = 256, nhead = 8, batch_first = True)
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers = 6)
 
-        # 注意力层
+        # Attention
         self.attention = Attention(input_dim=128)  
 
         # 输出层：回归 -> 输出维度设为1
@@ -235,23 +247,17 @@ class EModel(nn.Module):
             transformer_out = torch.zeros(x.size(0), 256).to(x.device)
 
         # 特征融合
-        combined = torch.cat([attention_out, temporal_out, transformer_out], dim=1)  
-        # 回归输出
-        output = self.fc(combined)  # (batch_size, 1)
-
-        return output  # 回归值
+        merged = torch.cat([attention_out, temporal_out, transformer_out], dim=1)
+        output = self.fc(merged)  # (batch, 1)
+        return output
 
 # 初始化模型
-model = EModel(num_features=num_features, 
-               renewable_dim=renewable_dim, 
-               load_dim=load_dim)
-model.to(device)
+model = EModel(num_features=num_features, renewable_dim=renewable_dim, load_dim=load_dim).to(device)
 
-# 损失函数用 MSELoss 回归
-criterion = nn.MSELoss()
+criterion = nn.MSELoss()  # 对数域下的 MSE
 optimizer = AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
 
-# 学习率调度器
+# 学习率调度
 total_steps = num_epochs * len(train_loader)
 warmup_steps = int(0.1 * total_steps)
 
@@ -266,19 +272,19 @@ scheduler = LambdaLR(optimizer, lr_lambda)
 # 自动混合精度
 scaler = torch.cuda.amp.GradScaler() if device.type == 'cuda' else None
 
-# 早停机制
-patience = 5
+# 早停
 best_val_loss = float('inf')
 counter = 0
 
 # TensorBoard
-writer = SummaryWriter(log_dir='runs/experiment_regression')
+writer = SummaryWriter(log_dir='runs/experiment_log_transform')
 
 # 回归评估函数：返回 MSE, RMSE
 def evaluate(model, dataloader, criterion, device):
     model.eval()
     running_loss = 0.0
     num_samples = 0
+
     preds_list = []
     labels_list = []
 
@@ -290,7 +296,7 @@ def evaluate(model, dataloader, criterion, device):
             if device.type == 'cuda':
                 with torch.cuda.amp.autocast():
                     outputs = model(batch_inputs)
-                    loss = criterion(outputs.squeeze(-1), batch_labels)  # outputs是(batch_size,1)
+                    loss = criterion(outputs.squeeze(-1), batch_labels) 
             else:
                 outputs = model(batch_inputs)
                 loss = criterion(outputs.squeeze(-1), batch_labels)
@@ -298,23 +304,24 @@ def evaluate(model, dataloader, criterion, device):
             running_loss += loss.item() * batch_inputs.size(0)
             num_samples += batch_inputs.size(0)
 
-            # 收集预测 & 真实值，用于计算 RMSE 或其他指标
             preds_list.append(outputs.squeeze(-1).cpu().numpy())
             labels_list.append(batch_labels.cpu().numpy())
 
-    val_loss = running_loss / num_samples  # MSE
-    # 拼接所有预测和标签
+    val_loss = running_loss / num_samples  # MSE in log domain
+    
+    # 计算 RMSE in log domain
     preds_arr = np.concatenate(preds_list, axis=0)
     labels_arr = np.concatenate(labels_list, axis=0)
-    rmse = np.sqrt(mean_squared_error(labels_arr, preds_arr))
+    rmse_log = np.sqrt(mean_squared_error(labels_arr, preds_arr))
 
-    return val_loss, rmse
+    return val_loss, rmse_log
 
 # 训练循环
 train_mse_history = []
 val_mse_history = []
 train_rmse_history = []
 val_rmse_history = []
+
 global_step = 0
 
 for epoch in range(num_epochs):
@@ -334,7 +341,6 @@ for epoch in range(num_epochs):
             with torch.cuda.amp.autocast():
                 outputs = model(batch_inputs)
                 loss = criterion(outputs.squeeze(-1), batch_labels)
-
             scaler.scale(loss).backward()
             scaler.step(optimizer)
             scaler.update()
@@ -348,74 +354,69 @@ for epoch in range(num_epochs):
         num_samples += batch_inputs.size(0)
 
         progress_bar.set_postfix({
-            'Train_MSE': running_loss / num_samples
+            'Train_MSE_log': running_loss / num_samples
         })
 
-        # 更新学习率
         scheduler.step()
         global_step += 1
 
-    # 计算整个 epoch 的平均 MSE
     epoch_train_mse = running_loss / num_samples
     epoch_train_rmse = np.sqrt(epoch_train_mse)
 
-    # 验证集评估
+    # 验证集
     val_mse, val_rmse = evaluate(model, val_loader, criterion, device)
 
-    # 记录
     train_mse_history.append(epoch_train_mse)
     val_mse_history.append(val_mse)
     train_rmse_history.append(epoch_train_rmse)
     val_rmse_history.append(val_rmse)
 
-    # TensorBoard
-    writer.add_scalar('Train/MSE', epoch_train_mse, epoch)
-    writer.add_scalar('Train/RMSE', epoch_train_rmse, epoch)
-    writer.add_scalar('Val/MSE', val_mse, epoch)
-    writer.add_scalar('Val/RMSE', val_rmse, epoch)
+    writer.add_scalar('Train/MSE_log', epoch_train_mse, epoch)
+    writer.add_scalar('Train/RMSE_log', epoch_train_rmse, epoch)
+    writer.add_scalar('Val/MSE_log', val_mse, epoch)
+    writer.add_scalar('Val/RMSE_log', val_rmse, epoch)
 
     print(f"\nEpoch {epoch+1}/{num_epochs}, "
-          f"Train MSE: {epoch_train_mse:.4f}, Train RMSE: {epoch_train_rmse:.4f}, "
-          f"Val MSE: {val_mse:.4f}, Val RMSE: {val_rmse:.4f}")
+          f"Train MSE (log): {epoch_train_mse:.4f}, Train RMSE (log): {epoch_train_rmse:.4f}, "
+          f"Val MSE (log): {val_mse:.4f}, Val RMSE (log): {val_rmse:.4f}")
 
-    # 早停机制
     if val_mse < best_val_loss:
         best_val_loss = val_mse
         counter = 0
-        torch.save(model.state_dict(), 'best_model_regression.pth')
+        torch.save(model.state_dict(), 'best_model_log_transform.pth')
         print("模型已保存！")
     else:
         counter += 1
         if counter >= patience:
-            print("验证集没有更好的 MSE，提前停止训练")
+            print("验证集没有更好的 MSE (log)，提前停止训练")
             break
 
-# 关闭 TensorBoard
 writer.close()
 print("训练完成。")
 
 # 画图：训练和验证集 MSE、RMSE
-def plot_metrics(train_mse_history, val_mse_history, 
-                 train_rmse_history, val_rmse_history):
+def plot_metrics(train_mse_history, val_mse_history, train_rmse_history, val_rmse_history):
     epochs = range(1, len(train_mse_history) + 1)
 
-    plt.figure(figsize=(12, 5))
+    plt.figure(figsize=(12,5))
 
+    # MSE(log)
     plt.subplot(1,2,1)
-    plt.plot(epochs, train_mse_history, 'o-', label='Train MSE')
-    plt.plot(epochs, val_mse_history, 'o-', label='Val MSE')
+    plt.plot(epochs, train_mse_history, 'o-', label='Train MSE (log)')
+    plt.plot(epochs, val_mse_history, 'o-', label='Val MSE (log)')
     plt.xlabel('Epoch')
-    plt.ylabel('MSE')
-    plt.title('Train/Val MSE')
+    plt.ylabel('MSE (log domain)')
+    plt.title('Train/Val MSE (log)')
     plt.legend()
     plt.grid(True)
 
+    # RMSE(log)
     plt.subplot(1,2,2)
-    plt.plot(epochs, train_rmse_history, 'o-', label='Train RMSE')
-    plt.plot(epochs, val_rmse_history, 'o-', label='Val RMSE')
+    plt.plot(epochs, train_rmse_history, 'o-', label='Train RMSE (log)')
+    plt.plot(epochs, val_rmse_history, 'o-', label='Val RMSE (log)')
     plt.xlabel('Epoch')
-    plt.ylabel('RMSE')
-    plt.title('Train/Val RMSE')
+    plt.ylabel('RMSE (log domain)')
+    plt.title('Train/Val RMSE (log)')
     plt.legend()
     plt.grid(True)
 

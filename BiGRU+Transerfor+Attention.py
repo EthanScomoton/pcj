@@ -17,7 +17,7 @@ from sklearn.preprocessing import StandardScaler
 
 # 定义超参数
 learning_rate = 1e-5   # 学习率
-num_epochs = 200       # 训练轮数
+num_epochs = 250       # 训练轮数
 batch_size = 256       # 批次大小
 weight_decay = 1e-4    # L2正则化防止过拟合
 patience = 5           # 早停轮数
@@ -37,6 +37,18 @@ def load_and_preprocess_data():
     load_df['timestamp'] = pd.to_datetime(load_df['timestamp'])
 
     data_df = pd.concat([renewable_df, load_df], axis=1)
+
+    data_df['dayofweek'] = data_df['timestamp'].dt.dayofweek
+    data_df['hour'] = data_df['timestamp'].dt.hour
+    data_df['month'] = data_df['timestamp'].dt.month
+    
+    # dayofweek ∈ [0,6], hour ∈ [0,23], month ∈ [1,12]
+    data_df['dayofweek_sin'] = np.sin(2 * np.pi * data_df['dayofweek'] / 7)
+    data_df['dayofweek_cos'] = np.cos(2 * np.pi * data_df['dayofweek'] / 7)
+    data_df['hour_sin']      = np.sin(2 * np.pi * data_df['hour'] / 24)
+    data_df['hour_cos']      = np.cos(2 * np.pi * data_df['hour'] / 24)
+    data_df['month_sin']     = np.sin(2 * np.pi * (data_df['month']-1) / 12)
+    data_df['month_cos']     = np.cos(2 * np.pi * (data_df['month']-1) / 12)
 
     renewable_features = ['season','holiday','weather','temperature','working_hours','E_PV','E_storage_discharge','E_grid','ESCFR','ESCFG']
     load_features = ['ship_grade','dock_position','destination']
@@ -58,13 +70,25 @@ def load_and_preprocess_data():
     renewable_df_encoded = pd.DataFrame(encoded_renewable, columns=renewable_feature_names)
     load_df_encoded = pd.DataFrame(encoded_load, columns=load_feature_names)
 
+    # 合并编码后的离散变量
     data_df = pd.concat([data_df, renewable_df_encoded, load_df_encoded], axis=1)
 
+    # 删除原始列
     data_df.drop(columns=renewable_features + load_features, inplace=True)
 
-    feature_columns = list(renewable_feature_names) + list(load_feature_names)
+    oh_feature_columns = list(renewable_feature_names) + list(load_feature_names)
+    time_feature_cols = [
+        'dayofweek_sin','dayofweek_cos',
+        'hour_sin','hour_cos',
+        'month_sin','month_cos'
+    ]
+
+    feature_columns = oh_feature_columns + time_feature_cols
+
+    # 从 data_df 中取出特征
     X_raw = data_df[feature_columns].values
 
+    # 数值标准化（对 sin/cos 等列也可做标准化）
     scaler_X = StandardScaler()
     X_scaled = scaler_X.fit_transform(X_raw)
 
@@ -87,6 +111,7 @@ dataset = TensorDataset(inputs_tensor, labels_tensor)
 
 # 划分训练集和验证集
 dataset = TensorDataset(inputs_tensor, labels_tensor)
+
 train_size = int(0.8 * len(dataset))
 val_size = len(dataset) - train_size
 train_dataset, val_dataset = torch.utils.data.random_split(dataset, [train_size, val_size])

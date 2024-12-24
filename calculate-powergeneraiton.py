@@ -420,9 +420,24 @@ def calculate_total_energy(input_row):
     return T_end, total_pv_supply_total, total_wind_supply_total, E_storage_discharge_total, E_grid_supply_total, E_storage_charge_from_renewable_total, E_storage_charge_from_grid_total
 
 
-load_data_df["T_end"] = load_data_df.apply(calculate_total_energy, axis=1)
-pd.set_option('display.max_rows', None)        # 显示所有行
-pd.set_option('display.max_columns', None)     # 显示所有列
-pd.set_option('display.width', None)           # 根据窗口自动调整宽度
-pd.set_option('display.max_colwidth', None)    # 不限制列宽
-print(load_data_df)
+results = []
+
+for idx, row in load_data_df.iterrows():
+    T_end, total_pv_supply_total, total_wind_supply_total, E_storage_discharge_total, E_grid_supply_total, E_storage_charge_from_renewable_total, E_storage_charge_from_grid_total = calculate_total_energy(row) 
+
+    results.append({
+        "T_end": T_end,
+        "total_pv_supply_total": total_pv_supply_total,
+        "total_wind_supply_total": total_wind_supply_total,
+        "E_storage_discharge_total": E_storage_discharge_total,
+        "E_grid_supply_total": E_grid_supply_total,
+        "E_storage_charge_from_renewable_total": E_storage_charge_from_renewable_total,
+        "E_storage_charge_from_grid_total": E_storage_charge_from_grid_total
+    })
+
+output_df = pd.DataFrame(results)
+
+output_path = "/Users/ethan/Desktop/output_power.csv"
+output_df.to_csv(output_path, index=False)  
+
+print(f"已将结果保存到 {output_path}")

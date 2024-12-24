@@ -38,12 +38,10 @@ def load_and_preprocess_data():
 
     data_df = pd.concat([renewable_df, load_df], axis=1)
 
-    renewable_features = ['season','holiday','weather','temperature','working_hours','E_PV','E_storage_discharge','E_grid','ESCFR','ESCFG'
-    ]
+    renewable_features = ['season','holiday','weather','temperature','working_hours','E_PV','E_storage_discharge','E_grid','ESCFR','ESCFG']
     load_features = ['ship_grade','dock_position','destination']
 
     # 提取目标(能耗)
-
     y_raw = data_df['energyconsumption'].values.astype(float)
     # 对数变换: log( y + 1 )
     y_log = np.log1p(y_raw)

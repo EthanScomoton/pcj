@@ -36,7 +36,9 @@ def load_and_preprocess_data():
     renewable_df['timestamp'] = pd.to_datetime(renewable_df['timestamp'])
     load_df['timestamp'] = pd.to_datetime(load_df['timestamp'])
 
-    data_df = pd.concat([renewable_df, load_df], axis=1)
+    data_df = pd.merge(renewable_df, load_df, 
+                   on='timestamp',  # 指定共同列
+                   how='inner')     # 按需选择连接方式
 
     data_df['dayofweek'] = data_df['timestamp'].dt.dayofweek
     data_df['hour'] = data_df['timestamp'].dt.hour
@@ -93,6 +95,7 @@ def load_and_preprocess_data():
     X_scaled = scaler_X.fit_transform(X_raw)
 
     return X_scaled, y_log, renewable_feature_names, load_feature_names, scaler_X
+
 
 # 调用数据加载函数
 inputs, labels_log, renewable_feature_names, load_feature_names, scaler_X = load_and_preprocess_data()

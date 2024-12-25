@@ -31,7 +31,7 @@ def load_and_preprocess_data():
     renewable_df = pd.read_csv(r'C:\Users\Administrator\Desktop\renewable_data.csv')
     load_df = pd.read_csv(r'C:\Users\Administrator\Desktop\load_data.csv')
 
-    renewable_df['timestamp'] = pd.to_datetime(renewable_df['timestamp'])
+    # renewable_df['timestamp'] = pd.to_datetime(renewable_df['timestamp'])
     load_df['timestamp'] = pd.to_datetime(load_df['timestamp'])
 
     data_df = pd.merge(renewable_df, load_df, 

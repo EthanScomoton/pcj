@@ -10,6 +10,8 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 import matplotlib.pyplot as plt
+from collections import Counter
+from sklearn.preprocessing import OneHotEncoder
 from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.metrics import mean_squared_error
 
@@ -17,6 +19,7 @@ from sklearn.metrics import mean_squared_error
 learning_rate = 1e-5   # 学习率
 num_epochs = 250       # 训练轮数
 batch_size = 256       # 批次大小
+weight_decay = 1e-4    # L2正则化防止过拟合
 weight_decay = 1e-3    # L2正则化防止过拟合
 patience = 5           # 早停轮数
 

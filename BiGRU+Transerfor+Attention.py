@@ -8,18 +8,16 @@ from torch.utils.data import DataLoader, TensorDataset
 from torch.utils.tensorboard import SummaryWriter
 import numpy as np
 import pandas as pd
-from tqdm import tqdm  
+from tqdm import tqdm
 import matplotlib.pyplot as plt
-from collections import Counter
-from sklearn.preprocessing import OneHotEncoder
+from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.metrics import mean_squared_error
-from sklearn.preprocessing import StandardScaler
 
 # 定义超参数
 learning_rate = 1e-5   # 学习率
 num_epochs = 250       # 训练轮数
 batch_size = 256       # 批次大小
-weight_decay = 1e-4    # L2正则化防止过拟合
+weight_decay = 1e-3    # L2正则化防止过拟合
 patience = 5           # 早停轮数
 
 # 设置随机种子
@@ -30,8 +28,8 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 # 加载和预处理数据
 def load_and_preprocess_data():
-    renewable_df = pd.read_csv('/Users/ethan/Desktop/renewable_data.csv')
-    load_df = pd.read_csv('/Users/ethan/Desktop/load_data.csv')
+    renewable_df = pd.read_csv(r'C:\Users\Administrator\Desktop\renewable_data.csv')
+    load_df = pd.read_csv(r'C:\Users\Administrator\Desktop\load_data.csv')
 
     renewable_df['timestamp'] = pd.to_datetime(renewable_df['timestamp'])
     load_df['timestamp'] = pd.to_datetime(load_df['timestamp'])
@@ -57,52 +55,39 @@ def load_and_preprocess_data():
 
     # 提取目标(能耗)
     y_raw = data_df['energyconsumption'].values.astype(float)
-    # 对数变换: log( y + 1 )
-    y_log = np.log1p(y_raw)
+    y_log = np.log1p(y_raw)  # 对数变换
 
-    encoder_renewable = OneHotEncoder(sparse_output=False)
-    encoder_load = OneHotEncoder(sparse_output=False)
+    # 使用 LabelEncoder 进行编码
+    label_encoders = {}
 
-    encoded_renewable = encoder_renewable.fit_transform(data_df[renewable_features])
-    encoded_load = encoder_load.fit_transform(data_df[load_features])
+    for feature in renewable_features + load_features:
+        le = LabelEncoder()
+        data_df[feature] = le.fit_transform(data_df[feature].fillna("Unknown"))
+        label_encoders[feature] = le
 
-    renewable_feature_names = encoder_renewable.get_feature_names_out(renewable_features)
-    load_feature_names = encoder_load.get_feature_names_out(load_features)
-
-    renewable_df_encoded = pd.DataFrame(encoded_renewable, columns=renewable_feature_names)
-    load_df_encoded = pd.DataFrame(encoded_load, columns=load_feature_names)
-
-    # 合并编码后的离散变量
-    data_df = pd.concat([data_df, renewable_df_encoded, load_df_encoded], axis=1)
-
-    # 删除原始列
-    data_df.drop(columns=renewable_features + load_features, inplace=True)
-
-    oh_feature_columns = list(renewable_feature_names) + list(load_feature_names)
     time_feature_cols = [
         'dayofweek_sin','dayofweek_cos',
         'hour_sin','hour_cos',
         'month_sin','month_cos'
     ]
 
-    feature_columns = oh_feature_columns + time_feature_cols
+    feature_columns = renewable_features + load_features + time_feature_cols
 
     # 从 data_df 中取出特征
     X_raw = data_df[feature_columns].values
 
-    # 数值标准化（对 sin/cos 等列也可做标准化）
+    # 数值标准化
     scaler_X = StandardScaler()
     X_scaled = scaler_X.fit_transform(X_raw)
 
-    return X_scaled, y_log, renewable_feature_names, load_feature_names, scaler_X
-
+    return X_scaled, y_log, renewable_features, load_features, scaler_X
 
 # 调用数据加载函数
-inputs, labels_log, renewable_feature_names, load_feature_names, scaler_X = load_and_preprocess_data()
+inputs, labels_log, renewable_features, load_features, scaler_X = load_and_preprocess_data()
 
 # 定义特征维度
-renewable_dim = len(renewable_feature_names)
-load_dim = len(load_feature_names)
+renewable_dim = len(renewable_features)
+load_dim = len(load_features)
 num_features = inputs.shape[1]
 
 # 将 NumPy 数组转换为 Torch 张量
@@ -113,8 +98,6 @@ labels_tensor = torch.tensor(labels_log, dtype=torch.float32)
 dataset = TensorDataset(inputs_tensor, labels_tensor)
 
 # 划分训练集和验证集
-dataset = TensorDataset(inputs_tensor, labels_tensor)
-
 train_size = int(0.8 * len(dataset))
 val_size = len(dataset) - train_size
 train_dataset, val_dataset = torch.utils.data.random_split(dataset, [train_size, val_size])
@@ -208,7 +191,7 @@ class EModel(nn.Module):
         # Transformer
         self.pos_encoder = PositionalEncoding(d_model = 256)
         encoder_layer = nn.TransformerEncoderLayer(d_model = 256, nhead = 8, batch_first = True)
-        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers = 6)
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers = 13)
 
         # Attention
         self.attention = Attention(input_dim=128)  

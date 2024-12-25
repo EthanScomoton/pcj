@@ -38,7 +38,7 @@ def load_and_preprocess_data():
                    on='timestamp',  # 指定共同列
                    how='inner')     # 按需选择连接方式
 
-    data_df['dayofweek'] = data_df['timestamp'].dt.dayofweek
+    data_df['dayofweek'] = data_df['timestamp'].dt.dayofweek   #前面通过datetime转换的timestamp列提取
     data_df['hour'] = data_df['timestamp'].dt.hour
     data_df['month'] = data_df['timestamp'].dt.month
     
@@ -47,8 +47,8 @@ def load_and_preprocess_data():
     data_df['dayofweek_cos'] = np.cos(2 * np.pi * data_df['dayofweek'] / 7)
     data_df['hour_sin']      = np.sin(2 * np.pi * data_df['hour'] / 24)
     data_df['hour_cos']      = np.cos(2 * np.pi * data_df['hour'] / 24)
-    data_df['month_sin']     = np.sin(2 * np.pi * (data_df['month']-1) / 12)
-    data_df['month_cos']     = np.cos(2 * np.pi * (data_df['month']-1) / 12)
+    data_df['month_sin']     = np.sin(2 * np.pi * (data_df['month'] - 1) / 12)
+    data_df['month_cos']     = np.cos(2 * np.pi * (data_df['month'] - 1) / 12)
 
     renewable_features = ['season','holiday','weather','temperature','working_hours','E_PV','E_storage_discharge','E_grid','ESCFR','ESCFG']
     load_features = ['ship_grade','dock_position','destination']
@@ -91,8 +91,8 @@ load_dim = len(load_features)
 num_features = inputs.shape[1]
 
 # 将 NumPy 数组转换为 Torch 张量
-inputs_tensor = torch.tensor(inputs, dtype=torch.float32)
-labels_tensor = torch.tensor(labels_log, dtype=torch.float32)
+inputs_tensor = torch.tensor(inputs, dtype = torch.float32)
+labels_tensor = torch.tensor(labels_log, dtype = torch.float32)
 
 # 创建数据集和数据加载器
 dataset = TensorDataset(inputs_tensor, labels_tensor)
@@ -102,12 +102,12 @@ train_size = int(0.8 * len(dataset))
 val_size = len(dataset) - train_size
 train_dataset, val_dataset = torch.utils.data.random_split(dataset, [train_size, val_size])
 
-train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=0, pin_memory=True)
-val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=0, pin_memory=True)
+train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle = True, num_workers = 0, pin_memory = True)
+val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle = False, num_workers = 0, pin_memory = True)
 
 # 定义位置编码（Positional Encoding）
 class PositionalEncoding(nn.Module):
-    def __init__(self, d_model, max_len=5000):
+    def __init__(self, d_model, max_len = 5000):
         super(PositionalEncoding, self).__init__()
         pe = torch.zeros(max_len, d_model)
         position = torch.arange(0, max_len, dtype=torch.float32).unsqueeze(1)
@@ -136,9 +136,9 @@ class Attention(nn.Module):
         # x: (batch_size, seq_length, input_dim)
         attn_weights = self.attention(x)  # (batch_size, seq_length, 1)
         attn_weights = self.dropout(attn_weights)
-        attn_weights = F.softmax(attn_weights, dim=1)  
+        attn_weights = F.softmax(attn_weights, dim = 1)  
         weighted = x * attn_weights
-        output = torch.sum(weighted, dim=1)  # (batch_size, input_dim)
+        output = torch.sum(weighted, dim = 1)  # (batch_size, input_dim)
         return output
 
 # 定义回归模型
@@ -152,7 +152,7 @@ class EModel(nn.Module):
         self.renewable_encoder = nn.Sequential(
             nn.Linear(self.renewable_dim, 128),
             nn.ReLU(),
-            nn.Dropout(0.3),
+            nn.Dropout(0.5),
             nn.Linear(128, 64)
         )
 
@@ -160,7 +160,7 @@ class EModel(nn.Module):
         self.load_encoder = nn.Sequential(
             nn.Linear(self.load_dim, 128),
             nn.ReLU(),
-            nn.Dropout(0.3),
+            nn.Dropout(0.5),
             nn.Linear(128, 64)
         )
 
@@ -171,7 +171,7 @@ class EModel(nn.Module):
             num_layers = 1,
             batch_first = True,
             bidirectional = True,
-            dropout = 0.3
+            dropout = 0.5
         )
 
         # 时序特征处理的BiGRU
@@ -183,7 +183,7 @@ class EModel(nn.Module):
                 num_layers = 2,
                 batch_first = True,
                 bidirectional = True,
-                dropout = 0.2
+                dropout = 0.5
             )
         else:
             self.temporal_bigru = None
@@ -215,7 +215,7 @@ class EModel(nn.Module):
         load_encoded = self.load_encoder(load_features)  
 
         # 合并编码后的特征
-        combined_features = torch.cat([renewable_encoded, load_encoded], dim=-1)  # (batch_size, 128)
+        combined_features = torch.cat([renewable_encoded, load_encoded], dim =-1)  # (batch_size, 128)
         combined_features = combined_features.unsqueeze(1)  # (batch_size, 1, 128)
 
         # 使用BiGRU建模交互关系
@@ -248,10 +248,10 @@ class EModel(nn.Module):
         return output
 
 # 初始化模型
-model = EModel(num_features=num_features, renewable_dim=renewable_dim, load_dim=load_dim).to(device)
+model = EModel(num_features = num_features, renewable_dim = renewable_dim, load_dim = load_dim).to(device)
 
 criterion = nn.MSELoss()  # 对数域下的 MSE
-optimizer = AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+optimizer = AdamW(model.parameters(), lr = learning_rate, weight_decay = weight_decay)
 
 # 学习率调度
 total_steps = num_epochs * len(train_loader)
@@ -328,8 +328,8 @@ for epoch in range(num_epochs):
     progress_bar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs}")
 
     for batch_inputs, batch_labels in progress_bar:
-        batch_inputs = batch_inputs.to(device, non_blocking=True)
-        batch_labels = batch_labels.to(device, non_blocking=True)
+        batch_inputs = batch_inputs.to(device, non_blocking = True)
+        batch_labels = batch_labels.to(device, non_blocking = True)
 
         optimizer.zero_grad()
 
@@ -398,8 +398,8 @@ def plot_metrics(train_mse_history, val_mse_history, train_rmse_history, val_rms
 
     # MSE(log)
     plt.subplot(1,2,1)
-    plt.plot(epochs, train_mse_history, 'o-', label='Train MSE (log)')
-    plt.plot(epochs, val_mse_history, 'o-', label='Val MSE (log)')
+    plt.plot(epochs, train_mse_history, 'o-', label = 'Train MSE (log)')
+    plt.plot(epochs, val_mse_history, 'o-', label = 'Val MSE (log)')
     plt.xlabel('Epoch')
     plt.ylabel('MSE (log domain)')
     plt.title('Train/Val MSE (log)')
@@ -408,8 +408,8 @@ def plot_metrics(train_mse_history, val_mse_history, train_rmse_history, val_rms
 
     # RMSE(log)
     plt.subplot(1,2,2)
-    plt.plot(epochs, train_rmse_history, 'o-', label='Train RMSE (log)')
-    plt.plot(epochs, val_rmse_history, 'o-', label='Val RMSE (log)')
+    plt.plot(epochs, train_rmse_history, 'o-', label = 'Train RMSE (log)')
+    plt.plot(epochs, val_rmse_history, 'o-', label = 'Val RMSE (log)')
     plt.xlabel('Epoch')
     plt.ylabel('RMSE (log domain)')
     plt.title('Train/Val RMSE (log)')

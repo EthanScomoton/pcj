@@ -274,15 +274,9 @@ def calculate_total_energy(input_row):
 results = []
 
 for idx, row in load_data_df.iterrows():
-    Ei = calculate_total_energy(row)  # 你上面定义的函数
-    dock_pos = row["dock_position"]
-    grade = row["ship_grade"]
-    dest = row["destination"]
+    Ei = calculate_total_energy(row)  
 
     results.append({
-        "dock_position": dock_pos,
-        "ship_grade": grade,
-        "destination": dest,
         "Ei": Ei
     })
 

@@ -17,11 +17,12 @@ from sklearn.metrics import mean_squared_error
 
 # 定义超参数
 learning_rate = 1e-5   # 学习率
-num_epochs = 250       # 训练轮数
-batch_size = 256       # 批次大小
-weight_decay = 1e-4    # L2正则化防止过拟合
+num_epochs = 200       # 训练轮数
+batch_size = 512       # 批次大小
+weight_decay = 5e-4    # L2正则化防止过拟合
 weight_decay = 1e-3    # L2正则化防止过拟合
 patience = 5           # 早停轮数
+num_workers = 4         # 数据加载器的工作进程数
 
 # 设置随机种子
 torch.manual_seed(42)
@@ -105,8 +106,8 @@ train_size = int(0.8 * len(dataset))
 val_size = len(dataset) - train_size
 train_dataset, val_dataset = torch.utils.data.random_split(dataset, [train_size, val_size])
 
-train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=0, pin_memory=True)
-val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=0, pin_memory=True)
+train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers = num_workers, pin_memory=True, persistent_workers=True, prefetch_factor = 2)
+val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers = num_workers, pin_memory=True, persistent_workers=True, prefetch_factor = 2)
 
 # 定义位置编码（Positional Encoding）
 class PositionalEncoding(nn.Module):

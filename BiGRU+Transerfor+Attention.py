@@ -10,8 +10,6 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 import matplotlib.pyplot as plt
-from collections import Counter
-from sklearn.preprocessing import OneHotEncoder
 from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.metrics import mean_squared_error
 
@@ -19,10 +17,9 @@ from sklearn.metrics import mean_squared_error
 learning_rate = 1e-5   # 学习率
 num_epochs = 200       # 训练轮数
 batch_size = 512       # 批次大小
-weight_decay = 5e-4    # L2正则化防止过拟合
-weight_decay = 1e-3    # L2正则化防止过拟合
+weight_decay = 5e-3    # L2正则化防止过拟合
 patience = 5           # 早停轮数
-num_workers = 4         # 数据加载器的工作进程数
+num_workers = 0         # 数据加载器的工作进程数
 
 # 设置随机种子
 torch.manual_seed(42)
@@ -106,8 +103,8 @@ train_size = int(0.8 * len(dataset))
 val_size = len(dataset) - train_size
 train_dataset, val_dataset = torch.utils.data.random_split(dataset, [train_size, val_size])
 
-train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers = num_workers, pin_memory=True, persistent_workers=True, prefetch_factor = 2)
-val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers = num_workers, pin_memory=True, persistent_workers=True, prefetch_factor = 2)
+train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers = num_workers, pin_memory=True)
+val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers = num_workers, pin_memory=True)
 
 # 定义位置编码（Positional Encoding）
 class PositionalEncoding(nn.Module):
@@ -172,7 +169,7 @@ class EModel(nn.Module):
         self.interaction_bigru = nn.GRU(
             input_size = 128,  
             hidden_size = 64,
-            num_layers = 2,
+            num_layers = 1,
             batch_first = True,
             bidirectional = True,
             dropout = 0.3
@@ -198,7 +195,7 @@ class EModel(nn.Module):
         self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers = 13)
 
         # Attention
-        self.attention = Attention(input_dim=128)  
+        self.attention = Attention(input_dim=128) 
 
         # 输出层：回归 -> 输出维度设为1
         self.fc = nn.Sequential(
@@ -270,7 +267,7 @@ def lr_lambda(current_step):
 scheduler = LambdaLR(optimizer, lr_lambda)
 
 # 自动混合精度
-scaler = torch.cuda.amp.GradScaler() if device.type == 'cuda' else None
+scaler = torch.amp.GradScaler('cuda') if device.type == 'cuda' else None
 
 # 早停
 best_val_loss = float('inf')
@@ -293,13 +290,11 @@ def evaluate(model, dataloader, criterion, device):
             batch_inputs = batch_inputs.to(device, non_blocking=True)
             batch_labels = batch_labels.to(device, non_blocking=True)
 
-            if device.type == 'cuda':
-                with torch.cuda.amp.autocast():
-                    outputs = model(batch_inputs)
-                    loss = criterion(outputs.squeeze(-1), batch_labels) 
-            else:
+
+            with torch.amp.autocast('cuda'):
                 outputs = model(batch_inputs)
-                loss = criterion(outputs.squeeze(-1), batch_labels)
+                loss = criterion(outputs.squeeze(-1), batch_labels) 
+
 
             running_loss += loss.item() * batch_inputs.size(0)
             num_samples += batch_inputs.size(0)
@@ -338,7 +333,7 @@ for epoch in range(num_epochs):
         optimizer.zero_grad()
 
         if scaler:
-            with torch.cuda.amp.autocast():
+            with torch.amp.autocast('cuda'):
                 outputs = model(batch_inputs)
                 loss = criterion(outputs.squeeze(-1), batch_labels)
             scaler.scale(loss).backward()

@@ -172,7 +172,7 @@ class EModel(nn.Module):
         self.interaction_bigru = nn.GRU(
             input_size = 128,  
             hidden_size = 64,
-            num_layers = 1,
+            num_layers = 2,
             batch_first = True,
             bidirectional = True,
             dropout = 0.3

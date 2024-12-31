@@ -16,9 +16,9 @@ from sklearn.metrics import mean_squared_error
 # 定义超参数
 learning_rate = 1e-5   # 学习率
 num_epochs = 200       # 训练轮数
-batch_size = 512       # 批次大小
+batch_size = 256       # 批次大小
 weight_decay = 5e-3    # L2正则化防止过拟合
-patience = 5           # 早停轮数
+patience = 3           # 早停轮数
 num_workers = 0         # 数据加载器的工作进程数
 
 # 设置随机种子
@@ -131,7 +131,7 @@ class Attention(nn.Module):
             nn.Tanh(),
             nn.Linear(input_dim, 1)
         )
-        self.dropout = nn.Dropout(0.5)
+        self.dropout = nn.Dropout(0.3)
 
     def forward(self, x):
         # x: (batch_size, seq_length, input_dim)
@@ -184,7 +184,7 @@ class EModel(nn.Module):
                 num_layers = 2,
                 batch_first = True,
                 bidirectional = True,
-                dropout = 0.2
+                dropout = 0.3
             )
         else:
             self.temporal_bigru = None
@@ -201,7 +201,7 @@ class EModel(nn.Module):
         self.fc = nn.Sequential(
             nn.Linear(128 + 256 + 256, 256),
             nn.ReLU(),
-            nn.Dropout(0.5),
+            nn.Dropout(0.3),
             nn.Linear(256, 1)  # 最终输出一个值用于回归
         )
 

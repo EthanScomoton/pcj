@@ -295,7 +295,7 @@ def lr_lambda(current_step):
 scheduler = LambdaLR(optimizer, lr_lambda)
 
 # 自动混合精度
-scaler = torch.cuda.amp.GradScaler() if device.type == 'cuda' else None
+scaler = torch.amp.GradScaler('cuda') if device.type == 'cuda' else None
 
 # 早停
 best_val_loss = float('inf')
@@ -318,7 +318,7 @@ def evaluate(model, dataloader, criterion, device):
             batch_labels = batch_labels.to(device, non_blocking=True)
 
             if device.type == 'cuda':
-                with torch.cuda.amp.autocast():
+                with torch.amp.autocast('cuda'):
                     outputs = model(batch_inputs)
                     loss = criterion(outputs.squeeze(-1), batch_labels)
             else:
@@ -367,7 +367,7 @@ for epoch in range(num_epochs):
         optimizer.zero_grad()
 
         if scaler is not None:
-            with torch.cuda.amp.autocast():
+            with torch.amp.autocast('cuda'):
                 outputs = model(batch_inputs)
                 loss = criterion(outputs.squeeze(-1), batch_labels)
             scaler.scale(loss).backward()

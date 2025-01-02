@@ -404,12 +404,13 @@ def train_model(model, train_loader, val_loader, model_name='Model'):
             batch_labels = batch_labels.to(device)
 
             optimizer.zero_grad()
-            scheduler.step()
 
             preds = model(batch_inputs)
             loss = criterion(preds, batch_labels)
             loss.backward()
             optimizer.step()
+
+            scheduler.step()
 
             running_loss += loss.item() * batch_inputs.size(0)
             num_samples += batch_inputs.size(0)

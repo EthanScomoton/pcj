@@ -361,6 +361,7 @@ for epoch in range(num_epochs):
         batch_labels = batch_labels.to(device, non_blocking=True)
 
         optimizer.zero_grad()
+        scheduler.step()
 
         if scaler is not None:
             with torch.amp.autocast('cuda'):
@@ -382,7 +383,6 @@ for epoch in range(num_epochs):
             'Train_MSE_log': running_loss / num_samples
         })
 
-        scheduler.step()
         global_step += 1
 
     epoch_train_mse = running_loss / num_samples

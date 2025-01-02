@@ -293,6 +293,7 @@ def lr_lambda(current_step):
 
 scheduler = LambdaLR(optimizer, lr_lambda)
 
+
 # 自动混合精度
 scaler = torch.amp.GradScaler('cuda') if device.type == 'cuda' else None
 
@@ -365,6 +366,8 @@ for epoch in range(num_epochs):
 
         optimizer.zero_grad()
 
+        scheduler.step()
+
         if scaler is not None:
             with torch.amp.autocast('cuda'):
                 outputs = model(batch_inputs)
@@ -385,7 +388,6 @@ for epoch in range(num_epochs):
             'Train_MSE_log': running_loss / num_samples
         })
 
-        scheduler.step()
         global_step += 1
 
     epoch_train_mse = running_loss / num_samples

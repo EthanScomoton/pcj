@@ -15,7 +15,7 @@ from sklearn.metrics import mean_squared_error
 
 # 定义超参数
 learning_rate = 1e-5   # 学习率
-num_epochs = 20        # 训练轮数（示例中设小一些，便于演示）
+num_epochs = 100        # 训练轮数
 batch_size = 512       # 批次大小
 weight_decay = 5e-3    # L2正则化防止过拟合
 patience = 5           # 早停轮数

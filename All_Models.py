@@ -372,41 +372,10 @@ def evaluate(model, dataloader, criterion, device):
     preds_arr = np.concatenate(preds_list, axis=0)
     labels_arr = np.concatenate(labels_list, axis=0)
     rmse_log = np.sqrt(mean_squared_error(labels_arr, preds_arr))
-    return val_loss, rmse_log
+    return val_loss, rmse_log, preds_arr, labels_arr
 
-def plot_metrics(train_mse_history, val_mse_history, train_rmse_history, val_rmse_history, title_prefix=''):
-    epochs = range(1, len(train_mse_history) + 1)
-
-    plt.figure(figsize=(12,5))
-
-    # MSE
-    plt.subplot(1,2,1)
-    plt.plot(epochs, train_mse_history, 'o-', label='Train MSE (log)')
-    plt.plot(epochs, val_mse_history, 'o-', label='Val MSE (log)')
-    plt.xlabel('Epoch')
-    plt.ylabel('MSE (log)')
-    plt.title(f'{title_prefix} Train/Val MSE (log)')
-    plt.legend()
-    plt.grid(True)
-
-    # RMSE
-    plt.subplot(1,2,2)
-    plt.plot(epochs, train_rmse_history, 'o-', label='Train RMSE (log)')
-    plt.plot(epochs, val_rmse_history, 'o-', label='Val RMSE (log)')
-    plt.xlabel('Epoch')
-    plt.ylabel('RMSE (log)')
-    plt.title(f'{title_prefix} Train/Val RMSE (log)')
-    plt.legend()
-    plt.grid(True)
-
-    plt.tight_layout()
-    plt.show()
-
-# ---------------------------
-# 5. 主流程: 训练+验证 (可分别对两个模型运行)
-# ---------------------------
-def train_model(model, train_loader, val_loader, device, model_name='model'):
-    criterion = nn.MSELoss()  # 在对数域下计算 MSE
+def train_model(model, train_loader, val_loader, model_name='Model'):
+    criterion = nn.MSELoss()
     optimizer = AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
 
     total_steps = num_epochs * len(train_loader)
@@ -423,11 +392,6 @@ def train_model(model, train_loader, val_loader, device, model_name='model'):
     best_val_loss = float('inf')
     counter = 0
 
-    train_mse_history = []
-    val_mse_history = []
-    train_rmse_history = []
-    val_rmse_history = []
-
     global_step = 0
 
     for epoch in range(num_epochs):
@@ -435,94 +399,126 @@ def train_model(model, train_loader, val_loader, device, model_name='model'):
         running_loss = 0.0
         num_samples = 0
 
-        progress_bar = tqdm(train_loader, desc=f"[{model_name}] Epoch {epoch+1}/{num_epochs}")
-
-        for batch_inputs, batch_labels in progress_bar:
+        for batch_inputs, batch_labels in train_loader:
             batch_inputs = batch_inputs.to(device)
             batch_labels = batch_labels.to(device)
 
             optimizer.zero_grad()
-            # --- 建议先 optimizer.step() 后 scheduler.step() ---
-            # 但若你想先scheduler再optimizer，需要修改顺序或PyTorch版本
-            # 这里先示例 PyTorch < 1.1 的写法
             scheduler.step()
 
-            outputs = model(batch_inputs)
-            loss = criterion(outputs, batch_labels)
+            preds = model(batch_inputs)
+            loss = criterion(preds, batch_labels)
             loss.backward()
             optimizer.step()
 
             running_loss += loss.item() * batch_inputs.size(0)
             num_samples += batch_inputs.size(0)
-
-            progress_bar.set_postfix({
-                'Train_MSE_log': running_loss / num_samples
-            })
-
             global_step += 1
 
-        # epoch 结束计算一次 train/val
-        epoch_train_mse = running_loss / num_samples
-        epoch_train_rmse = np.sqrt(epoch_train_mse)
+        train_loss = running_loss / num_samples
 
-        val_mse, val_rmse = evaluate(model, val_loader, criterion, device)
-        train_mse_history.append(epoch_train_mse)
-        val_mse_history.append(val_mse)
-        train_rmse_history.append(epoch_train_rmse)
-        val_rmse_history.append(val_rmse)
+        # 在验证集上评估
+        val_loss, val_rmse, _, _ = evaluate(model, val_loader)
 
-        print(f"\n[{model_name}] Epoch {epoch+1}/{num_epochs}, "
-              f"Train MSE(log): {epoch_train_mse:.4f}, Train RMSE(log): {epoch_train_rmse:.4f}, "
-              f"Val MSE(log): {val_mse:.4f}, Val RMSE(log): {val_rmse:.4f}")
+        print(f"[{model_name}] Epoch {epoch+1}/{num_epochs}, "
+              f"Train MSE(log): {train_loss:.4f}, "
+              f"Val MSE(log): {val_loss:.4f}, RMSE(log): {val_rmse:.4f}")
 
-        # 早停
-        if val_mse < best_val_loss:
-            best_val_loss = val_mse
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
             counter = 0
-            torch.save(model.state_dict(), f'best_{model_name}.pth')
+            torch.save(model.state_dict(), f"best_{model_name}.pth")
             print(f"[{model_name}] 模型已保存。")
         else:
             counter += 1
             if counter >= patience:
-                print(f"[{model_name}] 验证集没有更好结果，提前停止。")
+                print(f"[{model_name}] 验证集无改善，提前停止。")
                 break
 
-    plot_metrics(train_mse_history, val_mse_history, train_rmse_history, val_rmse_history, title_prefix=model_name)
+
+# ---------------------------
+# 5. 画出多模型与实际值的对比曲线
+# ---------------------------
+def plot_predictions_comparison(y_actual, y_pred_model1, y_pred_model2, model1_name='Model1', model2_name='Model2'):
+    """
+    在同一张图上画 Actual, Model1, Model2 三条曲线
+    你可以扩展到更多模型，比如 Model3, Model4 等。
+    """
+    plt.figure(figsize=(10,5))
+    x_axis = np.arange(len(y_actual))
+
+    plt.plot(x_axis, y_actual, 'r-o', label='Actual', linewidth=1)
+    plt.plot(x_axis, y_pred_model1, 'b--*', label=model1_name, linewidth=1)
+    plt.plot(x_axis, y_pred_model2, 'g-.*', label=model2_name, linewidth=1)
+
+    plt.xlabel('Index')
+    plt.ylabel('Value (log domain)')  # 因为我们做了对数变换
+    plt.title(f'Comparison: Actual vs {model1_name} vs {model2_name}')
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show()
 
 
+# ---------------------------
+# 6. 主函数
+# ---------------------------
 def main():
-    # 1) 准备数据
-    X_scaled, y_log, renewable_features, load_features, scaler_X = load_and_preprocess_data()
-
-    # 转成张量与 DataLoader
+    # 1) 加载数据
+    X_scaled, y_log, renewable_features, load_features, scaler_X, data_df = load_and_preprocess_data()
     inputs_tensor = torch.tensor(X_scaled, dtype=torch.float32)
     labels_tensor = torch.tensor(y_log, dtype=torch.float32)
-    dataset = TensorDataset(inputs_tensor, labels_tensor)
 
+    dataset = torch.utils.data.TensorDataset(inputs_tensor, labels_tensor)
     train_size = int(0.8 * len(dataset))
     val_size = len(dataset) - train_size
     train_dataset, val_dataset = torch.utils.data.random_split(dataset, [train_size, val_size])
 
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True,
-                              num_workers=num_workers, pin_memory=True)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False,
-                            num_workers=num_workers, pin_memory=True)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers)
 
     num_features = X_scaled.shape[1]
     renewable_dim = len(renewable_features)
     load_dim = len(load_features)
 
-    # 2) 实例化两个模型 (可选)：
+    # 2) 实例化两种模型
     modelA = EModel_FeatureWeight(num_features, renewable_dim, load_dim).to(device)
     modelB = EModel_BiGRU(num_features, renewable_dim, load_dim).to(device)
 
-    # 3) 分别训练并验证
-    print("\n========== 开始训练 EModel_FeatureWeight ==========")
-    train_model(modelA, train_loader, val_loader, device, model_name="EModel_FeatureWeight")
+    # 3) 训练并保存
+    print("\n========== Train EModel_FeatureWeight ==========")
+    train_model(modelA, train_loader, val_loader, model_name='EModel_FeatureWeight')
 
-    print("\n========== 开始训练 EModel_BiGRU ==========")
-    train_model(modelB, train_loader, val_loader, device, model_name="EModel_BiGRU")
+    print("\n========== Train EModel_BiGRU ==========")
+    train_model(modelB, train_loader, val_loader, model_name='EModel_BiGRU')
 
+    # 4) 加载最优权重（可选，如果刚训练完也可直接用 modelA, modelB）
+    best_modelA = EModel_FeatureWeight(num_features, renewable_dim, load_dim).to(device)
+    best_modelA.load_state_dict(torch.load('best_EModel_FeatureWeight.pth'))
+
+    best_modelB = EModel_BiGRU(num_features, renewable_dim, load_dim).to(device)
+    best_modelB.load_state_dict(torch.load('best_EModel_BiGRU.pth'))
+
+    # 5) 在验证集上推理（或换成测试集）
+    val_loader_for_eval = DataLoader(val_dataset, batch_size=len(val_dataset), shuffle=False)
+    # 只取一个 batch，包含全部验证集
+    with torch.no_grad():
+        for X_val, Y_val in val_loader_for_eval:
+            X_val = X_val.to(device)
+            Y_val = Y_val.cpu().numpy()   # shape: (val_size, )
+
+            predsA = best_modelA(X_val).cpu().numpy()  # shape: (val_size,)
+            predsB = best_modelB(X_val).cpu().numpy()
+
+            # 画图: Y_val, predsA, predsB
+            plot_predictions_comparison(
+                y_actual=Y_val,
+                y_pred_model1=predsA,
+                y_pred_model2=predsB,
+                model1_name='EModel_FeatureWeight',
+                model2_name='EModel_BiGRU'
+            )
+            break  # 我们只需要一次
 
 if __name__ == "__main__":
     main()

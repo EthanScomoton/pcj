@@ -418,7 +418,7 @@ def train_model(model, train_loader, val_loader, model_name='Model'):
         train_loss = running_loss / num_samples
 
         # 在验证集上评估
-        val_loss, val_rmse, _, _ = evaluate(model, val_loader, device)
+        val_loss, val_rmse, _, _ = evaluate(model, val_loader, criterion, device)
 
         print(f"[{model_name}] Epoch {epoch+1}/{num_epochs}, "
               f"Train MSE(log): {train_loss:.4f}, "

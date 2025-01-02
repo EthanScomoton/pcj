@@ -83,7 +83,7 @@ def load_and_preprocess_data():
     scaler_X = StandardScaler()
     X_scaled = scaler_X.fit_transform(X_raw)
 
-    return X_scaled, y_log, renewable_features, load_features, scaler_X
+    return X_scaled, y_log, renewable_features, load_features, scaler_X, data_df
 
 
 # ---------------------------

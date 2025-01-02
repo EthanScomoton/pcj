@@ -190,11 +190,11 @@ class EModel(nn.Module):
             dropout = 0.3
         )
 
-        # 时序特征处理的BiGRU
-        temporal_input_dim = num_features - self.renewable_dim - self.load_dim
-        if temporal_input_dim > 0:
-            self.temporal_bigru = nn.GRU(
-                input_size = temporal_input_dim,
+        # 时序特征处理的LSTM
+        self.temporal_input_dim = num_features - self.renewable_dim - self.load_dim
+        if self.temporal_input_dim > 0:
+            self.temporal_lstm = nn.LSTM(
+                input_size = self.temporal_input_dim,
                 hidden_size = 128,
                 num_layers = 2,
                 batch_first = True,
@@ -202,7 +202,7 @@ class EModel(nn.Module):
                 dropout = 0.2
             )
         else:
-            self.temporal_bigru = None
+            self.temporal_lstm = None
 
         # Transformer
         self.pos_encoder = PositionalEncoding(d_model = 256)
@@ -221,55 +221,52 @@ class EModel(nn.Module):
         )
 
     def forward(self, x):
-        # -------- 对输入特征做权重加成 --------
-        # shape: (batch_size, num_features)
-        x = x * self.feature_importance  # 广播机制，逐元素乘
+        # （可选）对输入特征做权重加成
+        x = x * self.feature_importance
 
-        # 分离特征
+        # 分割特征
         renewable_features = x[:, :self.renewable_dim]
         load_features = x[:, self.renewable_dim:self.renewable_dim + self.load_dim]
         temporal_features = x[:, self.renewable_dim + self.load_dim:]
 
         # 编码可再生能源和负荷特征
-        renewable_encoded = self.renewable_encoder(renewable_features)  
-        load_encoded = self.load_encoder(load_features)  
+        renewable_encoded = self.renewable_encoder(renewable_features)
+        load_encoded = self.load_encoder(load_features)
 
         # 合并编码后的特征
-        combined_features = torch.cat([renewable_encoded, load_encoded], dim=-1)  # (batch_size, 128)
-        combined_features = combined_features.unsqueeze(1)  # (batch_size, 1, 128)
+        combined_features = torch.cat([renewable_encoded, load_encoded], dim=-1)
+        combined_features = combined_features.unsqueeze(1)  # (batch, 1, 128)
 
-        # 使用BiGRU建模交互关系
-        interaction_out, _ = self.interaction_bigru(combined_features)  # (batch_size, 1, 128 * 2 = 128)
-        # 取双向拼接后的 128 （64 * 2）
-        attention_out = self.attention(interaction_out)  # (batch_size, 128)
+        # BiGRU 处理交互关系
+        interaction_out, _ = self.interaction_bigru(combined_features)
+        attention_out = self.attention(interaction_out)  # (batch, 128)
 
-        # 动态检查时序特征是否为空
-        if self.temporal_bigru is not None and temporal_features.size(1) > 0:
-            # temporal_features: (batch_size, temporal_input_dim)
-            # 在此示例里，如果只是一条序列信息，实际上 seq_len=1；如需处理更长序列，可自行修改
-            temporal_features = temporal_features.unsqueeze(1)  # (batch_size, 1, feature_dim)
-            temporal_out, _ = self.temporal_bigru(temporal_features)  # (batch_size, 1, 2*128=256)
+        # 如果有时序特征，则用 LSTM + Transformer
+        if self.temporal_lstm is not None and temporal_features.size(1) > 0:
+            # 1) 调整输入形状： (batch, seq_len=1, input_size=temporal_input_dim)
+            temporal_features = temporal_features.unsqueeze(1)
+            # 2) LSTM 前向传播
+            temporal_out, _ = self.temporal_lstm(temporal_features)
+            # 3) LSTM 输出 shape: (batch, seq_len=1, hidden_size*2=256)
 
-            # Transformer处理
-            # 先把 (batch_size, seq_len, feature_dim) -> (seq_len, batch_size, feature_dim)
-            transformer_input = temporal_out.permute(1, 0, 2)  
+            # Transformer
+            transformer_input = temporal_out.permute(1, 0, 2)  # (seq_len, batch, feature_dim)
             transformer_input = self.pos_encoder(transformer_input)
-            transformer_out = self.transformer_encoder(transformer_input)  
-            # 变回来 (batch_size, seq_len, feature_dim)
-            transformer_out = transformer_out.permute(1, 0, 2)  
+            transformer_out = self.transformer_encoder(transformer_input)
+            transformer_out = transformer_out.permute(1, 0, 2)  # (batch, seq_len, 256)
 
-            # 取最后时刻
-            temporal_out = temporal_out[:, -1, :]  
-            transformer_out = transformer_out[:, -1, :]  
+            # 取最后时刻向量
+            temporal_out = temporal_out[:, -1, :]       # (batch, 256)
+            transformer_out = transformer_out[:, -1, :] # (batch, 256)
         else:
-            # 如果没有时序特征，用零填充
+            # 若时序特征不存在或维度为0，填充零张量
             temporal_out = torch.zeros(x.size(0), 256).to(x.device)
             transformer_out = torch.zeros(x.size(0), 256).to(x.device)
 
-        # 特征融合
+        # 融合三部分信息
         merged = torch.cat([attention_out, temporal_out, transformer_out], dim=1)
         output = self.fc(merged)  # (batch, 1)
-        return output
+        return output.squeeze(-1)  # 去掉最后一维
 
 # ---------------------------
 # 4. 训练准备

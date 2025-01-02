@@ -53,9 +53,9 @@ def load_and_preprocess_data():
     data_df['month_sin']     = np.sin(2 * np.pi * (data_df['month']-1) / 12)
     data_df['month_cos']     = np.cos(2 * np.pi * (data_df['month']-1) / 12)
 
-    renewable_features = ['season','holiday','weather','temperature','working_hours',
-                          'E_PV','E_storage_discharge','E_grid','ESCFR','ESCFG']
-    load_features = ['ship_grade','dock_position','destination']
+    renewable_features = ['season', 'holiday', 'weather', 'temperature', 'working_hours',
+                          'E_PV', 'E_storage_discharge', 'E_grid', 'ESCFR', 'ESCFG']
+    load_features = ['ship_grade', 'dock_position', 'destination']
 
     # 目标值（能耗）
     y_raw = data_df['energyconsumption'].values.astype(float)

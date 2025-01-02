@@ -1,1 +1,1 @@
-A beginner’s attempt at python and ML
+A beginner’s attempt at DL and ML

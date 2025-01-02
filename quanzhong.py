@@ -53,9 +53,9 @@ def load_and_preprocess_data():
     data_df['month_sin']     = np.sin(2 * np.pi * (data_df['month']-1) / 12)
     data_df['month_cos']     = np.cos(2 * np.pi * (data_df['month']-1) / 12)
 
-    renewable_features = ['season','holiday','weather','temperature','working_hours',
-                          'E_PV','E_storage_discharge','E_grid','ESCFR','ESCFG']
-    load_features = ['ship_grade','dock_position','destination']
+    renewable_features = ['season', 'holiday', 'weather', 'temperature', 'working_hours',
+                          'E_PV', 'E_storage_discharge', 'E_grid', 'ESCFR', 'ESCFG']
+    load_features = ['ship_grade', 'dock_position', 'destination']
 
     # 目标值（能耗）
     y_raw = data_df['energyconsumption'].values.astype(float)
@@ -69,9 +69,9 @@ def load_and_preprocess_data():
         label_encoders[feature] = le
 
     time_feature_cols = [
-        'dayofweek_sin','dayofweek_cos',
-        'hour_sin','hour_cos',
-        'month_sin','month_cos'
+        'dayofweek_sin', 'dayofweek_cos',
+        'hour_sin', 'hour_cos',
+        'month_sin', 'month_cos'
     ]
 
     feature_columns = renewable_features + load_features + time_feature_cols

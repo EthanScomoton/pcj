@@ -34,8 +34,8 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 # 1. 数据加载与预处理
 # ---------------------------
 def load_and_preprocess_data():
-    renewable_df = pd.read_csv(r'C:\Users\Administrator\Desktop\renewable_data.csv')
-    load_df = pd.read_csv(r'C:\Users\Administrator\Desktop\load_data.csv')
+    renewable_df = pd.read_csv(r'C:\Users\Administrator\Desktop\renewable_data1.csv')
+    load_df = pd.read_csv(r'C:\Users\Administrator\Desktop\load_data1.csv')
 
     renewable_df['timestamp'] = pd.to_datetime(renewable_df['timestamp'])
     load_df['timestamp'] = pd.to_datetime(load_df['timestamp'])
@@ -124,6 +124,7 @@ class Attention(nn.Module):
         weighted = x * attn_weights
         output = torch.sum(weighted, dim=1)  # (batch_size, input_dim)
         return output
+
 
 # ---------------------------
 # 3A. 之前的 EModel (带 feature_importance + LSTM)
@@ -441,19 +442,18 @@ def train_model(model, train_loader, val_loader, model_name='Model'):
 # ---------------------------
 def plot_predictions_comparison(y_actual, y_pred_model1, y_pred_model2, model1_name='Model1', model2_name='Model2'):
     """
-    在同一张图上画 Actual, Model1, Model2 三条曲线
-    你可以扩展到更多模型，比如 Model3, Model4 等。
+    在同一张图上画 Actual, Model1, Model2 三条曲线 (此处 y_actual 即 y_log)
     """
     plt.figure(figsize=(10,5))
     x_axis = np.arange(len(y_actual))
 
-    plt.plot(x_axis, y_actual, 'r-o', label='Actual', linewidth=1)
+    plt.plot(x_axis, y_actual, 'r-o', label='Actual (y_log)', linewidth=1)
     plt.plot(x_axis, y_pred_model1, 'b--*', label=model1_name, linewidth=1)
     plt.plot(x_axis, y_pred_model2, 'g-.*', label=model2_name, linewidth=1)
 
     plt.xlabel('Index')
-    plt.ylabel('Value (log domain)')  # 因为我们做了对数变换
-    plt.title(f'Comparison: Actual vs {model1_name} vs {model2_name}')
+    plt.ylabel('Value (log domain)')
+    plt.title(f'Comparison: Actual (log) vs {model1_name} vs {model2_name}')
     plt.legend()
     plt.grid(True)
     plt.tight_layout()
@@ -503,16 +503,17 @@ def main():
     val_loader_for_eval = DataLoader(val_dataset, batch_size=len(val_dataset), shuffle=False)
     # 只取一个 batch，包含全部验证集
     with torch.no_grad():
-        for X_val, Y_val in val_loader_for_eval:
+        for X_val, Y_val_log in val_loader_for_eval:
             X_val = X_val.to(device)
-            Y_val = Y_val.cpu().numpy()   # shape: (val_size, )
+            # 此处 Y_val_log 就是对数化后的真实值
+            Y_val_log = Y_val_log.cpu().numpy()   # shape: (val_size, )
 
             predsA = best_modelA(X_val).cpu().numpy()  # shape: (val_size,)
             predsB = best_modelB(X_val).cpu().numpy()
 
-            # 画图: Y_val, predsA, predsB
+            # 画图: (y_log) Y_val_log, predsA, predsB
             plot_predictions_comparison(
-                y_actual=Y_val,
+                y_actual=Y_val_log,
                 y_pred_model1=predsA,
                 y_pred_model2=predsB,
                 model1_name='EModel_FeatureWeight',

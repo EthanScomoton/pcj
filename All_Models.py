@@ -238,7 +238,7 @@ class EModel_FeatureWeight(nn.Module):
 
 
 # ---------------------------
-# 3B. 新的 EModel_BiGRU (双BiGRU + Transformer) 
+# 3B. EModel_BiGRU (双BiGRU + Transformer) 
 # ---------------------------
 class EModel_BiGRU(nn.Module):
     def __init__(self, num_features, renewable_dim, load_dim):
@@ -289,7 +289,6 @@ class EModel_BiGRU(nn.Module):
         # Transformer
         self.pos_encoder = PositionalEncoding(d_model = 256)
         encoder_layer = nn.TransformerEncoderLayer(d_model = 256, nhead = 8, batch_first = True)
-        # 这里你写了 num_layers=13，这里可以改成 13 或者其它；为了演示，改小一点也行
         self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers = 2)
 
         # Attention

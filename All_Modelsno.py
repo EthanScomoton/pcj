@@ -21,7 +21,7 @@ batch_size = 128
 weight_decay = 1e-4       
 patience = 10             
 num_workers = 0           
-window_size = 2           
+window_size = 5           
 
 # 设置随机种子
 torch.manual_seed(42)
@@ -40,16 +40,15 @@ def load_data():
     load_df['timestamp'] = pd.to_datetime(load_df['timestamp'])
 
     # 按 inner merge，得到完整记录
-    data_df = pd.merge(renewable_df, load_df, on = 'timestamp', how = 'inner')
+    data_df = pd.merge(renewable_df, load_df, on='timestamp', how='inner')
 
     # 时间排序
-    data_df.sort_values('timestamp', inplace = True)
-    data_df.reset_index(drop = True, inplace = True)
+    data_df.sort_values('timestamp', inplace=True)
+    data_df.reset_index(drop=True, inplace=True)
     
     return data_df
 
 def feature_engineering(data_df):
-
     # 提取时间特征
     data_df['dayofweek'] = data_df['timestamp'].dt.dayofweek
     data_df['hour']      = data_df['timestamp'].dt.hour
@@ -79,22 +78,26 @@ def feature_engineering(data_df):
     ]
     feature_columns = renewable_features + load_features + time_feature_cols
     
-    # 目标列 (在原空间，不做 log1p)
+    # 目标列
     target_column = 'energyconsumption'
     
     data_selected = data_df[feature_columns + [target_column]].copy()
 
-    # 数值标准化 (只对特征做标准化, 不动目标)
+    # 对特征做标准化
     scaler_X = StandardScaler()
     data_selected[feature_columns] = scaler_X.fit_transform(data_selected[feature_columns].values)
 
+    # 对目标也做标准化 (关键改动)
+    scaler_y = StandardScaler()
+    data_selected[[target_column]] = scaler_y.fit_transform(data_selected[[target_column]].values)
+
     # 转成 numpy 数组
     data_all = data_selected.values  # shape: (num_samples, feature_dim + 1)
-    return data_all, feature_columns, target_column
+    return data_all, feature_columns, target_column, scaler_y
 
 def create_sequences(data_all, window_size, feature_dim):
     """
-    data_all 的列顺序: [feature_1, feature_2, ..., feature_n, target]
+    data_all 的列顺序: [feature_1, feature_2, ..., feature_n, target_std]
     window_size: 使用过去多少步
     feature_dim: 特征数 (不含 target)
     
@@ -106,23 +109,23 @@ def create_sequences(data_all, window_size, feature_dim):
     num_samples = data_all.shape[0]
     
     for i in range(num_samples - window_size):
-        seq_x = data_all[i : i + window_size, : feature_dim]  
-        seq_y = data_all[i + window_size, feature_dim]        
+        seq_x = data_all[i : i + window_size, :feature_dim]  
+        seq_y = data_all[i + window_size, feature_dim]       
         X_list.append(seq_x)
         y_list.append(seq_y)
     
-    X_arr = np.array(X_list, dtype = np.float32)
-    y_arr = np.array(y_list, dtype = np.float32)
+    X_arr = np.array(X_list, dtype=np.float32)
+    y_arr = np.array(y_list, dtype=np.float32)
     return X_arr, y_arr
 
 # ---------------------------
 # 2. 模型结构
 # ---------------------------
 class PositionalEncoding(nn.Module):
-    def __init__(self, d_model, max_len = 5000):
+    def __init__(self, d_model, max_len=5000):
         super(PositionalEncoding, self).__init__()
         pe = torch.zeros(max_len, d_model)
-        position = torch.arange(0, max_len, dtype = torch.float32).unsqueeze(1)
+        position = torch.arange(0, max_len, dtype=torch.float32).unsqueeze(1)
         div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
         pe[:, 0 :: 2] = torch.sin(position * div_term)
         pe[:, 1 :: 2] = torch.cos(position * div_term)
@@ -131,7 +134,7 @@ class PositionalEncoding(nn.Module):
 
     def forward(self, x):
         seq_len = x.size(1)
-        x = x + self.pe[: seq_len, 0, :]
+        x = x + self.pe[:seq_len, 0, :]
         return x
 
 class Attention(nn.Module):
@@ -145,11 +148,11 @@ class Attention(nn.Module):
         self.dropout = nn.Dropout(0.5)
 
     def forward(self, x):
-        attn_weights = self.attention(x)     # (batch_size, seq_len, 1)
+        attn_weights = self.attention(x)  
         attn_weights = self.dropout(attn_weights)
-        attn_weights = F.softmax(attn_weights, dim = 1)
+        attn_weights = F.softmax(attn_weights, dim=1)
         weighted = x * attn_weights
-        output = torch.sum(weighted, dim = 1)
+        output = torch.sum(weighted, dim=1)
         return output
 
 class EModel_FeatureWeight(nn.Module):
@@ -157,31 +160,30 @@ class EModel_FeatureWeight(nn.Module):
         super(EModel_FeatureWeight, self).__init__()
         self.feature_dim = feature_dim
 
-        # 可学习特征权重
         self.feature_importance = nn.Parameter(
-            torch.ones(feature_dim), requires_grad = True
+            torch.ones(feature_dim), requires_grad=True
         )
 
         self.lstm = nn.LSTM(
-            input_size = feature_dim,
-            hidden_size = 128,
-            num_layers = 2,
-            batch_first = True,
-            bidirectional = True,
-            dropout = 0.2
+            input_size=feature_dim,
+            hidden_size=128,
+            num_layers=2,
+            batch_first=True,
+            bidirectional=True,
+            dropout=0.2
         )
 
         # Transformer
-        self.pos_encoder = PositionalEncoding(d_model = 2 * 128)
-        encoder_layer = nn.TransformerEncoderLayer(d_model = 2 * 128, nhead = 8, batch_first = True)
-        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers = 2)
+        self.pos_encoder = PositionalEncoding(d_model=2*128)
+        encoder_layer = nn.TransformerEncoderLayer(d_model=2*128, nhead=8, batch_first=True)
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=2)
 
         # Attention
-        self.attention = Attention(input_dim = 2 * 128)
+        self.attention = Attention(input_dim=2*128)
 
         # 输出层
         self.fc = nn.Sequential(
-            nn.Linear(2 * 128, 128),
+            nn.Linear(2*128, 128),
             nn.ReLU(),
             nn.Dropout(0.3),
             nn.Linear(128, 1)
@@ -202,33 +204,33 @@ class EModel_BiGRU(nn.Module):
         self.feature_dim = feature_dim
         
         self.feature_importance = nn.Parameter(
-            torch.ones(feature_dim), requires_grad = True
+            torch.ones(feature_dim), requires_grad=True
         )
 
         self.bigru = nn.GRU(
-            input_size = feature_dim,
-            hidden_size = 128,
-            num_layers = 2,
-            batch_first = True,
-            bidirectional = True,
-            dropout = 0.3
+            input_size=feature_dim,
+            hidden_size=128,
+            num_layers=2,
+            batch_first=True,
+            bidirectional=True,
+            dropout=0.3
         )
 
-        self.pos_encoder = PositionalEncoding(d_model = 2 * 128)
+        self.pos_encoder = PositionalEncoding(d_model=2*128)
         encoder_layer = nn.TransformerEncoderLayer(
-            d_model = 2 * 128,
-            nhead = 8,
-            batch_first = True
+            d_model=2*128,
+            nhead=8,
+            batch_first=True
         )
         self.transformer_encoder = nn.TransformerEncoder(
             encoder_layer,
-            num_layers = 2
+            num_layers=2
         )
 
-        self.attention = Attention(input_dim = 2 * 128)
+        self.attention = Attention(input_dim=2*128)
 
         self.fc = nn.Sequential(
-            nn.Linear(2 * 128, 128),
+            nn.Linear(2*128, 128),
             nn.ReLU(),
             nn.Dropout(0.3),
             nn.Linear(128, 1)
@@ -271,11 +273,13 @@ def evaluate(model, dataloader, criterion):
     val_loss  = running_loss / num_samples
     preds_arr = np.concatenate(preds_list, axis=0)
     labels_arr= np.concatenate(labels_list, axis=0)
-    rmse      = np.sqrt(mean_squared_error(labels_arr, preds_arr))  # 在原空间计算 RMSE
-    return val_loss, rmse, preds_arr, labels_arr
 
-def train_model(model, train_loader, val_loader, model_name = 'Model'):
-    criterion = nn.SmoothL1Loss(beta=1.0)  # 或者 nn.MSELoss()
+    # 在“标准化后的空间”计算的 RMSE
+    rmse_std  = np.sqrt(mean_squared_error(labels_arr, preds_arr))
+    return val_loss, rmse_std, preds_arr, labels_arr
+
+def train_model(model, train_loader, val_loader, model_name='Model'):
+    criterion = nn.SmoothL1Loss(beta=1.0)  # 或 nn.MSELoss()
     optimizer = AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
 
     # 学习率调度器
@@ -320,18 +324,16 @@ def train_model(model, train_loader, val_loader, model_name = 'Model'):
             global_step  += 1
 
         train_loss = running_loss / num_samples
-
-        val_loss, val_rmse, _, _ = evaluate(model, val_loader, criterion)
+        val_loss, val_rmse_std, _, _ = evaluate(model, val_loader, criterion)
 
         train_loss_history.append(train_loss)
         val_loss_history.append(val_loss)
-        val_rmse_history.append(val_rmse)
+        val_rmse_history.append(val_rmse_std)
 
         print(f"[{model_name}] Epoch {epoch+1}/{num_epochs}, "
-              f"Train Loss: {train_loss:.4f}, "
-              f"Val Loss: {val_loss:.4f}, RMSE: {val_rmse:.4f}")
+              f"Train Loss(std): {train_loss:.4f}, "
+              f"Val Loss(std): {val_loss:.4f}, RMSE(std): {val_rmse_std:.4f}")
 
-        # 早停 & 保存最优模型
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             counter = 0
@@ -349,17 +351,14 @@ def train_model(model, train_loader, val_loader, model_name = 'Model'):
 # ---------------------------
 # 4. 可视化
 # ---------------------------
-def plot_predictions_comparison(y_actual, y_pred_model1, y_pred_model2, 
+def plot_predictions_comparison(y_actual_real, y_pred_model1_real, y_pred_model2_real, 
                                model1_name='Model1', model2_name='Model2'):
-    """
-    在原空间画三条曲线: Actual, Model1, Model2
-    """
     plt.figure(figsize=(10,5))
-    x_axis = np.arange(len(y_actual))
+    x_axis = np.arange(len(y_actual_real))
 
-    plt.plot(x_axis, y_actual, 'r-o', label='Actual', linewidth=1)
-    plt.plot(x_axis, y_pred_model1, 'g--*', label=model1_name, linewidth=1)
-    plt.plot(x_axis, y_pred_model2, 'b-.*', label=model2_name, linewidth=1)
+    plt.plot(x_axis, y_actual_real, 'r-o', label='Actual', linewidth=1)
+    plt.plot(x_axis, y_pred_model1_real, 'g--*', label=model1_name, linewidth=1)
+    plt.plot(x_axis, y_pred_model2_real, 'b-.*', label=model2_name, linewidth=1)
 
     plt.xlabel('Index')
     plt.ylabel('Value (real domain)')
@@ -373,11 +372,11 @@ def plot_training_curves(train_loss_history, val_loss_history, val_rmse_history,
     epochs = range(1, len(train_loss_history) + 1)
 
     plt.figure(figsize=(10,5))
-    plt.plot(epochs, train_loss_history, 'r-o', label='Train Loss')
-    plt.plot(epochs, val_loss_history, 'b-o', label='Val Loss')
-    plt.plot(epochs, val_rmse_history, 'g--*', label='Val RMSE')
+    plt.plot(epochs, train_loss_history, 'r-o', label='Train Loss(std)')
+    plt.plot(epochs, val_loss_history, 'b-o', label='Val Loss(std)')
+    plt.plot(epochs, val_rmse_history, 'g--*', label='Val RMSE(std)')
     plt.xlabel('Epoch')
-    plt.ylabel('Loss / RMSE (real domain)')
+    plt.ylabel('Loss / RMSE (standardized domain)')
     plt.title(f'Training Curves for {model_name}')
     plt.legend()
     plt.grid(True)
@@ -389,12 +388,12 @@ def plot_two_model_val_rmse(val_rmseA, val_rmseB, labelA='ModelA', labelB='Model
     epochsB = range(1, len(val_rmseB) + 1)
 
     plt.figure(figsize=(8,5))
-    plt.plot(epochsA, val_rmseA, 'r-o', label=f'{labelA} Val RMSE')
-    plt.plot(epochsB, val_rmseB, 'b-o', label=f'{labelB} Val RMSE')
+    plt.plot(epochsA, val_rmseA, 'r-o', label=f'{labelA} Val RMSE (std)')
+    plt.plot(epochsB, val_rmseB, 'b-o', label=f'{labelB} Val RMSE (std)')
 
     plt.xlabel('Epoch')
-    plt.ylabel('RMSE (real domain)')
-    plt.title('Validation RMSE Comparison')
+    plt.ylabel('RMSE (standardized domain)')
+    plt.title('Validation RMSE Comparison (standardized)')
     plt.legend()
     plt.grid(True)
     plt.tight_layout()
@@ -406,7 +405,7 @@ def plot_two_model_val_rmse(val_rmseA, val_rmseB, labelA='ModelA', labelB='Model
 def main():
     print("[Info] Loading and preprocessing data...")
     data_df = load_data()
-    data_all, feature_cols, target_col = feature_engineering(data_df)
+    data_all, feature_cols, target_col, scaler_y = feature_engineering(data_df)
 
     feature_dim = len(feature_cols)
     X_all, y_all = create_sequences(
@@ -481,28 +480,44 @@ def main():
 
     print("\n[Info] Testing...")
     criterion = nn.SmoothL1Loss(beta=1.0)
-    test_lossA, test_rmseA, predsA, labelsA = evaluate(best_modelA, test_loader, criterion)
-    test_lossB, test_rmseB, predsB, _       = evaluate(best_modelB, test_loader, criterion)
+    test_lossA, test_rmseA_std, predsA_std, labelsA_std = evaluate(best_modelA, test_loader, criterion)
+    test_lossB, test_rmseB_std, predsB_std, _           = evaluate(best_modelB, test_loader, criterion)
 
-    print("\n========== Test Results ==========")
-    print(f"[EModel_FeatureWeight] => Test Loss: {test_lossA:.4f}, RMSE: {test_rmseA:.4f}")
-    print(f"[EModel_BiGRU]         => Test Loss: {test_lossB:.4f}, RMSE: {test_rmseB:.4f}")
+    print("\n========== Test Results (standardized domain) ==========")
+    print(f"[EModel_FeatureWeight] => Test Loss(std): {test_lossA:.4f}, RMSE(std): {test_rmseA_std:.4f}")
+    print(f"[EModel_BiGRU]         => Test Loss(std): {test_lossB:.4f}, RMSE(std): {test_rmseB_std:.4f}")
 
-    # 这里不再做“滑动平均”平滑，直接可视化原始预测值
+    # 将预测值与标签从标准化空间还原到原始空间
+    predsA_real = scaler_y.inverse_transform(predsA_std.reshape(-1,1)).ravel()
+    predsB_real = scaler_y.inverse_transform(predsB_std.reshape(-1,1)).ravel()
+    labelsA_real= scaler_y.inverse_transform(labelsA_std.reshape(-1,1)).ravel()
+
+    # 在原空间重新计算 RMSE
+    test_rmseA_real = np.sqrt(mean_squared_error(labelsA_real, predsA_real))
+    test_rmseB_real = np.sqrt(mean_squared_error(labelsA_real, predsB_real))
+
+    print("\n========== Test Results (real domain) ==========")
+    print(f"[EModel_FeatureWeight] => RMSE(real): {test_rmseA_real:.4f}")
+    print(f"[EModel_BiGRU]         => RMSE(real): {test_rmseB_real:.4f}")
+
+    # 可视化
     plot_predictions_comparison(
-        y_actual       = labelsA,
-        y_pred_model1  = predsA,
-        y_pred_model2  = predsB,
-        model1_name    = 'EModel_FeatureWeight',
-        model2_name    = 'EModel_BiGRU'
+        y_actual_real       = labelsA_real,
+        y_pred_model1_real  = predsA_real,
+        y_pred_model2_real  = predsB_real,
+        model1_name         = 'EModel_FeatureWeight',
+        model2_name         = 'EModel_BiGRU'
     )
 
     plot_training_curves(train_lossA, val_lossA, val_rmseA, model_name='EModel_FeatureWeight')
     plot_training_curves(train_lossB, val_lossB, val_rmseB, model_name='EModel_BiGRU')
 
-    plot_two_model_val_rmse(val_rmseA, val_rmseB, 
-                            labelA='EModel_FeatureWeight',
-                            labelB='EModel_BiGRU')
+    plot_two_model_val_rmse(
+        val_rmseA, 
+        val_rmseB, 
+        labelA='EModel_FeatureWeight',
+        labelB='EModel_BiGRU'
+    )
 
     print("[Info] Done!")
 

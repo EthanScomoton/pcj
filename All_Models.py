@@ -14,9 +14,9 @@ from sklearn.metrics import mean_squared_error
 # ---------------------------
 # 0. 全局超参数
 # ---------------------------
-learning_rate = 1e-4     # 学习率，可酌情调大/调小
-num_epochs = 50          # 训练轮数
-batch_size = 64          # 批次大小
+learning_rate = 1e-5     # 学习率，可酌情调大/调小
+num_epochs = 200          # 训练轮数
+batch_size = 128          # 批次大小
 weight_decay = 5e-3      # L2正则化
 patience = 5             # 早停轮数
 num_workers = 0          # DataLoader 进程数
@@ -32,18 +32,8 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 # 1. 数据加载与预处理
 # ---------------------------
 def load_data():
-    """
-    假设有两个 CSV:
-    1) renewable_data.csv, 包含可再生能源相关特征
-    2) load_data.csv, 包含负荷相关特征
-    
-    这里只是演示如何读取并合并：
-    - 有效数据保存在 data_df 中
-    - 其中 'energyconsumption' 是目标列
-    - 'timestamp' 是时间索引
-    """
-    renewable_df = pd.read_csv(r'C:\Users\Administrator\Desktop\renewable_data.csv')
-    load_df = pd.read_csv(r'C:\Users\Administrator\Desktop\load_data.csv')
+    renewable_df = pd.read_csv(r'C:\Users\Administrator\Desktop\renewable_data1.csv')
+    load_df = pd.read_csv(r'C:\Users\Administrator\Desktop\load_data1.csv')
 
     renewable_df['timestamp'] = pd.to_datetime(renewable_df['timestamp'])
     load_df['timestamp'] = pd.to_datetime(load_df['timestamp'])
@@ -58,13 +48,7 @@ def load_data():
     return data_df
 
 def feature_engineering(data_df):
-    """
-    对 data_df 做特征工程、编码、对数变换等
-    返回:
-    - data_all: 最终可用于多步时序的 numpy 数组 [行: 时间, 列: 所有特征(含目标?)]
-    - feature_columns: 特征列名
-    - target_column: 目标列名
-    """
+
     # 提取时间特征
     data_df['dayofweek'] = data_df['timestamp'].dt.dayofweek
     data_df['hour']      = data_df['timestamp'].dt.hour
@@ -162,7 +146,6 @@ class PositionalEncoding(nn.Module):
     def forward(self, x):
         # x shape: (batch, seq_len, d_model)
         # 这里以 seq_len 维度进行 pe[:x.size(1)]
-        # 而不是 x.size(0)
         seq_len = x.size(1)
         x = x + self.pe[:seq_len, 0, :]
         return x
@@ -186,7 +169,7 @@ class Attention(nn.Module):
         output = torch.sum(weighted, dim=1)  # (batch_size, input_dim)
         return output
 
-# 示例1: EModel_FeatureWeight (带可学习特征权重 + LSTM/Transformer)
+# 1: EModel_FeatureWeight (LSTM/Transformer)
 # 这里的特征权重只针对 "feature_dim" 部分，而不是每个时间步都不一样
 class EModel_FeatureWeight(nn.Module):
     def __init__(self, feature_dim):
@@ -461,7 +444,6 @@ def main():
 
     # 7) 在测试集上推理
     #    这里以一个 dataloader batch_size=len(test_dataset) 的方式一次性取完
-    #    或者循环累加都可以
     test_loader_for_eval = DataLoader(test_dataset, batch_size=len(test_dataset), shuffle=False)
     with torch.no_grad():
         for X_test_batch, y_test_batch in test_loader_for_eval:

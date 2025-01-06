@@ -3,7 +3,7 @@ import math
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.optim import AdamW
-from torch.optim.lr_scheduler import ReduceLROnPlateau
+from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader, TensorDataset
 import numpy as np
 import pandas as pd
@@ -11,18 +11,17 @@ import matplotlib.pyplot as plt
 from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.metrics import mean_squared_error
 from torch.nn.utils import clip_grad_norm_
-import logging
 
 # ---------------------------
 # 0. 全局超参数
 # ---------------------------
-learning_rate = 1e-4       # 学习率调低
-num_epochs = 300           # 训练轮数适当调高
-batch_size = 128           # 批次大小
-weight_decay = 1e-4        # L2 正则化
-patience = 10              # 早停轮数增大
-num_workers = 0            # DataLoader 进程数
-window_size = 5           # 多步时序窗口
+learning_rate = 1e-4
+num_epochs = 40           
+batch_size = 128          
+weight_decay = 1e-4       
+patience = 10             
+num_workers = 0           
+window_size = 2           
 
 # 设置随机种子
 torch.manual_seed(42)
@@ -30,42 +29,24 @@ np.random.seed(42)
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-# 配置日志
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
 # ---------------------------
 # 1. 数据加载与预处理
 # ---------------------------
 def load_data():
-    renewable_df = pd.read_csv(r'C:\\Users\\Administrator\\Desktop\\renewable_data1.csv')
-    load_df = pd.read_csv(r'C:\\Users\\Administrator\\Desktop\\load_data1.csv')
+    renewable_df = pd.read_csv(r'C:\Users\Administrator\Desktop\renewable_data1.csv')
+    load_df = pd.read_csv(r'C:\Users\Administrator\Desktop\load_data1.csv')
 
     renewable_df['timestamp'] = pd.to_datetime(renewable_df['timestamp'])
     load_df['timestamp'] = pd.to_datetime(load_df['timestamp'])
 
     # 按 inner merge，得到完整记录
-    data_df = pd.merge(renewable_df, load_df, on='timestamp', how='inner')
+    data_df = pd.merge(renewable_df, load_df, on = 'timestamp', how = 'inner')
 
-    # 检查缺失值并前向填充
-    if data_df.isnull().sum().sum() > 0:
-        data_df.ffill(inplace=True)
-
-    # 仅选择数值列进行异常值处理
-    numeric_cols = data_df.select_dtypes(include=[np.number]).columns
-    Q1 = data_df[numeric_cols].quantile(0.25)
-    Q3 = data_df[numeric_cols].quantile(0.75)
-    IQR = Q3 - Q1
-
-    # 过滤异常值
-    data_df = data_df[~((data_df[numeric_cols] < (Q1 - 1.5 * IQR)) | (data_df[numeric_cols] > (Q3 + 1.5 * IQR))).any(axis=1)]
-
-    # 时间排序，保证后面切分序列时是按时间顺序排列
-    data_df.sort_values('timestamp', inplace=True)
-    data_df.reset_index(drop=True, inplace=True)
-
+    # 时间排序
+    data_df.sort_values('timestamp', inplace = True)
+    data_df.reset_index(drop = True, inplace = True)
+    
     return data_df
-
 
 def feature_engineering(data_df):
 
@@ -81,7 +62,6 @@ def feature_engineering(data_df):
     data_df['month_sin']     = np.sin(2 * np.pi * (data_df['month'] - 1) / 12)
     data_df['month_cos']     = np.cos(2 * np.pi * (data_df['month'] - 1) / 12)
 
-    # 需要手动指定哪些是可再生能源特征，哪些是负荷特征
     renewable_features = ['season', 'holiday', 'weather', 'temperature', 'working_hours',
                           'E_PV', 'E_storage_discharge', 'E_grid', 'ESCFR', 'ESCFG']
     load_features = ['ship_grade', 'dock_position', 'destination']
@@ -92,7 +72,6 @@ def feature_engineering(data_df):
             le = LabelEncoder()
             data_df[col] = le.fit_transform(data_df[col].astype(str))
     
-    # 组合特征列
     time_feature_cols = [
         'dayofweek_sin', 'dayofweek_cos',
         'hour_sin', 'hour_cos',
@@ -100,31 +79,24 @@ def feature_engineering(data_df):
     ]
     feature_columns = renewable_features + load_features + time_feature_cols
     
-    # 目标列
+    # 目标列 (在原空间，不做 log1p)
     target_column = 'energyconsumption'
     
-    # 对目标做对数变换
-    data_df['target_log'] = np.log1p(data_df[target_column].values)
+    data_selected = data_df[feature_columns + [target_column]].copy()
 
-    selected_cols = feature_columns + ['target_log']
-    data_selected = data_df[selected_cols].copy()
-
-    # 数值标准化 ( 只对特征做标准化, 不对 'target_log' 做)
+    # 数值标准化 (只对特征做标准化, 不动目标)
     scaler_X = StandardScaler()
+    data_selected[feature_columns] = scaler_X.fit_transform(data_selected[feature_columns].values)
 
-    data_selected[feature_columns] = scaler_X.fit_transform(
-        data_selected[feature_columns].values
-    )
-
-    # 转成 numpy 数组，用于后面多步时序的 create_sequences
-    data_all = data_selected.values  # shape: (num_samples, num_features + 1)
-    return data_all, feature_columns, 'target_log'
+    # 转成 numpy 数组
+    data_all = data_selected.values  # shape: (num_samples, feature_dim + 1)
+    return data_all, feature_columns, target_column
 
 def create_sequences(data_all, window_size, feature_dim):
     """
-    data_all 的列顺序: [feature_1, feature_2, ..., feature_n, target_log]
+    data_all 的列顺序: [feature_1, feature_2, ..., feature_n, target]
     window_size: 使用过去多少步
-    feature_dim: 特征数 ( 不含 target_log)
+    feature_dim: 特征数 (不含 target)
     
     返回:
     X: (samples, window_size, feature_dim)
@@ -134,9 +106,8 @@ def create_sequences(data_all, window_size, feature_dim):
     num_samples = data_all.shape[0]
     
     for i in range(num_samples - window_size):
-        # 取过去 window_size 行作为一个序列
-        seq_x = data_all[i : i + window_size, : feature_dim]    # shape: (window_size, feature_dim)
-        seq_y = data_all[i + window_size, feature_dim]         # 第 feature_dim 列是 target_log
+        seq_x = data_all[i : i + window_size, : feature_dim]  
+        seq_y = data_all[i + window_size, feature_dim]        
         X_list.append(seq_x)
         y_list.append(seq_y)
     
@@ -159,7 +130,6 @@ class PositionalEncoding(nn.Module):
         self.register_buffer('pe', pe)
 
     def forward(self, x):
-        # x shape: (batch, seq_len, d_model)
         seq_len = x.size(1)
         x = x + self.pe[: seq_len, 0, :]
         return x
@@ -175,44 +145,36 @@ class Attention(nn.Module):
         self.dropout = nn.Dropout(0.5)
 
     def forward(self, x):
-        # x: (batch_size, seq_length, input_dim)
-        attn_weights = self.attention(x)  # (batch_size, seq_length, 1)
+        attn_weights = self.attention(x)     # (batch_size, seq_len, 1)
         attn_weights = self.dropout(attn_weights)
         attn_weights = F.softmax(attn_weights, dim = 1)
-        weighted = x * attn_weights  # (batch_size, seq_length, input_dim)
-        output = torch.sum(weighted, dim = 1)  # (batch_size, input_dim)
+        weighted = x * attn_weights
+        output = torch.sum(weighted, dim = 1)
         return output
 
-class EModel_BiGRU(nn.Module):
+class EModel_FeatureWeight(nn.Module):
     def __init__(self, feature_dim):
-        super(EModel_BiGRU, self).__init__()
+        super(EModel_FeatureWeight, self).__init__()
         self.feature_dim = feature_dim
-        
-        # 学习特征权重
+
+        # 可学习特征权重
         self.feature_importance = nn.Parameter(
             torch.ones(feature_dim), requires_grad = True
         )
 
-        self.bigru = nn.GRU(
+        self.lstm = nn.LSTM(
             input_size = feature_dim,
             hidden_size = 128,
             num_layers = 2,
             batch_first = True,
             bidirectional = True,
-            dropout = 0.3
+            dropout = 0.2
         )
 
         # Transformer
         self.pos_encoder = PositionalEncoding(d_model = 2 * 128)
-        encoder_layer = nn.TransformerEncoderLayer(
-            d_model = 2 * 128,
-            nhead = 8,
-            batch_first = True
-        )
-        self.transformer_encoder = nn.TransformerEncoder(
-            encoder_layer,
-            num_layers = 2
-        )
+        encoder_layer = nn.TransformerEncoderLayer(d_model = 2 * 128, nhead = 8, batch_first = True)
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers = 2)
 
         # Attention
         self.attention = Attention(input_dim = 2 * 128)
@@ -226,23 +188,58 @@ class EModel_BiGRU(nn.Module):
         )
 
     def forward(self, x):
-        """
-        x shape: (batch, seq_len, feature_dim)
-        """
-        # 对特征维度进行可学习权重乘法 ( 通道级别)
         x = x * self.feature_importance.unsqueeze(0).unsqueeze(0)
-        
-        # BiGRU
-        gru_out, _ = self.bigru(x)  # shape: (batch, seq_len, 2 * 128)
+        lstm_out, _ = self.lstm(x)  
+        t_out = self.pos_encoder(lstm_out)
+        t_out = self.transformer_encoder(t_out)
+        attn_out = self.attention(t_out)
+        out = self.fc(attn_out)
+        return out.squeeze(-1)
 
-        # Transformer
+class EModel_BiGRU(nn.Module):
+    def __init__(self, feature_dim):
+        super(EModel_BiGRU, self).__init__()
+        self.feature_dim = feature_dim
+        
+        self.feature_importance = nn.Parameter(
+            torch.ones(feature_dim), requires_grad = True
+        )
+
+        self.bigru = nn.GRU(
+            input_size = feature_dim,
+            hidden_size = 128,
+            num_layers = 2,
+            batch_first = True,
+            bidirectional = True,
+            dropout = 0.3
+        )
+
+        self.pos_encoder = PositionalEncoding(d_model = 2 * 128)
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model = 2 * 128,
+            nhead = 8,
+            batch_first = True
+        )
+        self.transformer_encoder = nn.TransformerEncoder(
+            encoder_layer,
+            num_layers = 2
+        )
+
+        self.attention = Attention(input_dim = 2 * 128)
+
+        self.fc = nn.Sequential(
+            nn.Linear(2 * 128, 128),
+            nn.ReLU(),
+            nn.Dropout(0.3),
+            nn.Linear(128, 1)
+        )
+
+    def forward(self, x):
+        x = x * self.feature_importance.unsqueeze(0).unsqueeze(0)
+        gru_out, _ = self.bigru(x)  
         t_out = self.pos_encoder(gru_out)
         t_out = self.transformer_encoder(t_out)
-
-        # Attention
         attn_out = self.attention(t_out)
-
-        # 输出
         out = self.fc(attn_out)
         return out.squeeze(-1)
 
@@ -266,24 +263,30 @@ def evaluate(model, dataloader, criterion):
             loss = criterion(outputs, batch_labels)
 
             running_loss += loss.item() * batch_inputs.size(0)
-            num_samples += batch_inputs.size(0)
+            num_samples  += batch_inputs.size(0)
 
             preds_list.append(outputs.cpu().numpy())
             labels_list.append(batch_labels.cpu().numpy())
 
-    val_loss = running_loss / num_samples   # MSE or SmoothL1 in log domain
-    preds_arr = np.concatenate(preds_list, axis = 0)
-    labels_arr = np.concatenate(labels_list, axis = 0)
-    rmse_log = np.sqrt(mean_squared_error(labels_arr, preds_arr))
-    return val_loss, rmse_log, preds_arr, labels_arr
+    val_loss  = running_loss / num_samples
+    preds_arr = np.concatenate(preds_list, axis=0)
+    labels_arr= np.concatenate(labels_list, axis=0)
+    rmse      = np.sqrt(mean_squared_error(labels_arr, preds_arr))  # 在原空间计算 RMSE
+    return val_loss, rmse, preds_arr, labels_arr
 
 def train_model(model, train_loader, val_loader, model_name = 'Model'):
-    """
-    训练函数，返回本模型在训练过程中每个 epoch 的 train_loss, val_loss, val_rmse 三条曲线
-    """
-    criterion = nn.SmoothL1Loss(beta = 1.0)
-    optimizer = AdamW(model.parameters(), lr = learning_rate, weight_decay = weight_decay)
-    scheduler = ReduceLROnPlateau(optimizer, mode = 'min', factor = 0.1, patience = 5, verbose = True)
+    criterion = nn.SmoothL1Loss(beta=1.0)  # 或者 nn.MSELoss()
+    optimizer = AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+
+    # 学习率调度器
+    total_steps = num_epochs * len(train_loader)
+    warmup_steps = int(0.1 * total_steps)
+    def lr_lambda(current_step):
+        if current_step < warmup_steps:
+            return float(current_step) / float(max(1, warmup_steps))
+        else:
+            return max(0.0, 1 - (current_step - warmup_steps) / (total_steps - warmup_steps))
+    scheduler = LambdaLR(optimizer, lr_lambda)
 
     best_val_loss = float('inf')
     counter = 0
@@ -296,7 +299,7 @@ def train_model(model, train_loader, val_loader, model_name = 'Model'):
     for epoch in range(num_epochs):
         model.train()
         running_loss = 0.0
-        num_samples = 0
+        num_samples  = 0
 
         for batch_inputs, batch_labels in train_loader:
             batch_inputs = batch_inputs.to(device)
@@ -307,57 +310,112 @@ def train_model(model, train_loader, val_loader, model_name = 'Model'):
             loss = criterion(preds, batch_labels)
             loss.backward()
 
-            clip_grad_norm_(model.parameters(), max_norm = 5.0)
+            clip_grad_norm_(model.parameters(), max_norm=5.0)
+
             optimizer.step()
+            scheduler.step()
 
             running_loss += loss.item() * batch_inputs.size(0)
             num_samples  += batch_inputs.size(0)
             global_step  += 1
 
         train_loss = running_loss / num_samples
+
         val_loss, val_rmse, _, _ = evaluate(model, val_loader, criterion)
 
         train_loss_history.append(train_loss)
         val_loss_history.append(val_loss)
         val_rmse_history.append(val_rmse)
 
-        logger.info(f"[{model_name}] Epoch {epoch + 1}/{num_epochs}, "
-                    f"Train Loss(log): {train_loss:.4f}, "
-                    f"Val Loss(log): {val_loss:.4f}, RMSE(log): {val_rmse:.4f}")
+        print(f"[{model_name}] Epoch {epoch+1}/{num_epochs}, "
+              f"Train Loss: {train_loss:.4f}, "
+              f"Val Loss: {val_loss:.4f}, RMSE: {val_rmse:.4f}")
 
-        scheduler.step(val_loss)
-
+        # 早停 & 保存最优模型
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             counter = 0
             torch.save(model.state_dict(), f"best_{model_name}.pth")
-            logger.info(f"[{model_name}] 模型已保存。")
+            print(f"[{model_name}] 模型已保存。")
         else:
             counter += 1
             if counter >= patience:
-                logger.info(f"[{model_name}] 验证集无改善，提前停止。")
+                print(f"[{model_name}] 验证集无改善，提前停止。")
                 break
 
     return train_loss_history, val_loss_history, val_rmse_history
+
+
 # ---------------------------
-# 4. 主函数
+# 4. 可视化
+# ---------------------------
+def plot_predictions_comparison(y_actual, y_pred_model1, y_pred_model2, 
+                               model1_name='Model1', model2_name='Model2'):
+    """
+    在原空间画三条曲线: Actual, Model1, Model2
+    """
+    plt.figure(figsize=(10,5))
+    x_axis = np.arange(len(y_actual))
+
+    plt.plot(x_axis, y_actual, 'r-o', label='Actual', linewidth=1)
+    plt.plot(x_axis, y_pred_model1, 'g--*', label=model1_name, linewidth=1)
+    plt.plot(x_axis, y_pred_model2, 'b-.*', label=model2_name, linewidth=1)
+
+    plt.xlabel('Index')
+    plt.ylabel('Value (real domain)')
+    plt.title(f'Comparison: Actual vs {model1_name} vs {model2_name}')
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show()
+
+def plot_training_curves(train_loss_history, val_loss_history, val_rmse_history, model_name='Model'):
+    epochs = range(1, len(train_loss_history) + 1)
+
+    plt.figure(figsize=(10,5))
+    plt.plot(epochs, train_loss_history, 'r-o', label='Train Loss')
+    plt.plot(epochs, val_loss_history, 'b-o', label='Val Loss')
+    plt.plot(epochs, val_rmse_history, 'g--*', label='Val RMSE')
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss / RMSE (real domain)')
+    plt.title(f'Training Curves for {model_name}')
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show()
+
+def plot_two_model_val_rmse(val_rmseA, val_rmseB, labelA='ModelA', labelB='ModelB'):
+    epochsA = range(1, len(val_rmseA) + 1)
+    epochsB = range(1, len(val_rmseB) + 1)
+
+    plt.figure(figsize=(8,5))
+    plt.plot(epochsA, val_rmseA, 'r-o', label=f'{labelA} Val RMSE')
+    plt.plot(epochsB, val_rmseB, 'b-o', label=f'{labelB} Val RMSE')
+
+    plt.xlabel('Epoch')
+    plt.ylabel('RMSE (real domain)')
+    plt.title('Validation RMSE Comparison')
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show()
+
+# ---------------------------
+# 5. 主函数
 # ---------------------------
 def main():
-    # 1) 加载 & 特征工程
-    logger.info("[Info] Loading and preprocessing data...")
+    print("[Info] Loading and preprocessing data...")
     data_df = load_data()
     data_all, feature_cols, target_col = feature_engineering(data_df)
 
-    # 2) 构建多步时序数据
     feature_dim = len(feature_cols)
     X_all, y_all = create_sequences(
         data_all, 
         window_size=window_size, 
         feature_dim=feature_dim
     )
-    logger.info(f"[Info] X_all shape: {X_all.shape}, y_all shape: {y_all.shape}")
+    print(f"[Info] X_all shape: {X_all.shape}, y_all shape: {y_all.shape}")
 
-    # 3) 划分数据集: 8:1:1
     total_samples = X_all.shape[0]
     train_size = int(0.8 * total_samples)
     val_size   = int(0.1 * total_samples)
@@ -366,9 +424,8 @@ def main():
     X_train, y_train = X_all[:train_size], y_all[:train_size]
     X_val,   y_val   = X_all[train_size : train_size+val_size], y_all[train_size : train_size+val_size]
     X_test,  y_test  = X_all[train_size+val_size : ], y_all[train_size+val_size : ]
-    logger.info(f"[Info] Split data => Train: {train_size}, Val: {val_size}, Test: {test_size}")
+    print(f"[Info] Split data => Train: {train_size}, Val: {val_size}, Test: {test_size}")
 
-    # 4) 构建 DataLoader
     train_dataset = TensorDataset(
         torch.from_numpy(X_train), 
         torch.from_numpy(y_train)
@@ -401,74 +458,53 @@ def main():
         num_workers=num_workers
     )
 
-    # 5) 实例化模型
-    logger.info("[Info] Building model...")
-    model = EModel_BiGRU(feature_dim).to(device)
+    print("[Info] Building models...")
+    modelA = EModel_FeatureWeight(feature_dim).to(device)
+    modelB = EModel_BiGRU(feature_dim).to(device)
 
-    # 6) 训练模型
-    logger.info("[Info] Training model...")
-    train_loss, val_loss, val_rmse = train_model(
-        model, train_loader, val_loader, model_name='EModel_BiGRU'
+    print("\n========== Train EModel_FeatureWeight ==========")
+    train_lossA, val_lossA, val_rmseA = train_model(
+        modelA, train_loader, val_loader, model_name='EModel_FeatureWeight'
     )
 
-    # 7) 加载最优权重
-    logger.info("[Info] Loading best model weights...")
-    model.load_state_dict(torch.load('best_EModel_BiGRU.pth'))
+    print("\n========== Train EModel_BiGRU ==========")
+    train_lossB, val_lossB, val_rmseB = train_model(
+        modelB, train_loader, val_loader, model_name='EModel_BiGRU'
+    )
 
-    # 8) 测试集评估
-    logger.info("[Info] Testing...")
+    # 加载最优权重
+    best_modelA = EModel_FeatureWeight(feature_dim).to(device)
+    best_modelA.load_state_dict(torch.load('best_EModel_FeatureWeight.pth'))
+
+    best_modelB = EModel_BiGRU(feature_dim).to(device)
+    best_modelB.load_state_dict(torch.load('best_EModel_BiGRU.pth'))
+
+    print("\n[Info] Testing...")
     criterion = nn.SmoothL1Loss(beta=1.0)
-    test_loss, test_rmse, preds, labels = evaluate(model, test_loader, criterion)
+    test_lossA, test_rmseA, predsA, labelsA = evaluate(best_modelA, test_loader, criterion)
+    test_lossB, test_rmseB, predsB, _       = evaluate(best_modelB, test_loader, criterion)
 
-    logger.info(f"\n[Info] Test Results => Test Loss(log): {test_loss:.4f}, RMSE(log): {test_rmse:.4f}")
+    print("\n========== Test Results ==========")
+    print(f"[EModel_FeatureWeight] => Test Loss: {test_lossA:.4f}, RMSE: {test_rmseA:.4f}")
+    print(f"[EModel_BiGRU]         => Test Loss: {test_lossB:.4f}, RMSE: {test_rmseB:.4f}")
 
-    # 平滑预测结果
-    def smooth_predictions(preds, window=5):
-        """
-        简单的滑动平均平滑, window 可以根据需求调整
-        """
-        smoothed = np.copy(preds)
-        for i in range(window, len(preds)):
-            smoothed[i] = np.mean(preds[i-window:i])
-        return smoothed
-
-    preds_smooth = smooth_predictions(preds, window=5)
-
-    # 计算平滑后的 RMSE
-    test_rmse_smooth = np.sqrt(mean_squared_error(labels, preds_smooth))
-    logger.info(f"\n[Info] Smoothed Test RMSE(log): {test_rmse_smooth:.4f}")
-
-    # 将平滑后的预测值从对数域转回原空间
-    preds_smooth_real = np.expm1(preds_smooth)
-    labels_real       = np.expm1(labels)  # labels 也在 log(1 + y) 域，需一起转回
-
-    # 计算在原空间的 RMSE
-    test_rmse_smooth_real = np.sqrt(mean_squared_error(labels_real, preds_smooth_real))
-    logger.info(f"\n[Info] Smoothed Test RMSE(real): {test_rmse_smooth_real:.4f}")
-
-    # 可视化：在原空间
-    def plot_predictions_comparison_real(y_actual, y_pred, model_name='Model'):
-        plt.figure(figsize=(12,5))
-        x_axis = np.arange(len(y_actual))
-
-        plt.plot(x_axis, y_actual, 'r-o', label='Actual (real)', linewidth=1)
-        plt.plot(x_axis, y_pred, 'g--*', label=model_name, linewidth=1)
-
-        plt.xlabel('Index')
-        plt.ylabel('Value (real domain)')
-        plt.title(f'Comparison: Actual (real) vs {model_name}')
-        plt.legend()
-        plt.grid(True)
-        plt.tight_layout()
-        plt.show()
-
-    plot_predictions_comparison_real(
-        y_actual=labels_real,
-        y_pred=preds_smooth_real,
-        model_name='EModel_BiGRU (smooth, real)'
+    # 这里不再做“滑动平均”平滑，直接可视化原始预测值
+    plot_predictions_comparison(
+        y_actual       = labelsA,
+        y_pred_model1  = predsA,
+        y_pred_model2  = predsB,
+        model1_name    = 'EModel_FeatureWeight',
+        model2_name    = 'EModel_BiGRU'
     )
 
-    logger.info("[Info] Done!")
+    plot_training_curves(train_lossA, val_lossA, val_rmseA, model_name='EModel_FeatureWeight')
+    plot_training_curves(train_lossB, val_lossB, val_rmseB, model_name='EModel_BiGRU')
+
+    plot_two_model_val_rmse(val_rmseA, val_rmseB, 
+                            labelA='EModel_FeatureWeight',
+                            labelB='EModel_BiGRU')
+
+    print("[Info] Done!")
 
 if __name__ == "__main__":
     main()

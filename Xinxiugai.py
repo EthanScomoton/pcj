@@ -38,30 +38,34 @@ logger = logging.getLogger(__name__)
 # 1. 数据加载与预处理
 # ---------------------------
 def load_data():
-    renewable_df = pd.read_csv(r'C:\Users\Administrator\Desktop\renewable_data1.csv')
-    load_df = pd.read_csv(r'C:\Users\Administrator\Desktop\load_data1.csv')
+    renewable_df = pd.read_csv(r'C:\\Users\\Administrator\\Desktop\\renewable_data1.csv')
+    load_df = pd.read_csv(r'C:\\Users\\Administrator\\Desktop\\load_data1.csv')
 
     renewable_df['timestamp'] = pd.to_datetime(renewable_df['timestamp'])
     load_df['timestamp'] = pd.to_datetime(load_df['timestamp'])
 
     # 按 inner merge，得到完整记录
-    data_df = pd.merge(renewable_df, load_df, on = 'timestamp', how = 'inner')
+    data_df = pd.merge(renewable_df, load_df, on='timestamp', how='inner')
 
-    # 检查缺失值并填充
+    # 检查缺失值并前向填充
     if data_df.isnull().sum().sum() > 0:
-        data_df.fillna(method='ffill', inplace=True)
+        data_df.ffill(inplace=True)
 
-    # 异常值处理
-    Q1 = data_df.quantile(0.25)
-    Q3 = data_df.quantile(0.75)
+    # 仅选择数值列进行异常值处理
+    numeric_cols = data_df.select_dtypes(include=[np.number]).columns
+    Q1 = data_df[numeric_cols].quantile(0.25)
+    Q3 = data_df[numeric_cols].quantile(0.75)
     IQR = Q3 - Q1
-    data_df = data_df[~((data_df < (Q1 - 1.5 * IQR)) | (data_df > (Q3 + 1.5 * IQR))).any(axis=1)]
+
+    # 过滤异常值
+    data_df = data_df[~((data_df[numeric_cols] < (Q1 - 1.5 * IQR)) | (data_df[numeric_cols] > (Q3 + 1.5 * IQR))).any(axis=1)]
 
     # 时间排序，保证后面切分序列时是按时间顺序排列
-    data_df.sort_values('timestamp', inplace = True)
-    data_df.reset_index(drop = True, inplace = True)
-    
+    data_df.sort_values('timestamp', inplace=True)
+    data_df.reset_index(drop=True, inplace=True)
+
     return data_df
+
 
 def feature_engineering(data_df):
 

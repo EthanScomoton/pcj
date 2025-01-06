@@ -41,7 +41,7 @@ def load_data():
     # 按 inner merge，得到完整记录
     data_df = pd.merge(renewable_df, load_df, on='timestamp', how='inner')
 
-    # 时间排序非常重要，保证后面切分序列时是按时间顺序排列
+    # 时间排序，保证后面切分序列时是按时间顺序排列
     data_df.sort_values('timestamp', inplace=True)
     data_df.reset_index(drop=True, inplace=True)
     
@@ -62,7 +62,6 @@ def feature_engineering(data_df):
     data_df['month_cos']     = np.cos(2 * np.pi * (data_df['month']-1) / 12)
 
     # 需要手动指定哪些是可再生能源特征，哪些是负荷特征
-    # 这里仅示例化
     renewable_features = ['season','holiday','weather','temperature','working_hours',
                           'E_PV','E_storage_discharge','E_grid','ESCFR','ESCFG']
     load_features = ['ship_grade','dock_position','destination']
@@ -73,7 +72,7 @@ def feature_engineering(data_df):
             le = LabelEncoder()
             data_df[col] = le.fit_transform(data_df[col].astype(str))
     
-    # 组合特征列(示例: 可能还包含时间相关的 sin/cos)
+    # 组合特征列
     time_feature_cols = [
         'dayofweek_sin','dayofweek_cos',
         'hour_sin','hour_cos',
@@ -87,13 +86,12 @@ def feature_engineering(data_df):
     # 对目标做对数变换
     data_df['target_log'] = np.log1p(data_df[target_column].values)
 
-    # 只保留需要的列
-    # 注意：你如果希望在时序中也包含 'timestamp' 列, 可暂时保留但后面不要进模型
     selected_cols = feature_columns + ['target_log']
     data_selected = data_df[selected_cols].copy()
 
     # 数值标准化 (只对特征做标准化, 不对 'target_log' 做)
     scaler_X = StandardScaler()
+
     # 最后 1 列是 target_log，不需要参与 scaler
     data_selected[feature_columns] = scaler_X.fit_transform(
         data_selected[feature_columns].values
@@ -130,14 +128,12 @@ def create_sequences(data_all, window_size, feature_dim):
 # ---------------------------
 # 2. 模型结构
 # ---------------------------
-
 class PositionalEncoding(nn.Module):
-    def __init__(self, d_model, max_len=5000):
+    def __init__(self, d_model, max_len = 5000):
         super(PositionalEncoding, self).__init__()
         pe = torch.zeros(max_len, d_model)
-        position = torch.arange(0, max_len, dtype=torch.float32).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, d_model, 2).float() 
-                             * (-math.log(10000.0) / d_model))
+        position = torch.arange(0, max_len, dtype = torch.float32).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
         pe[:, 0::2] = torch.sin(position * div_term)
         pe[:, 1::2] = torch.cos(position * div_term)
         pe = pe.unsqueeze(1)
@@ -164,9 +160,9 @@ class Attention(nn.Module):
         # x: (batch_size, seq_length, input_dim)
         attn_weights = self.attention(x)  # (batch_size, seq_length, 1)
         attn_weights = self.dropout(attn_weights)
-        attn_weights = F.softmax(attn_weights, dim=1)
+        attn_weights = F.softmax(attn_weights, dim = 1)
         weighted = x * attn_weights  # 广播机制
-        output = torch.sum(weighted, dim=1)  # (batch_size, input_dim)
+        output = torch.sum(weighted, dim = 1)  # (batch_size, input_dim)
         return output
 
 # 1: EModel_FeatureWeight (LSTM/Transformer)
@@ -178,7 +174,7 @@ class EModel_FeatureWeight(nn.Module):
 
         # 可学习特征权重, shape = (feature_dim,)
         self.feature_importance = nn.Parameter(
-            torch.ones(feature_dim), requires_grad=True
+            torch.ones(feature_dim), requires_grad = True
         )
 
         self.lstm = nn.LSTM(
@@ -191,16 +187,16 @@ class EModel_FeatureWeight(nn.Module):
         )
 
         # Transformer
-        self.pos_encoder = PositionalEncoding(d_model=2*128)
-        encoder_layer = nn.TransformerEncoderLayer(d_model=2*128, nhead=8, batch_first=True)
-        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=2)
+        self.pos_encoder = PositionalEncoding(d_model = 2 * 128)
+        encoder_layer = nn.TransformerEncoderLayer(d_model = 2 * 128, nhead = 8, batch_first = True)
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers = 2)
 
         # Attention
-        self.attention = Attention(input_dim=2*128)
+        self.attention = Attention(input_dim = 2 * 128)
 
         # 输出层
         self.fc = nn.Sequential(
-            nn.Linear(2*128, 128),
+            nn.Linear(2 * 128, 128),
             nn.ReLU(),
             nn.Dropout(0.3),
             nn.Linear(128, 1)
@@ -230,25 +226,37 @@ class EModel_FeatureWeight(nn.Module):
         out = self.fc(attn_out)
         return out.squeeze(-1)
 
-# 示例2: EModel_BiGRU (双层 GRU + Transformer)，无特征权重
+# 2: EModel_BiGRU (双层 GRU + Transformer)，无特征权重
 class EModel_BiGRU(nn.Module):
     def __init__(self, feature_dim):
         super(EModel_BiGRU, self).__init__()
         self.feature_dim = feature_dim
+        
+        # 新增：可学习特征权重
+        self.feature_importance = nn.Parameter(
+            torch.ones(feature_dim), requires_grad=True
+        )
 
         self.bigru = nn.GRU(
-            input_size = feature_dim,
-            hidden_size = 128,
-            num_layers = 2,
-            batch_first = True,
-            bidirectional = True,
-            dropout = 0.3
+            input_size=feature_dim,
+            hidden_size=128,
+            num_layers=2,
+            batch_first=True,
+            bidirectional=True,
+            dropout=0.3
         )
 
         # Transformer
         self.pos_encoder = PositionalEncoding(d_model=2*128)
-        encoder_layer = nn.TransformerEncoderLayer(d_model=2*128, nhead=8, batch_first=True)
-        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=2)
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=2*128,
+            nhead=8,
+            batch_first=True
+        )
+        self.transformer_encoder = nn.TransformerEncoder(
+            encoder_layer,
+            num_layers=2
+        )
 
         # Attention
         self.attention = Attention(input_dim=2*128)
@@ -265,7 +273,11 @@ class EModel_BiGRU(nn.Module):
         """
         x shape: (batch, seq_len, feature_dim)
         """
-        gru_out, _ = self.bigru(x)  # shape: (batch, seq_len, 2*128=256)
+        # 对特征维度进行可学习权重乘法 (通道级别)
+        x = x * self.feature_importance.unsqueeze(0).unsqueeze(0)
+        
+        # BiGRU
+        gru_out, _ = self.bigru(x)  # shape: (batch, seq_len, 2 * 128 = 256)
 
         # Transformer
         t_out = self.pos_encoder(gru_out)
@@ -274,6 +286,7 @@ class EModel_BiGRU(nn.Module):
         # Attention
         attn_out = self.attention(t_out)  # (batch, 256)
 
+        # 输出
         out = self.fc(attn_out)
         return out.squeeze(-1)
 
@@ -303,12 +316,12 @@ def evaluate(model, dataloader, criterion):
             labels_list.append(batch_labels.cpu().numpy())
 
     val_loss = running_loss / num_samples   # MSE (log domain)
-    preds_arr = np.concatenate(preds_list, axis=0)
-    labels_arr = np.concatenate(labels_list, axis=0)
+    preds_arr = np.concatenate(preds_list, axis = 0)
+    labels_arr = np.concatenate(labels_list, axis = 0)
     rmse_log = np.sqrt(mean_squared_error(labels_arr, preds_arr))
     return val_loss, rmse_log, preds_arr, labels_arr
 
-def train_model(model, train_loader, val_loader, model_name='Model'):
+def train_model(model, train_loader, val_loader, model_name = 'Model'):
     criterion = nn.MSELoss()
     optimizer = AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
 
@@ -394,9 +407,8 @@ def main():
     # 1) 加载 & 基础预处理
     data_df = load_data()
     data_all, feature_cols, target_col = feature_engineering(data_df)
-    
+
     # 2) 构造多步时序样本
-    #    feature_dim = len(feature_cols)
     feature_dim = len(feature_cols)
     X_all, y_all = create_sequences(data_all, window_size=window_size, feature_dim=feature_dim)
     print("X_all shape:", X_all.shape)  # (samples, window_size, feature_dim)
@@ -405,63 +417,67 @@ def main():
     # 3) 划分训练/验证/测试集 (示例: 8:1:1)
     total_samples = X_all.shape[0]
     train_size = int(0.8 * total_samples)
-    val_size = int(0.1 * total_samples)
-    test_size = total_samples - train_size - val_size
+    val_size   = int(0.1 * total_samples)
+    test_size  = total_samples - train_size - val_size
 
     X_train = X_all[:train_size]
     y_train = y_all[:train_size]
-    X_val = X_all[train_size:train_size+val_size]
-    y_val = y_all[train_size:train_size+val_size]
-    X_test = X_all[train_size+val_size:]
-    y_test = y_all[train_size+val_size:]
-    
-    # 转 Tensor 并构建 DataLoader
+    X_val   = X_all[train_size : train_size + val_size]
+    y_val   = y_all[train_size : train_size + val_size]
+    X_test  = X_all[train_size + val_size :]
+    y_test  = y_all[train_size + val_size :]
+
+    # 4) 构建 DataLoader
     train_dataset = TensorDataset(torch.from_numpy(X_train), torch.from_numpy(y_train))
     val_dataset   = TensorDataset(torch.from_numpy(X_val),   torch.from_numpy(y_val))
     test_dataset  = TensorDataset(torch.from_numpy(X_test),  torch.from_numpy(y_test))
 
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True,  num_workers=num_workers)
     val_loader   = DataLoader(val_dataset,   batch_size=batch_size, shuffle=False, num_workers=num_workers)
     test_loader  = DataLoader(test_dataset,  batch_size=batch_size, shuffle=False, num_workers=num_workers)
 
-    # 4) 实例化模型
+    # 5) 实例化模型
     modelA = EModel_FeatureWeight(feature_dim).to(device)
     modelB = EModel_BiGRU(feature_dim).to(device)
 
-    # 5) 训练模型
+    # 6) 训练模型
     print("\n========== Train EModel_FeatureWeight ==========")
     train_model(modelA, train_loader, val_loader, model_name='EModel_FeatureWeight')
 
     print("\n========== Train EModel_BiGRU ==========")
     train_model(modelB, train_loader, val_loader, model_name='EModel_BiGRU')
 
-    # 6) 加载最优权重
+    # 7) 加载最优权重
     best_modelA = EModel_FeatureWeight(feature_dim).to(device)
     best_modelA.load_state_dict(torch.load('best_EModel_FeatureWeight.pth'))
 
     best_modelB = EModel_BiGRU(feature_dim).to(device)
     best_modelB.load_state_dict(torch.load('best_EModel_BiGRU.pth'))
 
-    # 7) 在测试集上推理
-    #    这里以一个 dataloader batch_size=len(test_dataset) 的方式一次性取完
-    test_loader_for_eval = DataLoader(test_dataset, batch_size=len(test_dataset), shuffle=False)
-    with torch.no_grad():
-        for X_test_batch, y_test_batch in test_loader_for_eval:
-            X_test_batch = X_test_batch.to(device)
-            y_test_batch = y_test_batch.cpu().numpy()  # log domain
+    # 8) 在测试集上评估
+    criterion = nn.MSELoss()
+    
+    # 对 modelA 做测试
+    test_lossA, test_rmseA, predsA, labelsA = evaluate(best_modelA, test_loader, criterion)
+    
+    # 对 modelB 做测试，仅需要预测值即可，
+    # 因为 labels 和 modelA 是同一个数据集，已保存为 labelsA
+    test_lossB, test_rmseB, predsB, _ = evaluate(best_modelB, test_loader, criterion)
 
-            predsA = best_modelA(X_test_batch).cpu().numpy()
-            predsB = best_modelB(X_test_batch).cpu().numpy()
+    print("\n========== Test Results ==========")
+    print(f"EModel_FeatureWeight => Test MSE(log): {test_lossA:.4f}, RMSE(log): {test_rmseA:.4f}")
+    print(f"EModel_BiGRU         => Test MSE(log): {test_lossB:.4f}, RMSE(log): {test_rmseB:.4f}")
 
-            # 作图对比 (log domain)
-            plot_predictions_comparison(
-                y_actual_log=y_test_batch,
-                y_pred_model1=predsA,
-                y_pred_model2=predsB,
-                model1_name='EModel_FeatureWeight',
-                model2_name='EModel_BiGRU'
-            )
-            break  # 只需要一次
+    # 9) 作图对比 (log域)
+    # 这里复用 labelsA 作为 y_actual_log
+    plot_predictions_comparison(
+        y_actual_log    = labelsA,
+        y_pred_model1   = predsA,
+        y_pred_model2   = predsB,
+        model1_name     = 'EModel_FeatureWeight',
+        model2_name     = 'EModel_BiGRU'
+    )
+
 
 if __name__ == "__main__":
     main()

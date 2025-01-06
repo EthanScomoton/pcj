@@ -404,77 +404,121 @@ def plot_predictions_comparison(y_actual_log, y_pred_model1, y_pred_model2, mode
 # 5. 主函数
 # ---------------------------
 def main():
-    # 1) 加载 & 基础预处理
+    # ---------------------------
+    # 1) 加载 & 特征工程
+    # ---------------------------
+    print("[Info] Loading and preprocessing data...")
     data_df = load_data()
     data_all, feature_cols, target_col = feature_engineering(data_df)
-    
-    # 2) 构造多步时序样本
-    #    feature_dim = len(feature_cols)
-    feature_dim = len(feature_cols)
-    X_all, y_all = create_sequences(data_all, window_size = window_size, feature_dim = feature_dim)
-    print("X_all shape:", X_all.shape)  # (samples, window_size, feature_dim)
-    print("y_all shape:", y_all.shape)  # (samples,)
 
-    # 3) 划分训练/验证/测试集 (示例: 8:1:1)
+    # ---------------------------
+    # 2) 构建多步时序数据
+    # ---------------------------
+    feature_dim = len(feature_cols)
+    X_all, y_all = create_sequences(
+        data_all, 
+        window_size=window_size, 
+        feature_dim=feature_dim
+    )
+    print(f"[Info] X_all shape: {X_all.shape}, y_all shape: {y_all.shape}")
+
+    # ---------------------------
+    # 3) 划分数据集: 8:1:1
+    # ---------------------------
     total_samples = X_all.shape[0]
     train_size = int(0.8 * total_samples)
-    val_size = int(0.1 * total_samples)
-    test_size = total_samples - train_size - val_size
+    val_size   = int(0.1 * total_samples)
+    test_size  = total_samples - train_size - val_size
 
-    X_train = X_all[:train_size]
-    y_train = y_all[:train_size]
-    X_val = X_all[train_size:train_size + val_size]
-    y_val = y_all[train_size:train_size + val_size]
-    X_test = X_all[train_size + val_size:]
-    y_test = y_all[train_size + val_size:]
-    
+    X_train, y_train = X_all[:train_size], y_all[:train_size]
+    X_val,   y_val   = X_all[train_size : train_size+val_size], y_all[train_size : train_size+val_size]
+    X_test,  y_test  = X_all[train_size+val_size : ], y_all[train_size+val_size : ]
+    print(f"[Info] Split data => Train: {train_size}, Val: {val_size}, Test: {test_size}")
+
+    # ---------------------------
     # 4) 构建 DataLoader
-    train_dataset = TensorDataset(torch.from_numpy(X_train), torch.from_numpy(y_train))
-    val_dataset   = TensorDataset(torch.from_numpy(X_val),   torch.from_numpy(y_val))
-    test_dataset  = TensorDataset(torch.from_numpy(X_test),  torch.from_numpy(y_test))
+    # ---------------------------
+    train_dataset = TensorDataset(
+        torch.from_numpy(X_train), 
+        torch.from_numpy(y_train)
+    )
+    val_dataset   = TensorDataset(
+        torch.from_numpy(X_val),
+        torch.from_numpy(y_val)
+    )
+    test_dataset  = TensorDataset(
+        torch.from_numpy(X_test), 
+        torch.from_numpy(y_test)
+    )
 
-    train_loader = DataLoader(train_dataset, batch_size = batch_size, shuffle = True,  num_workers = num_workers)
-    val_loader   = DataLoader(val_dataset,   batch_size = batch_size, shuffle = False, num_workers = num_workers)
-    test_loader  = DataLoader(test_dataset,  batch_size = batch_size, shuffle = False, num_workers = num_workers)
+    train_loader = DataLoader(
+        train_dataset, 
+        batch_size=batch_size, 
+        shuffle=True,
+        num_workers=num_workers
+    )
+    val_loader   = DataLoader(
+        val_dataset,   
+        batch_size=batch_size, 
+        shuffle=False,
+        num_workers=num_workers
+    )
+    test_loader  = DataLoader(
+        test_dataset,  
+        batch_size=batch_size, 
+        shuffle=False,
+        num_workers=num_workers
+    )
 
-    # 6) 训练模型
+    # ---------------------------
+    # 5) 实例化模型
+    # ---------------------------
+    print("[Info] Building models...")
     modelA = EModel_FeatureWeight(feature_dim).to(device)
     modelB = EModel_BiGRU(feature_dim).to(device)
 
-    # 5) 训练模型
+    # ---------------------------
+    # 6) 训练模型
+    # ---------------------------
     print("\n========== Train EModel_FeatureWeight ==========")
     train_model(modelA, train_loader, val_loader, model_name='EModel_FeatureWeight')
 
     print("\n========== Train EModel_BiGRU ==========")
     train_model(modelB, train_loader, val_loader, model_name='EModel_BiGRU')
 
+    # ---------------------------
     # 7) 加载最优权重
+    # ---------------------------
+    print("\n[Info] Loading best model weights...")
     best_modelA = EModel_FeatureWeight(feature_dim).to(device)
     best_modelA.load_state_dict(torch.load('best_EModel_FeatureWeight.pth'))
 
     best_modelB = EModel_BiGRU(feature_dim).to(device)
     best_modelB.load_state_dict(torch.load('best_EModel_BiGRU.pth'))
 
-    # 8) 在测试集上推理
-    #    这里以一个 dataloader batch_size=len(test_dataset) 的方式一次性取完
-    test_loader_for_eval = DataLoader(test_dataset, batch_size=len(test_dataset), shuffle=False)
-    with torch.no_grad():
-        for X_test_batch, y_test_batch in test_loader_for_eval:
-            X_test_batch = X_test_batch.to(device)
-            y_test_batch = y_test_batch.cpu().numpy()  # log domain
+    # ---------------------------
+    # 8) 测试集评估
+    # ---------------------------
+    print("\n[Info] Testing...")
+    criterion = nn.MSELoss()
+    test_lossA, test_rmseA, predsA, labelsA = evaluate(best_modelA, test_loader, criterion)
+    test_lossB, test_rmseB, predsB, _       = evaluate(best_modelB, test_loader, criterion)
 
-            predsA = best_modelA(X_test_batch).cpu().numpy()
-            predsB = best_modelB(X_test_batch).cpu().numpy()
+    print("\n========== Test Results ==========")
+    print(f"[EModel_FeatureWeight] => Test MSE(log): {test_lossA:.4f}, RMSE(log): {test_rmseA:.4f}")
+    print(f"[EModel_BiGRU]         => Test MSE(log): {test_lossB:.4f}, RMSE(log): {test_rmseB:.4f}")
 
-            # 作图对比 (log domain)
-            plot_predictions_comparison(
-                y_actual_log=y_test_batch,
-                y_pred_model1=predsA,
-                y_pred_model2=predsB,
-                model1_name='EModel_FeatureWeight',
-                model2_name='EModel_BiGRU'
-            )
-            break  # 只需要一次
+    # ---------------------------
+    # 9) 对比可视化 (log域)
+    # ---------------------------
+    plot_predictions_comparison(
+        y_actual_log    = labelsA,
+        y_pred_model1   = predsA,
+        y_pred_model2   = predsB,
+        model1_name     = 'EModel_FeatureWeight',
+        model2_name     = 'EModel_BiGRU'
+    )
+    print("[Info] Done!")
 
 if __name__ == "__main__":
     main()

@@ -136,8 +136,7 @@ class PositionalEncoding(nn.Module):
         super(PositionalEncoding, self).__init__()
         pe = torch.zeros(max_len, d_model)
         position = torch.arange(0, max_len, dtype=torch.float32).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, d_model, 2).float() 
-                             * (-math.log(10000.0) / d_model))
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
         pe[:, 0::2] = torch.sin(position * div_term)
         pe[:, 1::2] = torch.cos(position * div_term)
         pe = pe.unsqueeze(1)
@@ -191,12 +190,13 @@ class EModel_FeatureWeight(nn.Module):
         )
 
         # Transformer
-        self.pos_encoder = PositionalEncoding(d_model=2*128)
-        encoder_layer = nn.TransformerEncoderLayer(d_model=2*128, nhead=8, batch_first=True)
-        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=2)
+        self.pos_encoder = PositionalEncoding(d_model = 2 * 128)
+        encoder_layer = nn.TransformerEncoderLayer(d_model = 2 * 128, nhead = 8, batch_first = True)
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers = 2)
+
 
         # Attention
-        self.attention = Attention(input_dim=2*128)
+        self.attention = Attention(input_dim = 2 * 128)
 
         # 输出层
         self.fc = nn.Sequential(

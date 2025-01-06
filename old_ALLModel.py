@@ -183,7 +183,7 @@ class EModel_FeatureWeight(nn.Module):
         self.lstm = nn.LSTM(
             input_size = feature_dim,
             hidden_size = 128,
-            num_layers = 1,
+            num_layers = 2,
             batch_first = True,
             bidirectional = True,
             dropout = 0.2

@@ -3,7 +3,7 @@ import math
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.optim import AdamW
-from torch.optim.lr_scheduler import LambdaLR
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import DataLoader, TensorDataset
 import numpy as np
 import pandas as pd
@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.metrics import mean_squared_error
 from torch.nn.utils import clip_grad_norm_
+import logging
 
 # ---------------------------
 # 0. 全局超参数
@@ -29,6 +30,10 @@ np.random.seed(42)
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
+# 配置日志
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 # ---------------------------
 # 1. 数据加载与预处理
 # ---------------------------
@@ -41,6 +46,16 @@ def load_data():
 
     # 按 inner merge，得到完整记录
     data_df = pd.merge(renewable_df, load_df, on = 'timestamp', how = 'inner')
+
+    # 检查缺失值并填充
+    if data_df.isnull().sum().sum() > 0:
+        data_df.fillna(method='ffill', inplace=True)
+
+    # 异常值处理
+    Q1 = data_df.quantile(0.25)
+    Q3 = data_df.quantile(0.75)
+    IQR = Q3 - Q1
+    data_df = data_df[~((data_df < (Q1 - 1.5 * IQR)) | (data_df > (Q3 + 1.5 * IQR))).any(axis=1)]
 
     # 时间排序，保证后面切分序列时是按时间顺序排列
     data_df.sort_values('timestamp', inplace = True)
@@ -164,64 +179,6 @@ class Attention(nn.Module):
         output = torch.sum(weighted, dim = 1)  # (batch_size, input_dim)
         return output
 
-# 1: EModel_FeatureWeight (LSTM + Transformer + Attention)
-class EModel_FeatureWeight(nn.Module):
-    def __init__(self, feature_dim):
-        super(EModel_FeatureWeight, self).__init__()
-        self.feature_dim = feature_dim
-
-        # 可学习特征权重, shape = (feature_dim,)
-        self.feature_importance = nn.Parameter(
-            torch.ones(feature_dim), requires_grad = True
-        )
-
-        self.lstm = nn.LSTM(
-            input_size = feature_dim,
-            hidden_size = 128,
-            num_layers = 2,
-            batch_first = True,
-            bidirectional = True,
-            dropout = 0.2
-        )
-
-        # Transformer
-        self.pos_encoder = PositionalEncoding(d_model = 2 * 128)
-        encoder_layer = nn.TransformerEncoderLayer(d_model = 2 * 128, nhead = 8, batch_first = True)
-        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers = 2)
-
-        # Attention
-        self.attention = Attention(input_dim = 2 * 128)
-
-        # 输出层
-        self.fc = nn.Sequential(
-            nn.Linear(2 * 128, 128),
-            nn.ReLU(),
-            nn.Dropout(0.3),
-            nn.Linear(128, 1)
-        )
-
-    def forward(self, x):
-        """
-        x shape: (batch, seq_len, feature_dim)
-        """
-        # 对特征做通道级别的权重加成
-        x = x * self.feature_importance.unsqueeze(0).unsqueeze(0)
-
-        # LSTM
-        lstm_out, _ = self.lstm(x)  # shape: (batch, seq_len, 2 * hidden_size = 256)
-
-        # Transformer
-        t_out = self.pos_encoder(lstm_out)
-        t_out = self.transformer_encoder(t_out)  # shape: (batch, seq_len, 256)
-
-        # Attention
-        attn_out = self.attention(t_out)  # (batch, 256)
-
-        # 输出
-        out = self.fc(attn_out)  # (batch, 1)
-        return out.squeeze(-1)
-
-# 2: EModel_BiGRU (双向 GRU + Transformer + Attention)，含特征权重
 class EModel_BiGRU(nn.Module):
     def __init__(self, feature_dim):
         super(EModel_BiGRU, self).__init__()
@@ -320,25 +277,14 @@ def train_model(model, train_loader, val_loader, model_name = 'Model'):
     """
     训练函数，返回本模型在训练过程中每个 epoch 的 train_loss, val_loss, val_rmse 三条曲线
     """
-    # 使用 SmoothL1Loss (Huber Loss)
-    criterion = nn.SmoothL1Loss(beta=1.0)
-    optimizer = AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
-
-    # 学习率调度器
-    total_steps = num_epochs * len(train_loader)
-    warmup_steps = int(0.1 * total_steps)
-    def lr_lambda(current_step):
-        if current_step < warmup_steps:
-            return float(current_step) / float(max(1, warmup_steps))
-        else:
-            return max(0.0, 1 - (current_step - warmup_steps) / (total_steps - warmup_steps))
-    scheduler = LambdaLR(optimizer, lr_lambda)
+    criterion = nn.SmoothL1Loss(beta = 1.0)
+    optimizer = AdamW(model.parameters(), lr = learning_rate, weight_decay = weight_decay)
+    scheduler = ReduceLROnPlateau(optimizer, mode = 'min', factor = 0.1, patience = 5, verbose = True)
 
     best_val_loss = float('inf')
     counter = 0
     global_step = 0
 
-    # ❶ 用于保存曲线
     train_loss_history = []
     val_loss_history   = []
     val_rmse_history   = []
@@ -357,118 +303,44 @@ def train_model(model, train_loader, val_loader, model_name = 'Model'):
             loss = criterion(preds, batch_labels)
             loss.backward()
 
-            # 梯度裁剪
-            clip_grad_norm_(model.parameters(), max_norm=5.0)
-
+            clip_grad_norm_(model.parameters(), max_norm = 5.0)
             optimizer.step()
-            scheduler.step()
 
             running_loss += loss.item() * batch_inputs.size(0)
             num_samples  += batch_inputs.size(0)
             global_step  += 1
 
-        # 计算本 epoch 训练集平均损失
         train_loss = running_loss / num_samples
-
-        # 验证集评估
         val_loss, val_rmse, _, _ = evaluate(model, val_loader, criterion)
 
-        # ❷ 记录本 epoch 的指标
         train_loss_history.append(train_loss)
         val_loss_history.append(val_loss)
         val_rmse_history.append(val_rmse)
 
-        print(f"[{model_name}] Epoch {epoch+1}/{num_epochs}, "
-              f"Train Loss(log): {train_loss:.4f}, "
-              f"Val Loss(log): {val_loss:.4f}, RMSE(log): {val_rmse:.4f}")
+        logger.info(f"[{model_name}] Epoch {epoch + 1}/{num_epochs}, "
+                    f"Train Loss(log): {train_loss:.4f}, "
+                    f"Val Loss(log): {val_loss:.4f}, RMSE(log): {val_rmse:.4f}")
 
-        # 早停机制 & 保存最优权重
+        scheduler.step(val_loss)
+
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             counter = 0
             torch.save(model.state_dict(), f"best_{model_name}.pth")
-            print(f"[{model_name}] 模型已保存。")
+            logger.info(f"[{model_name}] 模型已保存。")
         else:
             counter += 1
             if counter >= patience:
-                print(f"[{model_name}] 验证集无改善，提前停止。")
+                logger.info(f"[{model_name}] 验证集无改善，提前停止。")
                 break
 
-    # ❸ 返回曲线数据，便于后续画图
     return train_loss_history, val_loss_history, val_rmse_history
-
-
 # ---------------------------
-# 4. 可视化对比曲线
-# ---------------------------
-def plot_predictions_comparison(y_actual_log, y_pred_model1, y_pred_model2, model1_name='Model1', model2_name='Model2'):
-    """
-    在同一张图上画 Actual(log), Model1, Model2 三条曲线
-    y_actual_log: 对数域下的真实值
-    """
-    plt.figure(figsize=(10,5))
-    x_axis = np.arange(len(y_actual_log))
-
-    plt.plot(x_axis, y_actual_log, 'r-o', label='Actual (log)', linewidth=1)
-    plt.plot(x_axis, y_pred_model1, 'g--*', label=model1_name, linewidth=1)
-    plt.plot(x_axis, y_pred_model2, 'b-.*', label=model2_name, linewidth=1)
-
-    plt.xlabel('Index')
-    plt.ylabel('Value (log domain)')
-    plt.title(f'Comparison: Actual (log) vs {model1_name} vs {model2_name}')
-    plt.legend()
-    plt.grid(True)
-    plt.tight_layout()
-    plt.show()
-
-def plot_training_curves(train_loss_history, val_loss_history, val_rmse_history, model_name='Model'):
-    """
-    在同一张图中绘制训练集 Loss、验证集 Loss、以及验证集 RMSE 三条曲线
-    你也可以按照需求只画两条线，或者拆分成多个子图
-    """
-    epochs = range(1, len(train_loss_history) + 1)
-
-    plt.figure(figsize=(10,5))
-    # 训练/验证 Loss
-    plt.plot(epochs, train_loss_history, 'r-o', label='Train Loss (log domain)')
-    plt.plot(epochs, val_loss_history, 'b-o', label='Val Loss (log domain)')
-
-    # 验证 RMSE
-    plt.plot(epochs, val_rmse_history, 'g--*', label='Val RMSE (log domain)')
-
-    plt.xlabel('Epoch')
-    plt.ylabel('Loss / RMSE (log domain)')
-    plt.title(f'Training Curves for {model_name}')
-    plt.legend()
-    plt.grid(True)
-    plt.tight_layout()
-    plt.show()
-
-def plot_two_model_val_rmse(val_rmseA, val_rmseB, labelA='ModelA', labelB='ModelB'):
-    """
-    在同一张图中对比两个模型的验证集 RMSE 曲线
-    """
-    epochsA = range(1, len(val_rmseA) + 1)
-    epochsB = range(1, len(val_rmseB) + 1)
-
-    plt.figure(figsize=(8,5))
-    plt.plot(epochsA, val_rmseA, 'r-o', label=f'{labelA} Val RMSE')
-    plt.plot(epochsB, val_rmseB, 'b-o', label=f'{labelB} Val RMSE')
-
-    plt.xlabel('Epoch')
-    plt.ylabel('RMSE (log domain)')
-    plt.title('Validation RMSE Comparison')
-    plt.legend()
-    plt.grid(True)
-    plt.tight_layout()
-    plt.show()
-
-# ---------------------------
-# 5. 主函数
+# 4. 主函数
 # ---------------------------
 def main():
     # 1) 加载 & 特征工程
-    print("[Info] Loading and preprocessing data...")
+    logger.info("[Info] Loading and preprocessing data...")
     data_df = load_data()
     data_all, feature_cols, target_col = feature_engineering(data_df)
 
@@ -479,7 +351,7 @@ def main():
         window_size=window_size, 
         feature_dim=feature_dim
     )
-    print(f"[Info] X_all shape: {X_all.shape}, y_all shape: {y_all.shape}")
+    logger.info(f"[Info] X_all shape: {X_all.shape}, y_all shape: {y_all.shape}")
 
     # 3) 划分数据集: 8:1:1
     total_samples = X_all.shape[0]
@@ -490,7 +362,7 @@ def main():
     X_train, y_train = X_all[:train_size], y_all[:train_size]
     X_val,   y_val   = X_all[train_size : train_size+val_size], y_all[train_size : train_size+val_size]
     X_test,  y_test  = X_all[train_size+val_size : ], y_all[train_size+val_size : ]
-    print(f"[Info] Split data => Train: {train_size}, Val: {val_size}, Test: {test_size}")
+    logger.info(f"[Info] Split data => Train: {train_size}, Val: {val_size}, Test: {test_size}")
 
     # 4) 构建 DataLoader
     train_dataset = TensorDataset(
@@ -526,49 +398,27 @@ def main():
     )
 
     # 5) 实例化模型
-    print("[Info] Building models...")
-    modelA = EModel_FeatureWeight(feature_dim).to(device)
-    modelB = EModel_BiGRU(feature_dim).to(device)
+    logger.info("[Info] Building model...")
+    model = EModel_BiGRU(feature_dim).to(device)
 
     # 6) 训练模型
-    print("\n========== Train EModel_FeatureWeight ==========")
-    train_model(modelA, train_loader, val_loader, model_name='EModel_FeatureWeight')
-
-    print("\n========== Train EModel_BiGRU ==========")
-    train_model(modelB, train_loader, val_loader, model_name='EModel_BiGRU')
-
-    print("[Info] Building models...")
-    modelA = EModel_FeatureWeight(feature_dim).to(device)
-    modelB = EModel_BiGRU(feature_dim).to(device)
-
-    print("\n========== Train EModel_FeatureWeight ==========")
-    train_lossA, val_lossA, val_rmseA = train_model(
-        modelA, train_loader, val_loader, model_name='EModel_FeatureWeight'
-    )
-
-    print("\n========== Train EModel_BiGRU ==========")
-    train_lossB, val_lossB, val_rmseB = train_model(
-        modelB, train_loader, val_loader, model_name='EModel_BiGRU'
+    logger.info("[Info] Training model...")
+    train_loss, val_loss, val_rmse = train_model(
+        model, train_loader, val_loader, model_name='EModel_BiGRU'
     )
 
     # 7) 加载最优权重
-    print("\n[Info] Loading best model weights...")
-    best_modelA = EModel_FeatureWeight(feature_dim).to(device)
-    best_modelA.load_state_dict(torch.load('best_EModel_FeatureWeight.pth'))
-
-    best_modelB = EModel_BiGRU(feature_dim).to(device)
-    best_modelB.load_state_dict(torch.load('best_EModel_BiGRU.pth'))
+    logger.info("[Info] Loading best model weights...")
+    model.load_state_dict(torch.load('best_EModel_BiGRU.pth'))
 
     # 8) 测试集评估
-    print("\n[Info] Testing...")
+    logger.info("[Info] Testing...")
     criterion = nn.SmoothL1Loss(beta=1.0)
-    test_lossA, test_rmseA, predsA, labelsA = evaluate(best_modelA, test_loader, criterion)
-    test_lossB, test_rmseB, predsB, _       = evaluate(best_modelB, test_loader, criterion)
+    test_loss, test_rmse, preds, labels = evaluate(model, test_loader, criterion)
 
-    print("\n========== Test Results (Original) ==========")
-    print(f"[EModel_FeatureWeight] => Test Loss(log): {test_lossA:.4f}, RMSE(log): {test_rmseA:.4f}")
-    print(f"[EModel_BiGRU]         => Test Loss(log): {test_lossB:.4f}, RMSE(log): {test_rmseB:.4f}")
+    logger.info(f"\n[Info] Test Results => Test Loss(log): {test_loss:.4f}, RMSE(log): {test_rmse:.4f}")
 
+    # 平滑预测结果
     def smooth_predictions(preds, window=5):
         """
         简单的滑动平均平滑, window 可以根据需求调整
@@ -578,77 +428,43 @@ def main():
             smoothed[i] = np.mean(preds[i-window:i])
         return smoothed
 
-    # 对两个模型的预测分别做平滑
-    predsA_smooth = smooth_predictions(predsA, window=5)
-    predsB_smooth = smooth_predictions(predsB, window=5)
+    preds_smooth = smooth_predictions(preds, window=5)
 
-    # 如果你需要查看平滑后的 RMSE，可在这里单独计算
-    test_rmseA_smooth = np.sqrt(mean_squared_error(labelsA, predsA_smooth))
-    test_rmseB_smooth = np.sqrt(mean_squared_error(labelsA, predsB_smooth))
+    # 计算平滑后的 RMSE
+    test_rmse_smooth = np.sqrt(mean_squared_error(labels, preds_smooth))
+    logger.info(f"\n[Info] Smoothed Test RMSE(log): {test_rmse_smooth:.4f}")
 
-    print("\n========== Test Results (Smoothed) ==========")
-    print(f"[EModel_FeatureWeight] => Smoothed RMSE(log): {test_rmseA_smooth:.4f}")
-    print(f"[EModel_BiGRU]         => Smoothed RMSE(log): {test_rmseB_smooth:.4f}")
+    # 将平滑后的预测值从对数域转回原空间
+    preds_smooth_real = np.expm1(preds_smooth)
+    labels_real       = np.expm1(labels)  # labels 也在 log(1 + y) 域，需一起转回
 
-    # 1) 将平滑后的预测值 predsA_smooth / predsB_smooth 从对数域转回原空间
-    predsA_smooth_real = np.expm1(predsA_smooth)
-    predsB_smooth_real = np.expm1(predsB_smooth)
-    labels_real        = np.expm1(labelsA)  # labelsA 也在 log(1 + y) 域，需一起转回
+    # 计算在原空间的 RMSE
+    test_rmse_smooth_real = np.sqrt(mean_squared_error(labels_real, preds_smooth_real))
+    logger.info(f"\n[Info] Smoothed Test RMSE(real): {test_rmse_smooth_real:.4f}")
 
-    # 2) 如果需要查看平滑后在原空间的 RMSE
-    test_rmseA_smooth_real = np.sqrt(mean_squared_error(labels_real, predsA_smooth_real))
-    test_rmseB_smooth_real = np.sqrt(mean_squared_error(labels_real, predsB_smooth_real))
-
-    print("\n========== Test Results (Smoothed, Real Domain) ==========")
-    print(f"[EModel_FeatureWeight] => Smoothed RMSE(real): {test_rmseA_smooth_real:.4f}")
-    print(f"[EModel_BiGRU]         => Smoothed RMSE(real): {test_rmseB_smooth_real:.4f}")
-
-    # 3) 可视化：在原空间
-    def plot_predictions_comparison_real(y_actual, y_pred_model1, y_pred_model2,
-                                        model1_name='Model1', model2_name='Model2'):
+    # 可视化：在原空间
+    def plot_predictions_comparison_real(y_actual, y_pred, model_name='Model'):
         plt.figure(figsize=(12,5))
         x_axis = np.arange(len(y_actual))
 
         plt.plot(x_axis, y_actual, 'r-o', label='Actual (real)', linewidth=1)
-        plt.plot(x_axis, y_pred_model1, 'g--*', label=model1_name, linewidth=1)
-        plt.plot(x_axis, y_pred_model2, 'b-.*', label=model2_name, linewidth=1)
+        plt.plot(x_axis, y_pred, 'g--*', label=model_name, linewidth=1)
 
         plt.xlabel('Index')
         plt.ylabel('Value (real domain)')
-        plt.title(f'Comparison: Actual (real) vs {model1_name} vs {model2_name}')
+        plt.title(f'Comparison: Actual (real) vs {model_name}')
         plt.legend()
         plt.grid(True)
         plt.tight_layout()
         plt.show()
 
     plot_predictions_comparison_real(
-        y_actual        = labels_real,
-        y_pred_model1   = predsA_smooth_real,
-        y_pred_model2   = predsB_smooth_real,
-        model1_name     = 'EModel_FeatureWeight (smooth, real)',
-        model2_name     = 'EModel_BiGRU (smooth, real)'
+        y_actual=labels_real,
+        y_pred=preds_smooth_real,
+        model_name='EModel_BiGRU (smooth, real)'
     )
 
-    # 最后可视化时，使用平滑后的预测结果
-    plot_predictions_comparison(
-        y_actual_log    = labelsA,
-        y_pred_model1   = predsA_smooth,  # 使用平滑后预测
-        y_pred_model2   = predsB_smooth,  # 使用平滑后预测
-        model1_name     = 'EModel_FeatureWeight (smooth)',
-        model2_name     = 'EModel_BiGRU (smooth)'
-    )
-    # 分别画出两个模型的曲线
-    plot_training_curves(train_lossA, val_lossA, val_rmseA, model_name='EModel_FeatureWeight')
-    plot_training_curves(train_lossB, val_lossB, val_rmseB, model_name='EModel_BiGRU')
-
-    plot_two_model_val_rmse(
-    val_rmseA, 
-    val_rmseB, 
-    labelA='EModel_FeatureWeight',
-    labelB='EModel_BiGRU'
-)
-
-    print("[Info] Done!")
+    logger.info("[Info] Done!")
 
 if __name__ == "__main__":
     main()

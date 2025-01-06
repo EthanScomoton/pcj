@@ -4,23 +4,24 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import LambdaLR
-from torch.utils.data import DataLoader, TensorDataset, random_split
+from torch.utils.data import DataLoader, TensorDataset
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.metrics import mean_squared_error
+from torch.nn.utils import clip_grad_norm_
 
 # ---------------------------
 # 0. 全局超参数
 # ---------------------------
-learning_rate = 1e-5     # 学习率，可酌情调大/调小
-num_epochs = 200          # 训练轮数
-batch_size = 128          # 批次大小
-weight_decay = 1e-4      # L2正则化
-patience = 5             # 早停轮数
-num_workers = 0          # DataLoader 进程数
-window_size = 24         # 多步时序窗口(举例: 24 表示过去 24 小时)
+learning_rate = 1e-4       # 学习率调低
+num_epochs = 300           # 训练轮数适当调高
+batch_size = 128           # 批次大小
+weight_decay = 1e-4        # L2正则化
+patience = 10              # 早停轮数增大
+num_workers = 0            # DataLoader 进程数
+window_size = 48           # 多步时序窗口从 24 改大为 48
 
 # 设置随机种子
 torch.manual_seed(42)
@@ -92,7 +93,6 @@ def feature_engineering(data_df):
     # 数值标准化 (只对特征做标准化, 不对 'target_log' 做)
     scaler_X = StandardScaler()
 
-    # 最后 1 列是 target_log，不需要参与 scaler
     data_selected[feature_columns] = scaler_X.fit_transform(
         data_selected[feature_columns].values
     )
@@ -141,7 +141,6 @@ class PositionalEncoding(nn.Module):
 
     def forward(self, x):
         # x shape: (batch, seq_len, d_model)
-        # 这里以 seq_len 维度进行 pe[:x.size(1)]
         seq_len = x.size(1)
         x = x + self.pe[:seq_len, 0, :]
         return x
@@ -161,12 +160,11 @@ class Attention(nn.Module):
         attn_weights = self.attention(x)  # (batch_size, seq_length, 1)
         attn_weights = self.dropout(attn_weights)
         attn_weights = F.softmax(attn_weights, dim = 1)
-        weighted = x * attn_weights  # 广播机制
+        weighted = x * attn_weights  # (batch_size, seq_length, input_dim)
         output = torch.sum(weighted, dim = 1)  # (batch_size, input_dim)
         return output
 
-# 1: EModel_FeatureWeight (LSTM/Transformer)
-# 这里的特征权重只针对 "feature_dim" 部分，而不是每个时间步都不一样
+# 1: EModel_FeatureWeight (LSTM + Transformer + Attention)
 class EModel_FeatureWeight(nn.Module):
     def __init__(self, feature_dim):
         super(EModel_FeatureWeight, self).__init__()
@@ -206,16 +204,13 @@ class EModel_FeatureWeight(nn.Module):
         """
         x shape: (batch, seq_len, feature_dim)
         """
-        # 对特征做通道级别的权重加成 (仅对 feature_dim)
-        # unsqueeze 在 dim=1 进行广播 =>  (1, 1, feature_dim)
-        # 也可以在 forward 里对 x[..., j] *= feature_importance[j]
+        # 对特征做通道级别的权重加成
         x = x * self.feature_importance.unsqueeze(0).unsqueeze(0)
 
         # LSTM
         lstm_out, _ = self.lstm(x)  # shape: (batch, seq_len, 2*hidden_size=256)
 
         # Transformer
-        # 在 seq_len 维度添加 positional encoding
         t_out = self.pos_encoder(lstm_out)
         t_out = self.transformer_encoder(t_out)  # shape: (batch, seq_len, 256)
 
@@ -223,10 +218,10 @@ class EModel_FeatureWeight(nn.Module):
         attn_out = self.attention(t_out)  # (batch, 256)
 
         # 输出
-        out = self.fc(attn_out)
+        out = self.fc(attn_out)  # (batch, 1)
         return out.squeeze(-1)
 
-# 2: EModel_BiGRU (双层 GRU + Transformer)，无特征权重
+# 2: EModel_BiGRU (双向GRU + Transformer + Attention)，含特征权重
 class EModel_BiGRU(nn.Module):
     def __init__(self, feature_dim):
         super(EModel_BiGRU, self).__init__()
@@ -277,14 +272,14 @@ class EModel_BiGRU(nn.Module):
         x = x * self.feature_importance.unsqueeze(0).unsqueeze(0)
         
         # BiGRU
-        gru_out, _ = self.bigru(x)  # shape: (batch, seq_len, 2 * 128 = 256)
+        gru_out, _ = self.bigru(x)  # shape: (batch, seq_len, 2 * 128)
 
         # Transformer
         t_out = self.pos_encoder(gru_out)
-        t_out = self.transformer_encoder(t_out)  # shape: (batch, seq_len, 256)
+        t_out = self.transformer_encoder(t_out)
 
         # Attention
-        attn_out = self.attention(t_out)  # (batch, 256)
+        attn_out = self.attention(t_out)
 
         # 输出
         out = self.fc(attn_out)
@@ -315,14 +310,16 @@ def evaluate(model, dataloader, criterion):
             preds_list.append(outputs.cpu().numpy())
             labels_list.append(batch_labels.cpu().numpy())
 
-    val_loss = running_loss / num_samples   # MSE (log domain)
+    val_loss = running_loss / num_samples   # MSE or SmoothL1 in log domain
     preds_arr = np.concatenate(preds_list, axis = 0)
     labels_arr = np.concatenate(labels_list, axis = 0)
     rmse_log = np.sqrt(mean_squared_error(labels_arr, preds_arr))
     return val_loss, rmse_log, preds_arr, labels_arr
 
 def train_model(model, train_loader, val_loader, model_name = 'Model'):
-    criterion = nn.MSELoss()
+    # 使用 SmoothL1Loss (Huber Loss)
+    criterion = nn.SmoothL1Loss(beta=1.0)
+    
     optimizer = AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
 
     # 一些学习率调度策略 (可选)
@@ -352,6 +349,10 @@ def train_model(model, train_loader, val_loader, model_name = 'Model'):
             preds = model(batch_inputs)
             loss = criterion(preds, batch_labels)
             loss.backward()
+
+            # --------- 梯度裁剪以稳定训练 ---------
+            clip_grad_norm_(model.parameters(), max_norm=5.0)
+
             optimizer.step()
             scheduler.step()
 
@@ -363,9 +364,10 @@ def train_model(model, train_loader, val_loader, model_name = 'Model'):
         val_loss, val_rmse, _, _ = evaluate(model, val_loader, criterion)
 
         print(f"[{model_name}] Epoch {epoch+1}/{num_epochs}, "
-              f"Train MSE(log): {train_loss:.4f}, "
-              f"Val MSE(log): {val_loss:.4f}, RMSE(log): {val_rmse:.4f}")
+              f"Train Loss(log): {train_loss:.4f}, "
+              f"Val Loss(log): {val_loss:.4f}, RMSE(log): {val_rmse:.4f}")
 
+        # Early Stopping监控
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             counter = 0
@@ -389,8 +391,8 @@ def plot_predictions_comparison(y_actual_log, y_pred_model1, y_pred_model2, mode
     x_axis = np.arange(len(y_actual_log))
 
     plt.plot(x_axis, y_actual_log, 'r-o', label='Actual (log)', linewidth=1)
-    plt.plot(x_axis, y_pred_model1, 'b--*', label=model1_name, linewidth=1)
-    plt.plot(x_axis, y_pred_model2, 'g-.*', label=model2_name, linewidth=1)
+    plt.plot(x_axis, y_pred_model1, 'g--*', label=model1_name, linewidth=1)
+    plt.plot(x_axis, y_pred_model2, 'b-.*', label=model2_name, linewidth=1)
 
     plt.xlabel('Index')
     plt.ylabel('Value (log domain)')
@@ -404,16 +406,12 @@ def plot_predictions_comparison(y_actual_log, y_pred_model1, y_pred_model2, mode
 # 5. 主函数
 # ---------------------------
 def main():
-    # ---------------------------
     # 1) 加载 & 特征工程
-    # ---------------------------
     print("[Info] Loading and preprocessing data...")
     data_df = load_data()
     data_all, feature_cols, target_col = feature_engineering(data_df)
 
-    # ---------------------------
     # 2) 构建多步时序数据
-    # ---------------------------
     feature_dim = len(feature_cols)
     X_all, y_all = create_sequences(
         data_all, 
@@ -422,9 +420,7 @@ def main():
     )
     print(f"[Info] X_all shape: {X_all.shape}, y_all shape: {y_all.shape}")
 
-    # ---------------------------
     # 3) 划分数据集: 8:1:1
-    # ---------------------------
     total_samples = X_all.shape[0]
     train_size = int(0.8 * total_samples)
     val_size   = int(0.1 * total_samples)
@@ -435,9 +431,7 @@ def main():
     X_test,  y_test  = X_all[train_size+val_size : ], y_all[train_size+val_size : ]
     print(f"[Info] Split data => Train: {train_size}, Val: {val_size}, Test: {test_size}")
 
-    # ---------------------------
     # 4) 构建 DataLoader
-    # ---------------------------
     train_dataset = TensorDataset(
         torch.from_numpy(X_train), 
         torch.from_numpy(y_train)
@@ -470,25 +464,19 @@ def main():
         num_workers=num_workers
     )
 
-    # ---------------------------
     # 5) 实例化模型
-    # ---------------------------
     print("[Info] Building models...")
     modelA = EModel_FeatureWeight(feature_dim).to(device)
     modelB = EModel_BiGRU(feature_dim).to(device)
 
-    # ---------------------------
     # 6) 训练模型
-    # ---------------------------
     print("\n========== Train EModel_FeatureWeight ==========")
     train_model(modelA, train_loader, val_loader, model_name='EModel_FeatureWeight')
 
     print("\n========== Train EModel_BiGRU ==========")
     train_model(modelB, train_loader, val_loader, model_name='EModel_BiGRU')
 
-    # ---------------------------
     # 7) 加载最优权重
-    # ---------------------------
     print("\n[Info] Loading best model weights...")
     best_modelA = EModel_FeatureWeight(feature_dim).to(device)
     best_modelA.load_state_dict(torch.load('best_EModel_FeatureWeight.pth'))
@@ -496,27 +484,47 @@ def main():
     best_modelB = EModel_BiGRU(feature_dim).to(device)
     best_modelB.load_state_dict(torch.load('best_EModel_BiGRU.pth'))
 
-    # ---------------------------
     # 8) 测试集评估
-    # ---------------------------
     print("\n[Info] Testing...")
-    criterion = nn.MSELoss()
+    criterion = nn.SmoothL1Loss(beta=1.0)
     test_lossA, test_rmseA, predsA, labelsA = evaluate(best_modelA, test_loader, criterion)
     test_lossB, test_rmseB, predsB, _       = evaluate(best_modelB, test_loader, criterion)
 
-    print("\n========== Test Results ==========")
-    print(f"[EModel_FeatureWeight] => Test MSE(log): {test_lossA:.4f}, RMSE(log): {test_rmseA:.4f}")
-    print(f"[EModel_BiGRU]         => Test MSE(log): {test_lossB:.4f}, RMSE(log): {test_rmseB:.4f}")
+    print("\n========== Test Results (Original) ==========")
+    print(f"[EModel_FeatureWeight] => Test Loss(log): {test_lossA:.4f}, RMSE(log): {test_rmseA:.4f}")
+    print(f"[EModel_BiGRU]         => Test Loss(log): {test_lossB:.4f}, RMSE(log): {test_rmseB:.4f}")
 
     # ---------------------------
-    # 9) 对比可视化 (log域)
-    # ---------------------------
+    # 这里插入后处理平滑的过程
+        # ---------------------------
+    def smooth_predictions(preds, window=5):
+        """
+        简单的滑动平均平滑, window 可以根据需求调整
+        """
+        smoothed = np.copy(preds)
+        for i in range(window, len(preds)):
+            smoothed[i] = np.mean(preds[i-window:i])
+        return smoothed
+
+    # 对两个模型的预测分别做平滑
+    predsA_smooth = smooth_predictions(predsA, window=5)
+    predsB_smooth = smooth_predictions(predsB, window=5)
+
+    # 如果你需要查看平滑后的 RMSE，可在这里单独计算
+    test_rmseA_smooth = np.sqrt(mean_squared_error(labelsA, predsA_smooth))
+    test_rmseB_smooth = np.sqrt(mean_squared_error(labelsA, predsB_smooth))
+
+    print("\n========== Test Results (Smoothed) ==========")
+    print(f"[EModel_FeatureWeight] => Smoothed RMSE(log): {test_rmseA_smooth:.4f}")
+    print(f"[EModel_BiGRU]         => Smoothed RMSE(log): {test_rmseB_smooth:.4f}")
+
+    # 最后可视化时，使用平滑后的预测结果
     plot_predictions_comparison(
         y_actual_log    = labelsA,
-        y_pred_model1   = predsA,
-        y_pred_model2   = predsB,
-        model1_name     = 'EModel_FeatureWeight',
-        model2_name     = 'EModel_BiGRU'
+        y_pred_model1   = predsA_smooth,  # 使用平滑后预测
+        y_pred_model2   = predsB_smooth,  # 使用平滑后预测
+        model1_name     = 'EModel_FeatureWeight (smooth)',
+        model2_name     = 'EModel_BiGRU (smooth)'
     )
     print("[Info] Done!")
 

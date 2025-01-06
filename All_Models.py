@@ -14,10 +14,10 @@ from sklearn.metrics import mean_squared_error
 # ---------------------------
 # 0. 全局超参数
 # ---------------------------
-learning_rate = 1e-6     # 学习率，可酌情调大/调小
+learning_rate = 1e-5     # 学习率，可酌情调大/调小
 num_epochs = 200          # 训练轮数
 batch_size = 128          # 批次大小
-weight_decay = 1e-3      # L2正则化
+weight_decay = 1e-4      # L2正则化
 patience = 5             # 早停轮数
 num_workers = 0          # DataLoader 进程数
 window_size = 24         # 多步时序窗口(举例: 24 表示过去 24 小时)

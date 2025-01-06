@@ -21,7 +21,7 @@ batch_size = 128           # 批次大小
 weight_decay = 1e-4        # L2正则化
 patience = 10              # 早停轮数增大
 num_workers = 0            # DataLoader 进程数
-window_size = 48           # 多步时序窗口从 24 改大为 48
+window_size = 5           # 多步时序窗口
 
 # 设置随机种子
 torch.manual_seed(42)
@@ -517,6 +517,45 @@ def main():
     print("\n========== Test Results (Smoothed) ==========")
     print(f"[EModel_FeatureWeight] => Smoothed RMSE(log): {test_rmseA_smooth:.4f}")
     print(f"[EModel_BiGRU]         => Smoothed RMSE(log): {test_rmseB_smooth:.4f}")
+
+    # 1) 将平滑后的预测值 predsA_smooth / predsB_smooth 从对数域转回原空间
+    predsA_smooth_real = np.expm1(predsA_smooth)
+    predsB_smooth_real = np.expm1(predsB_smooth)
+    labels_real        = np.expm1(labelsA)  # labelsA 也在 log(1 + y) 域，需一起转回
+
+    # 2) 如果需要查看平滑后在原空间的 RMSE
+    test_rmseA_smooth_real = np.sqrt(mean_squared_error(labels_real, predsA_smooth_real))
+    test_rmseB_smooth_real = np.sqrt(mean_squared_error(labels_real, predsB_smooth_real))
+
+    print("\n========== Test Results (Smoothed, Real Domain) ==========")
+    print(f"[EModel_FeatureWeight] => Smoothed RMSE(real): {test_rmseA_smooth_real:.4f}")
+    print(f"[EModel_BiGRU]         => Smoothed RMSE(real): {test_rmseB_smooth_real:.4f}")
+
+    # 3) 可视化：在原空间
+    def plot_predictions_comparison_real(y_actual, y_pred_model1, y_pred_model2,
+                                        model1_name='Model1', model2_name='Model2'):
+        plt.figure(figsize=(10,5))
+        x_axis = np.arange(len(y_actual))
+
+        plt.plot(x_axis, y_actual, 'r-o', label='Actual (real)', linewidth=1)
+        plt.plot(x_axis, y_pred_model1, 'g--*', label=model1_name, linewidth=1)
+        plt.plot(x_axis, y_pred_model2, 'b-.*', label=model2_name, linewidth=1)
+
+        plt.xlabel('Index')
+        plt.ylabel('Value (real domain)')
+        plt.title(f'Comparison: Actual (real) vs {model1_name} vs {model2_name}')
+        plt.legend()
+        plt.grid(True)
+        plt.tight_layout()
+        plt.show()
+
+    plot_predictions_comparison_real(
+        y_actual        = labels_real,
+        y_pred_model1   = predsA_smooth_real,
+        y_pred_model2   = predsB_smooth_real,
+        model1_name     = 'EModel_FeatureWeight (smooth, real)',
+        model2_name     = 'EModel_BiGRU (smooth, real)'
+    )
 
     # 最后可视化时，使用平滑后的预测结果
     plot_predictions_comparison(

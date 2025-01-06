@@ -415,7 +415,7 @@ def main():
     # 2) 构造多步时序样本
     #    feature_dim = len(feature_cols)
     feature_dim = len(feature_cols)
-    X_all, y_all = create_sequences(data_all, window_size=window_size, feature_dim=feature_dim)
+    X_all, y_all = create_sequences(data_all, window_size = window_size, feature_dim = feature_dim)
     print("X_all shape:", X_all.shape)  # (samples, window_size, feature_dim)
     print("y_all shape:", y_all.shape)  # (samples,)
 
@@ -427,21 +427,21 @@ def main():
 
     X_train = X_all[:train_size]
     y_train = y_all[:train_size]
-    X_val = X_all[train_size:train_size+val_size]
-    y_val = y_all[train_size:train_size+val_size]
-    X_test = X_all[train_size+val_size:]
-    y_test = y_all[train_size+val_size:]
+    X_val = X_all[train_size:train_size + val_size]
+    y_val = y_all[train_size:train_size + val_size]
+    X_test = X_all[train_size + val_size:]
+    y_test = y_all[train_size + val_size:]
     
-    # 转 Tensor 并构建 DataLoader
+    # 4) 构建 DataLoader
     train_dataset = TensorDataset(torch.from_numpy(X_train), torch.from_numpy(y_train))
     val_dataset   = TensorDataset(torch.from_numpy(X_val),   torch.from_numpy(y_val))
     test_dataset  = TensorDataset(torch.from_numpy(X_test),  torch.from_numpy(y_test))
 
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers)
-    val_loader   = DataLoader(val_dataset,   batch_size=batch_size, shuffle=False, num_workers=num_workers)
-    test_loader  = DataLoader(test_dataset,  batch_size=batch_size, shuffle=False, num_workers=num_workers)
+    train_loader = DataLoader(train_dataset, batch_size = batch_size, shuffle = True,  num_workers = num_workers)
+    val_loader   = DataLoader(val_dataset,   batch_size = batch_size, shuffle = False, num_workers = num_workers)
+    test_loader  = DataLoader(test_dataset,  batch_size = batch_size, shuffle = False, num_workers = num_workers)
 
-    # 4) 实例化模型
+    # 6) 训练模型
     modelA = EModel_FeatureWeight(feature_dim).to(device)
     modelB = EModel_BiGRU(feature_dim).to(device)
 
@@ -452,14 +452,14 @@ def main():
     print("\n========== Train EModel_BiGRU ==========")
     train_model(modelB, train_loader, val_loader, model_name='EModel_BiGRU')
 
-    # 6) 加载最优权重
+    # 7) 加载最优权重
     best_modelA = EModel_FeatureWeight(feature_dim).to(device)
     best_modelA.load_state_dict(torch.load('best_EModel_FeatureWeight.pth'))
 
     best_modelB = EModel_BiGRU(feature_dim).to(device)
     best_modelB.load_state_dict(torch.load('best_EModel_BiGRU.pth'))
 
-    # 7) 在测试集上推理
+    # 8) 在测试集上推理
     #    这里以一个 dataloader batch_size=len(test_dataset) 的方式一次性取完
     test_loader_for_eval = DataLoader(test_dataset, batch_size=len(test_dataset), shuffle=False)
     with torch.no_grad():

@@ -232,38 +232,38 @@ class EModel_BiGRU(nn.Module):
         super(EModel_BiGRU, self).__init__()
         self.feature_dim = feature_dim
         
-        # 新增：可学习特征权重
+        # 学习特征权重
         self.feature_importance = nn.Parameter(
             torch.ones(feature_dim), requires_grad=True
         )
 
         self.bigru = nn.GRU(
-            input_size=feature_dim,
-            hidden_size=128,
-            num_layers=2,
-            batch_first=True,
-            bidirectional=True,
-            dropout=0.3
+            input_size = feature_dim,
+            hidden_size = 128,
+            num_layers = 2,
+            batch_first = True,
+            bidirectional = True,
+            dropout = 0.3
         )
 
         # Transformer
         self.pos_encoder = PositionalEncoding(d_model=2*128)
         encoder_layer = nn.TransformerEncoderLayer(
-            d_model=2*128,
-            nhead=8,
-            batch_first=True
+            d_model = 2 * 128,
+            nhead = 8,
+            batch_first = True
         )
         self.transformer_encoder = nn.TransformerEncoder(
             encoder_layer,
-            num_layers=2
+            num_layers = 2
         )
 
         # Attention
-        self.attention = Attention(input_dim=2*128)
+        self.attention = Attention(input_dim = 2 * 128)
 
         # 输出层
         self.fc = nn.Sequential(
-            nn.Linear(2*128, 128),
+            nn.Linear(2 * 128, 128),
             nn.ReLU(),
             nn.Dropout(0.3),
             nn.Linear(128, 1)
@@ -410,7 +410,7 @@ def main():
 
     # 2) 构造多步时序样本
     feature_dim = len(feature_cols)
-    X_all, y_all = create_sequences(data_all, window_size=window_size, feature_dim=feature_dim)
+    X_all, y_all = create_sequences(data_all, window_size = window_size, feature_dim = feature_dim)
     print("X_all shape:", X_all.shape)  # (samples, window_size, feature_dim)
     print("y_all shape:", y_all.shape)  # (samples,)
 
@@ -432,9 +432,9 @@ def main():
     val_dataset   = TensorDataset(torch.from_numpy(X_val),   torch.from_numpy(y_val))
     test_dataset  = TensorDataset(torch.from_numpy(X_test),  torch.from_numpy(y_test))
 
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True,  num_workers=num_workers)
-    val_loader   = DataLoader(val_dataset,   batch_size=batch_size, shuffle=False, num_workers=num_workers)
-    test_loader  = DataLoader(test_dataset,  batch_size=batch_size, shuffle=False, num_workers=num_workers)
+    train_loader = DataLoader(train_dataset, batch_size = batch_size, shuffle = True,  num_workers = num_workers)
+    val_loader   = DataLoader(val_dataset,   batch_size = batch_size, shuffle = False, num_workers = num_workers)
+    test_loader  = DataLoader(test_dataset,  batch_size = batch_size, shuffle = False, num_workers = num_workers)
 
     # 5) 实例化模型
     modelA = EModel_FeatureWeight(feature_dim).to(device)

@@ -282,7 +282,7 @@ def evaluate(model, dataloader, criterion):
     在验证或测试集上评估模型，返回平均loss、RMSE以及预测值和标签(标准化空间下)
     """
     model.eval()
-    running_loss, num_samples = 0.0, 0
+    running_loss, num_samples = 0.2, 0
     preds_list, labels_list   = [], []
 
     with torch.no_grad():

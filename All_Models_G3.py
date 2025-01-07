@@ -5,6 +5,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
+import seaborn as sns
 
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import LambdaLR
@@ -305,11 +306,12 @@ def evaluate(model, dataloader, criterion):
     rmse_std   = np.sqrt(mean_squared_error(labels_arr, preds_arr))
     return val_loss, rmse_std, preds_arr, labels_arr
 
-def train_model(model, train_loader, val_loader, model_name='Model'):
+def train_model(model, train_loader, val_loader, model_name='Model', feature_names=None):
     """
-    训练并验证单个模型，返回训练过程中的损失和RMSE曲线，以便后续绘图或比较
+    新增参数 feature_names: 用于可视化时显示哪些特征(列名)
+    训练并验证单个模型，返回训练过程中的损失和RMSE曲线 + 该模型各epoch的特征权重
     """
-    criterion = nn.SmoothL1Loss(beta = 1.0)  # 可改成MSELoss
+    criterion = nn.SmoothL1Loss(beta=1.0)  # 可改成MSELoss
     optimizer = AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
 
     # 学习率调度器(含warmup)
@@ -332,6 +334,9 @@ def train_model(model, train_loader, val_loader, model_name='Model'):
     val_loss_history   = []
     val_rmse_history   = []
 
+    # 用于记录每个 epoch 的特征权重（若模型中有 feature_importance）
+    feature_importance_history = []
+
     for epoch in range(num_epochs):
         model.train()
         running_loss, num_samples = 0.0, 0
@@ -345,7 +350,7 @@ def train_model(model, train_loader, val_loader, model_name='Model'):
             loss  = criterion(preds, batch_labels)
             loss.backward()
 
-            clip_grad_norm_(model.parameters(), max_norm = 5.0)
+            clip_grad_norm_(model.parameters(), max_norm=5.0)
             optimizer.step()
             scheduler.step()
 
@@ -365,6 +370,13 @@ def train_model(model, train_loader, val_loader, model_name='Model'):
               f"Val Loss(std): {val_loss:.4f}, "
               f"RMSE(std): {val_rmse_std:.4f}")
 
+        # ========== 记录当前 epoch 的特征权重 ========== 
+        # 若模型里有 feature_importance，我们就存下来
+        if hasattr(model, 'feature_importance'):
+            # 例如 EModel_FeatureWeight / EModel_BiGRU 就有
+            current_fi = model.feature_importance.detach().cpu().numpy().copy()
+            feature_importance_history.append(current_fi)
+
         # Early Stopping 及最优模型保存
         if val_loss < best_val_loss:
             best_val_loss = val_loss
@@ -377,7 +389,11 @@ def train_model(model, train_loader, val_loader, model_name='Model'):
                 print(f"[{model_name}] 验证集无改善，提前停止。")
                 break
 
-    return train_loss_history, val_loss_history, val_rmse_history
+    return (train_loss_history, 
+            val_loss_history, 
+            val_rmse_history, 
+            feature_importance_history)
+
 
 # ---------------------------
 # 4. 可视化
@@ -441,6 +457,36 @@ def plot_two_model_val_rmse(val_rmseA, val_rmseB, labelA='ModelA', labelB = 'Mod
     plt.tight_layout()
     plt.show()
 
+def plot_feature_importance_history(feature_importance_history, feature_names, model_name='Model'):
+    """
+    将多个 epoch 的特征权重用热力图可视化:
+      - x 轴: epoch
+      - y 轴: 不同特征
+      - color: 权重大小(可正可负)
+    """
+    if len(feature_importance_history) == 0:
+        print(f"[{model_name}] No feature_importance to plot.")
+        return
+    
+    # feature_importance_history: list of 1D array, shape=[feature_dim], length=epochs
+    # 堆叠成 2D array => [epochs, feature_dim]
+    fi_array = np.stack(feature_importance_history, axis=0)  # shape: (epochs, feature_dim)
+    
+    # 转置 => [feature_dim, epochs]，便于画 heatmap 时 y 轴是 feature
+    fi_array_t = fi_array.T
+
+    plt.figure(figsize=(10, 6))
+    sns.heatmap(fi_array_t, cmap='RdBu_r', center=0,  # 0 作为中心(红蓝两端)
+                xticklabels=range(1, fi_array.shape[0]+1),
+                yticklabels=feature_names,
+                annot=True, fmt=".2f")
+
+    plt.xlabel("Epoch")
+    plt.ylabel("Feature")
+    plt.title(f"Feature Importance Heatmap - {model_name}")
+    plt.tight_layout()
+    plt.show()
+
 # ---------------------------
 # 5. 主函数
 # ---------------------------
@@ -450,7 +496,7 @@ def main():
     data_all, feature_cols, target_col, scaler_y = feature_engineering(data_df)
 
     feature_dim = len(feature_cols)
-    X_all, y_all = create_sequences(data_all, window_size = window_size, feature_dim = feature_dim)
+    X_all, y_all = create_sequences(data_all, window_size=window_size, feature_dim=feature_dim)
     print(f"[Info] X_all shape: {X_all.shape}, y_all shape: {y_all.shape}")
 
     # 数据集切分
@@ -464,26 +510,39 @@ def main():
     X_test,  y_test  = X_all[train_size+val_size:], y_all[train_size+val_size:]
     print(f"[Info] Split data => Train: {train_size}, Val: {val_size}, Test: {test_size}")
 
-    # 构建DataLoader
     train_dataset = TensorDataset(torch.from_numpy(X_train), torch.from_numpy(y_train))
     val_dataset   = TensorDataset(torch.from_numpy(X_val),   torch.from_numpy(y_val))
     test_dataset  = TensorDataset(torch.from_numpy(X_test),  torch.from_numpy(y_test))
 
-    train_loader = DataLoader(train_dataset, batch_size = batch_size, shuffle = True,  num_workers = num_workers)
-    val_loader   = DataLoader(val_dataset,   batch_size = batch_size, shuffle = False, num_workers = num_workers)
-    test_loader  = DataLoader(test_dataset,  batch_size = batch_size, shuffle = False, num_workers = num_workers)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True,  num_workers=num_workers)
+    val_loader   = DataLoader(val_dataset,   batch_size=batch_size, shuffle=False, num_workers=num_workers)
+    test_loader  = DataLoader(test_dataset,  batch_size=batch_size, shuffle=False, num_workers=num_workers)
 
     print("[Info] Building models...")
     modelA = EModel_FeatureWeight(feature_dim).to(device)
     modelB = EModel_BiGRU(feature_dim).to(device)
 
     print("\n========== Train EModel_FeatureWeight ==========")
-    train_lossA, val_lossA, val_rmseA = train_model(modelA, train_loader, val_loader, model_name = 'EModel_FeatureWeight')
+    (train_lossA, val_lossA, val_rmseA, fi_historyA) = train_model(
+        modelA, train_loader, val_loader, 
+        model_name='EModel_FeatureWeight', 
+        feature_names=feature_cols
+    )
 
     print("\n========== Train EModel_BiGRU ==========")
-    train_lossB, val_lossB, val_rmseB = train_model(modelB, train_loader, val_loader, model_name = 'EModel_BiGRU')
+    (train_lossB, val_lossB, val_rmseB, fi_historyB) = train_model(
+        modelB, train_loader, val_loader, 
+        model_name='EModel_BiGRU', 
+        feature_names=feature_cols
+    )
 
-    # 加载最优权重
+    # ----------------- 绘制特征权重热力图 -----------------
+    # 对 modelA
+    plot_feature_importance_history(fi_historyA, feature_cols, model_name='EModel_FeatureWeight')
+    # 对 modelB
+    plot_feature_importance_history(fi_historyB, feature_cols, model_name='EModel_BiGRU')
+
+    # ----------------- 加载最优权重 & 测试阶段 -----------------
     best_modelA = EModel_FeatureWeight(feature_dim).to(device)
     best_modelA.load_state_dict(torch.load('best_EModel_FeatureWeight.pth'))
 
@@ -491,7 +550,7 @@ def main():
     best_modelB.load_state_dict(torch.load('best_EModel_BiGRU.pth'))
 
     print("\n[Info] Testing...")
-    criterion = nn.SmoothL1Loss(beta = 1.0)
+    criterion = nn.SmoothL1Loss(beta=1.0)
     test_lossA, test_rmseA_std, predsA_std, labelsA_std = evaluate(best_modelA, test_loader, criterion)
     test_lossB, test_rmseB_std, predsB_std, _           = evaluate(best_modelB, test_loader, criterion)
 
@@ -500,9 +559,9 @@ def main():
     print(f"[EModel_BiGRU]         => Test Loss(std): {test_lossB:.4f}, RMSE(std): {test_rmseB_std:.4f}")
 
     # 反标准化
-    predsA_real   = scaler_y.inverse_transform(predsA_std.reshape(-1,1)).ravel()
-    predsB_real   = scaler_y.inverse_transform(predsB_std.reshape(-1,1)).ravel()
-    labelsA_real  = scaler_y.inverse_transform(labelsA_std.reshape(-1,1)).ravel()
+    predsA_real  = scaler_y.inverse_transform(predsA_std.reshape(-1,1)).ravel()
+    predsB_real  = scaler_y.inverse_transform(predsB_std.reshape(-1,1)).ravel()
+    labelsA_real = scaler_y.inverse_transform(labelsA_std.reshape(-1,1)).ravel()
 
     # 在原空间重新计算RMSE
     test_rmseA_real = np.sqrt(mean_squared_error(labelsA_real, predsA_real))
@@ -520,11 +579,9 @@ def main():
         model1_name        = 'EModel_FeatureWeight',
         model2_name        = 'EModel_BiGRU'
     )
-
-    plot_training_curves(train_lossA, val_lossA, val_rmseA, model_name = 'EModel_FeatureWeight')
-    plot_training_curves(train_lossB, val_lossB, val_rmseB, model_name = 'EModel_BiGRU')
-
-    plot_two_model_val_rmse(val_rmseA, val_rmseB, labelA='EModel_FeatureWeight', labelB = 'EModel_BiGRU')
+    plot_training_curves(train_lossA, val_lossA, val_rmseA, model_name='EModel_FeatureWeight')
+    plot_training_curves(train_lossB, val_lossB, val_rmseB, model_name='EModel_BiGRU')
+    plot_two_model_val_rmse(val_rmseA, val_rmseB, labelA='EModel_FeatureWeight', labelB='EModel_BiGRU')
 
     print("[Info] Done!")
 

@@ -22,7 +22,7 @@ batch_size    = 128
 weight_decay  = 1e-4
 patience      = 10
 num_workers   = 0
-window_size   = 5
+window_size   = 3
 
 # 设置随机种子
 torch.manual_seed(42)

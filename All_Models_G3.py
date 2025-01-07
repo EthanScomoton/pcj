@@ -65,14 +65,13 @@ def feature_engineering(data_df):
     data_df['month_cos']     = np.cos(2 * np.pi * (data_df['month'] - 1) / 12)
 
     # 待LabelEncoder的列
-    renewable_features = ['season', 'holiday', 'weather', 'temperature',
-                          'working_hours', 'E_PV', 'E_storage_discharge',
-                          'E_grid', 'ESCFR', 'ESCFG']
+    renewable_features = ['season', 'holiday', 'weather', 'temperature','working_hours', 'E_PV', 'E_storage_discharge','E_grid', 'ESCFR', 'ESCFG']
     load_features      = ['ship_grade', 'dock_position', 'destination']
-    for col in renewable_features + load_features:
-        if col in data_df.columns:
-            le = LabelEncoder()
-            data_df[col] = le.fit_transform(data_df[col].astype(str))
+    
+    for col in renewable_features + load_features:  # 遍历 renewable_features 和 load_features 列表中的每一个列名
+        if col in data_df.columns:                  # 如果列名在数据框 data_df 的列中
+            le = LabelEncoder()                     # 创建一个 LabelEncoder 实例
+            data_df[col] = le.fit_transform(data_df[col].astype(str))  # 对该列进行标签编码，并将结果赋值回该列
 
     time_feature_cols = [
         'dayofweek_sin', 'dayofweek_cos',
@@ -122,17 +121,59 @@ class PositionalEncoding(nn.Module):
         super(PositionalEncoding, self).__init__()
         pe = torch.zeros(max_len, d_model)
         position = torch.arange(0, max_len, dtype=torch.float32).unsqueeze(1)
-        div_term = torch.exp(
-            torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model)
-        )
+        div_term = torch.exp(-(torch.arange(0, d_model, 2).float() * math.log(10000.0) / d_model))
         pe[:, 0::2] = torch.sin(position * div_term)
         pe[:, 1::2] = torch.cos(position * div_term)
-        pe = pe.unsqueeze(1)
+        pe = pe.unsqueeze(1)  # shape: (max_len, 1, d_model)
         self.register_buffer('pe', pe)
 
     def forward(self, x):
+        """
+        x: [batch_size, seq_len, d_model]
+        """
         seq_len = x.size(1)
+        # 将前 seq_len 的位置编码加到 x 上
         return x + self.pe[:seq_len, 0, :]
+
+class EncoderDecoderTransformer(nn.Module):
+
+    def __init__(self, d_model, nhead = 8, num_encoder_layers = 2, num_decoder_layers = 2):
+        super(EncoderDecoderTransformer, self).__init__()
+        self.encoder_pe = PositionalEncoding(d_model)
+        self.decoder_pe = PositionalEncoding(d_model)
+
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model = d_model, nhead = nhead, batch_first = True
+        )
+        self.transformer_encoder = nn.TransformerEncoder(
+            encoder_layer, num_layers = num_encoder_layers
+        )
+
+        decoder_layer = nn.TransformerDecoderLayer(
+            d_model = d_model, nhead = nhead, batch_first = True
+        )
+        self.transformer_decoder = nn.TransformerDecoder(
+            decoder_layer, num_layers = num_decoder_layers
+        )
+
+    def forward(self, src):
+        """
+        src: [batch_size, seq_len, d_model]
+        """
+        # --- Encoder ---
+        # 对 encoder 端输入进行位置编码
+        src_enc = self.encoder_pe(src)
+        memory  = self.transformer_encoder(src_enc)  # [batch_size, seq_len, d_model]
+
+        # --- Decoder ---
+        # 此处示例：简单将 src_enc 的某种形式当做 decoder 的输入
+        #   1）若为多步预测，可使用“shift”后的序列、或零向量、或历史真实值等做 decoder 端输入（tgt）。
+        #   2）也可视任务需求替换成更合适的 tgt。
+        tgt = self.decoder_pe(src) 
+        out = self.transformer_decoder(tgt, memory)  # [batch_size, seq_len, d_model]
+
+        return out
+
 
 class Attention(nn.Module):
     def __init__(self, input_dim):
@@ -145,11 +186,11 @@ class Attention(nn.Module):
         self.dropout = nn.Dropout(0.5)
 
     def forward(self, x):
-        attn_weights = self.attention(x)  # (batch, seq, 1)
+        attn_weights = self.attention(x)    # [batch, seq, 1]
         attn_weights = self.dropout(attn_weights)
         attn_weights = F.softmax(attn_weights, dim=1)
-        weighted = x * attn_weights
-        return torch.sum(weighted, dim=1)
+        weighted = x * attn_weights         # [batch, seq, feature]
+        return torch.sum(weighted, dim=1)   # [batch, feature]
 
 class EModel_FeatureWeight(nn.Module):
     def __init__(self, feature_dim):
@@ -158,71 +199,86 @@ class EModel_FeatureWeight(nn.Module):
         # 特征权重可学习
         self.feature_importance = nn.Parameter(torch.ones(feature_dim), requires_grad=True)
 
+        # LSTM
         self.lstm = nn.LSTM(
-            input_size=feature_dim,
-            hidden_size=128,
-            num_layers=2,
-            batch_first=True,
-            bidirectional=True,
-            dropout=0.2
+            input_size = feature_dim,
+            hidden_size = 128,
+            num_layers = 2,
+            batch_first = True,
+            bidirectional = True,
+            dropout = 0.2
         )
-        # Transformer
-        self.pos_encoder = PositionalEncoding(d_model=2*128)
-        encoder_layer    = nn.TransformerEncoderLayer(d_model=2*128, nhead=8, batch_first=True)
-        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=2)
 
-        # Attention
-        self.attention = Attention(input_dim=2*128)
+        # d_model = 2*128，因为lstm是双向128维输出 => 每个时刻输出的维度为 256
+        self.transformer_block = EncoderDecoderTransformer(d_model = 2 * 128, nhead = 8, num_encoder_layers = 2, num_decoder_layers = 2)
 
-        # 输出层
+        # Attention + 输出层
+        self.attention = Attention(input_dim = 2 * 128)
         self.fc = nn.Sequential(
-            nn.Linear(2*128, 128),
+            nn.Linear(2 * 128, 128),
             nn.ReLU(),
             nn.Dropout(0.3),
             nn.Linear(128, 1)
         )
 
     def forward(self, x):
+        """
+        x: [batch_size, seq_len, feature_dim]
+        """
+        # 1) 特征加权
         x = x * self.feature_importance.unsqueeze(0).unsqueeze(0)
-        lstm_out, _ = self.lstm(x)
-        t_out       = self.pos_encoder(lstm_out)
-        t_out       = self.transformer_encoder(t_out)
-        attn_out    = self.attention(t_out)
-        return self.fc(attn_out).squeeze(-1)
+
+        # 2) LSTM
+        lstm_out, _ = self.lstm(x)  # [batch, seq_len, 2 * hidden_size(=256)]
+
+        # 3) 送入包含 encoder+decoder 的 Transformer
+        #    src形状 => [batch, seq_len, d_model(=256)]
+        transformer_out = self.transformer_block(lstm_out)
+
+        # 4) Attention
+        attn_out = self.attention(transformer_out)
+
+        # 5) 输出
+        out = self.fc(attn_out)  # [batch, 1]
+        return out.squeeze(-1)
 
 class EModel_BiGRU(nn.Module):
     def __init__(self, feature_dim):
         super(EModel_BiGRU, self).__init__()
         self.feature_dim = feature_dim
-        self.feature_importance = nn.Parameter(torch.ones(feature_dim), requires_grad=True)
+        self.feature_importance = nn.Parameter(torch.ones(feature_dim), requires_grad = True)
 
         self.bigru = nn.GRU(
-            input_size=feature_dim,
-            hidden_size=128,
-            num_layers=2,
-            batch_first=True,
-            bidirectional=True,
-            dropout=0.3
+            input_size = feature_dim,
+            hidden_size = 128,
+            num_layers = 2,
+            batch_first = True,
+            bidirectional = True,
+            dropout = 0.3
         )
-        self.pos_encoder = PositionalEncoding(d_model=2*128)
-        encoder_layer    = nn.TransformerEncoderLayer(d_model=2*128, nhead=8, batch_first=True)
-        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=2)
 
-        self.attention = Attention(input_dim=2*128)
+        # 使用“整合encoder+decoder”的新 Transformer 模块
+        self.transformer_block = EncoderDecoderTransformer(d_model = 2 * 128, nhead = 8, num_encoder_layers = 2, num_decoder_layers = 2)
+
+        self.attention = Attention(input_dim = 2 * 128)
         self.fc = nn.Sequential(
-            nn.Linear(2*128, 128),
+            nn.Linear(2 * 128, 128),
             nn.ReLU(),
             nn.Dropout(0.3),
             nn.Linear(128, 1)
         )
 
     def forward(self, x):
+        """
+        x: [batch_size, seq_len, feature_dim]
+        """
         x = x * self.feature_importance.unsqueeze(0).unsqueeze(0)
-        gru_out, _ = self.bigru(x)
-        t_out      = self.pos_encoder(gru_out)
-        t_out      = self.transformer_encoder(t_out)
-        attn_out   = self.attention(t_out)
-        return self.fc(attn_out).squeeze(-1)
+        gru_out, _ = self.bigru(x)  # [batch, seq_len, 2 * hidden_size(=256)]
+
+        transformer_out = self.transformer_block(gru_out)
+        attn_out        = self.attention(transformer_out)
+        out             = self.fc(attn_out)
+        return out.squeeze(-1)
 
 # ---------------------------
 # 3. 训练与评价工具

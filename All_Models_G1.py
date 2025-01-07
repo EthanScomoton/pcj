@@ -21,7 +21,7 @@ batch_size = 128           # 批次大小
 weight_decay = 1e-4        # L2 正则化
 patience = 10              # 早停轮数增大
 num_workers = 0            # DataLoader 进程数
-window_size = 5           # 多步时序窗口
+window_size = 5            # 多步时序窗口
 
 # 设置随机种子
 torch.manual_seed(42)

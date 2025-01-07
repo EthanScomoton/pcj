@@ -16,7 +16,7 @@ from torch.nn.utils import clip_grad_norm_
 # ---------------------------
 # 0. 全局超参数
 # ---------------------------
-learning_rate = 1e-4
+learning_rate = 1e-5
 num_epochs    = 100
 batch_size    = 128
 weight_decay  = 1e-4

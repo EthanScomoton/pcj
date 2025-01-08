@@ -495,7 +495,7 @@ def plot_correlation_heatmap(df, feature_cols, title = "Heat map of different ty
 
     corr_matrix = df_encoded[feature_cols].corr()
 
-    colors_list = ["red", "magenta", "purple"]
+    colors_list = ["red", "magenta", "green"]
     cmap_custom = mcolors.LinearSegmentedColormap.from_list("my_rdpu", colors_list, N=256)
 
     plt.figure(figsize=(6, 5))
@@ -667,6 +667,8 @@ def main():
     print("\n========== Test Results (standardized domain) ==========")
     print(f"[EModel_FeatureWeight] => Test Loss(std): {test_lossA:.4f}, RMSE(std): {test_rmseA_std:.4f}")
     print(f"[EModel_CNN_Transformer] => Test Loss(std): {test_lossB:.4f}, RMSE(std): {test_rmseB_std:.4f}")
+    print(f"[EModel_FeatureWeight] => Test MAPE(std): {test_mapeA_std:.4f}, R^2(std): {test_r2A_std:.4f}")
+    print(f"[EModel_CNN_Transformer] => Test MAPE(std): {test_mapeB_std:.4f}, R^2(std): {test_r2B_std:.4f}")
 
     # 反标准化
     predsA_real  = scaler_y.inverse_transform(predsA_std.reshape(-1,1)).ravel()

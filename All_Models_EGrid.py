@@ -18,13 +18,13 @@ from torch.nn.utils import clip_grad_norm_
 # ---------------------------
 # 0. 全局超参数
 # ---------------------------
-learning_rate = 3e-4
+learning_rate = 1e-4
 num_epochs    = 200
 batch_size    = 64
 weight_decay  = 1e-4
-patience      = 25
+patience      = 15
 num_workers   = 0
-window_size   = 5
+window_size   = 12
 
 # 设置随机种子
 torch.manual_seed(42)
@@ -64,7 +64,7 @@ def feature_engineering(data_df):
         'working_hours', 'E_PV', 'E_storage_discharge',
         'ESCFR', 'ESCFG'
     ]
-    load_features = ['ship_grade', 'dock_position', 'destination']
+    load_features = ['ship_grade', 'dock_position', 'destination', 'energyconsumption']
 
     for col in renewable_features + load_features:
         if col in data_df.columns:
@@ -79,7 +79,6 @@ def feature_engineering(data_df):
 
     feature_columns = renewable_features + load_features + time_feature_cols
 
-    # ------ 将目标列改为 E_grid ------
     target_column = 'E_grid'
 
     # 仅选择所需的 feature_columns 和 target_column

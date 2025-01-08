@@ -61,11 +61,12 @@ def feature_engineering(data_df):
 
     renewable_features = [
         'season', 'holiday', 'weather', 'temperature',
-        'working_hours', 'E_PV', 'E_storage_discharge',
+        'working_hours', 'E_PV', 'E_wind', 'E_storage_discharge',
         'ESCFR', 'ESCFG'
     ]
     load_features = ['ship_grade', 'dock_position', 'destination', 'energyconsumption']
 
+    # 对分类特征进行LabelEncoder编码
     for col in renewable_features + load_features:
         if col in data_df.columns:
             le = LabelEncoder()
@@ -78,8 +79,7 @@ def feature_engineering(data_df):
     ]
 
     feature_columns = renewable_features + load_features + time_feature_cols
-
-    target_column = 'E_grid'
+    target_column   = 'E_grid'
 
     # 仅选择所需的 feature_columns 和 target_column
     data_selected = data_df[feature_columns + [target_column]].copy()
@@ -99,7 +99,7 @@ def create_sequences(data_all, window_size, feature_dim):
 
     for i in range(num_samples - window_size):
         seq_x = data_all[i : i + window_size, :feature_dim]
-        seq_y = data_all[i + window_size, feature_dim]
+        seq_y = data_all[i + window_size, feature_dim]  # 第 feature_dim 列是 target
         X_list.append(seq_x)
         y_list.append(seq_y)
 
@@ -125,13 +125,11 @@ class PositionalEncoding(nn.Module):
     def forward(self, x, step_offset=0):
         """
         x: [batch_size, seq_len, d_model]
-        step_offset: 当做多步预测时，如果需要对每一新步加不同的位置编码，可用此偏移量
+        step_offset: 当做多步预测时，如需对每一新步加不同的位置编码，可用此偏移量
         """
         seq_len = x.size(1)
-        # 取 self.pe 的前 seq_len 个位置编码，并加上 step_offset（若在多步推理时需要）
         pos_enc = self.pe[step_offset: step_offset + seq_len, 0, :]
-        # 广播加到 x 上
-        return x + pos_enc.unsqueeze(0)  # [1, seq_len, d_model]
+        return x + pos_enc.unsqueeze(0)  # [batch_size, seq_len, d_model]
 
 class Transformer(nn.Module):
     def __init__(self, d_model, nhead=4, num_encoder_layers=2, num_decoder_layers=2):
@@ -188,6 +186,7 @@ class CNNBlock(nn.Module):
         x = self.dropout(x)
         x = x.transpose(1, 2)  # 转换回 [batch_size, seq_len, 2 * hidden_size]
         return x
+
 class Attention(nn.Module):
     def __init__(self, input_dim):
         super(Attention, self).__init__()
@@ -207,6 +206,9 @@ class Attention(nn.Module):
         return torch.sum(weighted, dim=1)      # [batch_size, input_dim]
 
 class EModel_FeatureWeight(nn.Module):
+    """
+    LSTM + Transformer + Attention 的组合，额外引入 feature_importance 作为可学习权重。
+    """
     def __init__(self, feature_dim):
         super(EModel_FeatureWeight, self).__init__()
         self.feature_dim = feature_dim
@@ -252,6 +254,9 @@ class EModel_FeatureWeight(nn.Module):
         return out.squeeze(-1)
 
 class EModel_CNN_Transformer(nn.Module):
+    """
+    三阶 CNN + Transformer + Attention 的组合，额外引入 feature_importance 作为可学习权重。
+    """
     def __init__(self, feature_dim, hidden_size=128, num_layers=2, dropout=0.2):
         super(EModel_CNN_Transformer, self).__init__()
         self.feature_dim = feature_dim
@@ -291,13 +296,11 @@ class EModel_CNN_Transformer(nn.Module):
         cnn_out = self.cnn_block(x)  # [batch_size, seq_len, 2 * hidden_size]
 
         # Transformer
-        # 注意：这里将 cnn_out 作为 src 和 tgt 同时输入，仅供示例
-        # 如果是真正的多步预测或自回归预测，可能需要更复杂的逻辑来构造 tgt
         src = cnn_out  
         tgt = cnn_out  
         transformer_out = self.transformer_block(src, tgt)  # [batch_size, seq_len, 2 * hidden_size]
 
-        # Attention模块
+        # Attention
         attn_out = self.attention(transformer_out)  # [batch_size, 2 * hidden_size]
 
         # 全连接层
@@ -327,14 +330,14 @@ def evaluate(model, dataloader, criterion):
             labels_list.append(batch_labels.cpu().numpy())
 
     val_loss   = running_loss / num_samples
-    preds_arr  = np.concatenate(preds_list, axis=0)  # shape: [num_samples,]
-    labels_arr = np.concatenate(labels_list, axis=0) # shape: [num_samples,]
+    preds_arr  = np.concatenate(preds_list, axis=0)
+    labels_arr = np.concatenate(labels_list, axis=0)
 
     # ---- 1. 计算 RMSE（标准化域下）----
     rmse_std = np.sqrt(mean_squared_error(labels_arr, preds_arr))
 
     # ---- 2. 计算 MAPE（标准化域下）----
-    # 注意：若 y_i = 0 会导致除零，根据业务需求可做额外过滤，这里未处理
+    # 注意：若 y_i = 0 会导致除零问题，如有需求可筛除
     mape_std = np.mean(np.abs((labels_arr - preds_arr) / labels_arr)) * 100.0
 
     # ---- 3. 计算 R^2（标准化域下）----
@@ -663,7 +666,7 @@ def main():
 
     print("\n========== Test Results (standardized domain) ==========")
     print(f"[EModel_FeatureWeight] => Test Loss(std): {test_lossA:.4f}, RMSE(std): {test_rmseA_std:.4f}")
-    print(f"[EModel_CNN_Transformer]         => Test Loss(std): {test_lossB:.4f}, RMSE(std): {test_rmseB_std:.4f}")
+    print(f"[EModel_CNN_Transformer] => Test Loss(std): {test_lossB:.4f}, RMSE(std): {test_rmseB_std:.4f}")
 
     # 反标准化
     predsA_real  = scaler_y.inverse_transform(predsA_std.reshape(-1,1)).ravel()
@@ -677,7 +680,7 @@ def main():
 
     print("\n========== Test Results (real domain) ==========")
     print(f"[EModel_FeatureWeight] => RMSE(real): {test_rmseA_real:.4f}")
-    print(f"[EModel_CNN_Transformer]         => RMSE(real): {test_rmseB_real:.4f}")
+    print(f"[EModel_CNN_Transformer] => RMSE(real): {test_rmseB_real:.4f}")
 
     print("\n========== Train EModel_FeatureWeight (with extended metrics) ==========")
     (train_lossA, val_lossA, val_rmseA, val_mapeA, val_r2A, _) = train_model(

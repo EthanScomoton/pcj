@@ -290,7 +290,7 @@ class EModel_CNN_Transformer(nn.Module):
         # 三阶CNN模块
         cnn_out = self.cnn_block(x)  # [batch_size, seq_len, 2 * hidden_size]
 
-        # Transformer Encoder-Decoder
+        # Transformer
         # 注意：这里将 cnn_out 作为 src 和 tgt 同时输入，仅供示例
         # 如果是真正的多步预测或自回归预测，可能需要更复杂的逻辑来构造 tgt
         src = cnn_out  
@@ -657,9 +657,9 @@ def main():
     criterion = nn.SmoothL1Loss(beta=1.0)
 
     # Evaluate A
-    test_lossA, test_rmseA_std, predsA_std, labelsA_std, _, _ = evaluate(best_modelA, test_loader, criterion)
+    test_lossA, test_rmseA_std, test_mapeA_std, test_r2A_std, predsA_std, labelsA_std = evaluate(best_modelA, test_loader, criterion)
     # Evaluate B
-    test_lossB, test_rmseB_std, predsB_std, labelsB_std, _, _ = evaluate(best_modelB, test_loader, criterion)
+    test_lossB, test_rmseB_std, test_mapeB_std, test_r2B_std, predsB_std, labelsB_std = evaluate(best_modelB, test_loader, criterion)
 
     print("\n========== Test Results (standardized domain) ==========")
     print(f"[EModel_FeatureWeight] => Test Loss(std): {test_lossA:.4f}, RMSE(std): {test_rmseA_std:.4f}")

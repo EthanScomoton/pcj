@@ -22,10 +22,10 @@ from torch.nn.utils import clip_grad_norm_
 learning_rate = 3e-4
 num_epochs    = 200
 batch_size    = 64
-weight_decay  = 1e-4
-patience      = 25
+weight_decay  = 1e-3
+patience      = 10
 num_workers   = 0
-window_size   = 5
+window_size   = 12
 
 # 设置随机种子
 torch.manual_seed(42)

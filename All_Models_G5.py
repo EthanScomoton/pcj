@@ -1,3 +1,4 @@
+#更新了BiGRU模块，将第一段代码（分类任务的 BiGRU）的“显式零初始化 hidden state”以及“双向 GRU 的核心 forward 流程”融入到了第二段回归任务的 EModel_BiGRU 中。
 import math
 import numpy as np
 import pandas as pd
@@ -198,37 +199,72 @@ class EModel_FeatureWeight(nn.Module):
         return out.squeeze(-1)
 
 class EModel_BiGRU(nn.Module):
-    def __init__(self, feature_dim):
+    def __init__(self, feature_dim, hidden_size=128, num_layers=2, dropout=0.3):
+        """
+        与第一段 BiGRU 分类逻辑一致，显式初始化 h0，并保持双向 GRU + Transformer + Attention + FC 的整体结构
+        """
         super(EModel_BiGRU, self).__init__()
         self.feature_dim = feature_dim
+        self.hidden_size = hidden_size
+        self.num_layers = num_layers
+
+        # 可学习的特征权重，与原代码一致
         self.feature_importance = nn.Parameter(torch.ones(feature_dim), requires_grad=True)
 
+        # 这里与第一段代码中的 BiGRU 逻辑相似：
+        # - hidden_size
+        # - num_layers
+        # - bidirectional=True
+        # - batch_first=True
         self.bigru = nn.GRU(
             input_size=feature_dim,
-            hidden_size=128,
-            num_layers=2,
+            hidden_size=self.hidden_size,
+            num_layers=self.num_layers,
             batch_first=True,
             bidirectional=True,
-            dropout=0.3
+            dropout=dropout
         )
+
+        # 与原始 EModel_BiGRU 相同的 Transformer & Attention & FC
         self.transformer_block = EncoderDecoderTransformer(
-            d_model=2*128, nhead=8, num_encoder_layers=2, num_decoder_layers=2
+            d_model=2 * self.hidden_size,  # 双向，因此是 2 * hidden_size
+            nhead=8,
+            num_encoder_layers=2,
+            num_decoder_layers=2
         )
-        self.attention = Attention(input_dim=2*128)
+        self.attention = Attention(input_dim=2 * self.hidden_size)
+
         self.fc = nn.Sequential(
-            nn.Linear(2*128, 128),
+            nn.Linear(2 * self.hidden_size, 128),
             nn.ReLU(),
             nn.Dropout(0.3),
             nn.Linear(128, 1)
         )
 
     def forward(self, x):
+        """
+        这里与第一段代码中的 forward 类似：
+        1. 显式定义 h0 为零张量；
+        2. 调用 self.bigru(x, h0)；
+        3. 将 GRU 输出经过后续的 Transformer + Attention + FC。
+        """
         # 利用可学习的特征权重
         x = x * self.feature_importance.unsqueeze(0).unsqueeze(0)
-        gru_out, _ = self.bigru(x)
+
+        # 显式初始化 hidden state，形状: [num_layers * 2, batch_size, hidden_size]
+        # 注意：需要将 hidden state 放到与 x 相同的 device 上
+        batch_size = x.size(0)
+        h0 = torch.zeros(self.num_layers * 2, batch_size, self.hidden_size).to(x.device)
+
+        # 与第一段 BiGRU 类似的调用方式
+        gru_out, _ = self.bigru(x, h0)
+
+        # 保留原先的 Transformer、Attention 和 FC 结构
         transformer_out = self.transformer_block(gru_out)
         attn_out = self.attention(transformer_out)
-        out = self.fc(attn_out)
+        out = self.fc(attn_out)    # 维度: [batch_size, 1]
+
+        # 用 squeeze(-1) 将 [batch_size, 1] 变成 [batch_size]
         return out.squeeze(-1)
 
 # ---------------------------

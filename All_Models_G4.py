@@ -228,7 +228,7 @@ class EModel_BiGRU(nn.Module):
 # ---------------------------
 def evaluate(model, dataloader, criterion):
     model.eval()
-    running_loss, num_samples = 0.2, 0
+    running_loss, num_samples = 0.0, 0
     preds_list, labels_list = [], []
 
     with torch.no_grad():
@@ -251,7 +251,7 @@ def evaluate(model, dataloader, criterion):
     rmse_std   = np.sqrt(mean_squared_error(labels_arr, preds_arr))
     return val_loss, rmse_std, preds_arr, labels_arr
 
-def train_model(model, train_loader, val_loader, model_name='Model', feature_names=None):
+def train_model(model, train_loader, val_loader, model_name='Model'):
     criterion = nn.SmoothL1Loss(beta=1.0)
     optimizer = AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
 

@@ -200,22 +200,14 @@ class EModel_FeatureWeight(nn.Module):
 
 class EModel_BiGRU(nn.Module):
     def __init__(self, feature_dim, hidden_size=128, num_layers=2, dropout=0.3):
-        """
-        与第一段 BiGRU 分类逻辑一致，显式初始化 h0，并保持双向 GRU + Transformer + Attention + FC 的整体结构
-        """
         super(EModel_BiGRU, self).__init__()
         self.feature_dim = feature_dim
         self.hidden_size = hidden_size
         self.num_layers = num_layers
 
-        # 可学习的特征权重，与原代码一致
+        # 可学习的特征权重
         self.feature_importance = nn.Parameter(torch.ones(feature_dim), requires_grad=True)
 
-        # 这里与第一段代码中的 BiGRU 逻辑相似：
-        # - hidden_size
-        # - num_layers
-        # - bidirectional=True
-        # - batch_first=True
         self.bigru = nn.GRU(
             input_size=feature_dim,
             hidden_size=self.hidden_size,
@@ -225,7 +217,6 @@ class EModel_BiGRU(nn.Module):
             dropout=dropout
         )
 
-        # 与原始 EModel_BiGRU 相同的 Transformer & Attention & FC
         self.transformer_block = EncoderDecoderTransformer(
             d_model=2 * self.hidden_size,  # 双向，因此是 2 * hidden_size
             nhead=8,
@@ -242,12 +233,6 @@ class EModel_BiGRU(nn.Module):
         )
 
     def forward(self, x):
-        """
-        这里与第一段代码中的 forward 类似：
-        1. 显式定义 h0 为零张量；
-        2. 调用 self.bigru(x, h0)；
-        3. 将 GRU 输出经过后续的 Transformer + Attention + FC。
-        """
         # 利用可学习的特征权重
         x = x * self.feature_importance.unsqueeze(0).unsqueeze(0)
 
@@ -259,7 +244,6 @@ class EModel_BiGRU(nn.Module):
         # 与第一段 BiGRU 类似的调用方式
         gru_out, _ = self.bigru(x, h0)
 
-        # 保留原先的 Transformer、Attention 和 FC 结构
         transformer_out = self.transformer_block(gru_out)
         attn_out = self.attention(transformer_out)
         out = self.fc(attn_out)    # 维度: [batch_size, 1]
@@ -290,10 +274,23 @@ def evaluate(model, dataloader, criterion):
             labels_list.append(batch_labels.cpu().numpy())
 
     val_loss   = running_loss / num_samples
-    preds_arr  = np.concatenate(preds_list, axis=0)
-    labels_arr = np.concatenate(labels_list, axis=0)
-    rmse_std   = np.sqrt(mean_squared_error(labels_arr, preds_arr))
-    return val_loss, rmse_std, preds_arr, labels_arr
+    preds_arr  = np.concatenate(preds_list, axis=0)  # shape: [num_samples,]
+    labels_arr = np.concatenate(labels_list, axis=0) # shape: [num_samples,]
+
+    # ---- 1. 计算 RMSE（标准化域下）----
+    rmse_std = np.sqrt(mean_squared_error(labels_arr, preds_arr))
+
+    # ---- 2. 计算 MAPE（标准化域下）----
+    # 注意：如果某些 y_i = 0，会导致除零。通常可加个极小值或过滤，但以下示例不额外处理。
+    mape_std = np.mean(np.abs((labels_arr - preds_arr) / labels_arr)) * 100.0
+
+    # ---- 3. 计算 R^2（标准化域下）----
+    ss_res = np.sum((labels_arr - preds_arr)**2)
+    ss_tot = np.sum((labels_arr - np.mean(labels_arr))**2)
+    r2_std = 1 - (ss_res / ss_tot) if ss_tot != 0 else 0.0
+
+    return val_loss, rmse_std, mape_std, r2_std, preds_arr, labels_arr
+
 
 def train_model(model, train_loader, val_loader, model_name='Model', feature_names=None):
     criterion = nn.SmoothL1Loss(beta=1.0)
@@ -316,8 +313,9 @@ def train_model(model, train_loader, val_loader, model_name='Model', feature_nam
     train_loss_history = []
     val_loss_history   = []
     val_rmse_history   = []
+    val_mape_history   = []  # ← 新增
+    val_r2_history     = []  # ← 新增
 
-    # 虽然保留了记录 feature_importance 的逻辑，但本示例不再绘制特征权重热力图
     feature_importance_history = []
 
     for epoch in range(num_epochs):
@@ -341,17 +339,23 @@ def train_model(model, train_loader, val_loader, model_name='Model', feature_nam
             num_samples  += batch_inputs.size(0)
             global_step  += 1
 
+        # === 训练集平均损失 ===
         train_loss = running_loss / num_samples
-        val_loss, val_rmse_std, _, _ = evaluate(model, val_loader, criterion)
+        # === 验证集指标 ===
+        val_loss, val_rmse_std, val_mape_std, val_r2_std, _, _ = evaluate(model, val_loader, criterion)
 
         train_loss_history.append(train_loss)
         val_loss_history.append(val_loss)
         val_rmse_history.append(val_rmse_std)
+        val_mape_history.append(val_mape_std)
+        val_r2_history.append(val_r2_std)
 
         print(f"[{model_name}] Epoch {epoch+1}/{num_epochs}, "
               f"Train Loss(std): {train_loss:.4f}, "
               f"Val Loss(std): {val_loss:.4f}, "
-              f"RMSE(std): {val_rmse_std:.4f}")
+              f"RMSE(std): {val_rmse_std:.4f}, "
+              f"MAPE(%): {val_mape_std:.2f}, "
+              f"R^2: {val_r2_std:.4f}")
 
         if hasattr(model, 'feature_importance'):
             current_fi = model.feature_importance.detach().cpu().numpy().copy()
@@ -369,10 +373,14 @@ def train_model(model, train_loader, val_loader, model_name='Model', feature_nam
                 print(f"[{model_name}] 验证集无改善，提前停止。")
                 break
 
-    return (train_loss_history, 
-            val_loss_history, 
-            val_rmse_history, 
-            feature_importance_history)
+    return (
+        train_loss_history, 
+        val_loss_history, 
+        val_rmse_history,
+        val_mape_history,   # ← 返回 MAPE
+        val_r2_history,     # ← 返回 R^2
+        feature_importance_history
+    )
 
 # ---------------------------
 # 4. 可视化
@@ -476,6 +484,58 @@ def analyze_target_distribution(data_df, target_col):
     plt.tight_layout()
     plt.show()
 
+def plot_training_curves_extended(
+    train_loss_history, 
+    val_loss_history, 
+    val_rmse_history,
+    val_mape_history,
+    val_r2_history,
+    model_name='Model'
+):
+    epochs = range(1, len(train_loss_history) + 1)
+    plt.figure(figsize=(12, 8))
+
+    # (1) Loss
+    plt.subplot(2, 2, 1)
+    plt.plot(epochs, train_loss_history, 'r-o', label='Train Loss(std)')
+    plt.plot(epochs, val_loss_history,   'b-o', label='Val Loss(std)')
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss (std)')
+    plt.title('Loss')
+    plt.legend()
+    plt.grid(True)
+
+    # (2) RMSE
+    plt.subplot(2, 2, 2)
+    plt.plot(epochs, val_rmse_history, 'g--*', label='Val RMSE(std)')
+    plt.xlabel('Epoch')
+    plt.ylabel('RMSE (std)')
+    plt.title('RMSE')
+    plt.legend()
+    plt.grid(True)
+
+    # (3) MAPE
+    plt.subplot(2, 2, 3)
+    plt.plot(epochs, val_mape_history, 'm-*', label='Val MAPE(%)')
+    plt.xlabel('Epoch')
+    plt.ylabel('MAPE (%)')
+    plt.title('MAPE')
+    plt.legend()
+    plt.grid(True)
+
+    # (4) R^2
+    plt.subplot(2, 2, 4)
+    plt.plot(epochs, val_r2_history, 'c-o', label='Val R^2')
+    plt.xlabel('Epoch')
+    plt.ylabel('R^2')
+    plt.title('R^2')
+    plt.legend()
+    plt.grid(True)
+
+    plt.suptitle(f'Training Metrics for {model_name}', fontsize=14)
+    plt.tight_layout()
+    plt.show()
+
 # ---------------------------
 # 5. 主函数
 # ---------------------------
@@ -492,8 +552,6 @@ def main():
     plot_correlation_heatmap(data_df, feature_cols_to_plot)
 
     # ===== 在进入标准化流水线前，先对目标列做一个分布分析（使用 target_col）=====
-    # 我们知道在feature_engineering()中，target_column='energyconsumption'；
-    # 这里可以直接调用 analyze_target_distribution(data_df, "energyconsumption")
     analyze_target_distribution(data_df, "energyconsumption")
 
     # ========== 原有特征工程 + 训练 + 测试逻辑 ==========
@@ -570,6 +628,20 @@ def main():
     print(f"[EModel_FeatureWeight] => RMSE(real): {test_rmseA_real:.4f}")
     print(f"[EModel_BiGRU]         => RMSE(real): {test_rmseB_real:.4f}")
 
+    print("\n========== Train EModel_FeatureWeight ==========")
+    (train_lossA, val_lossA, val_rmseA, val_mapeA, val_r2A, _) = train_model(
+        modelA, train_loader, val_loader, 
+        model_name='EModel_FeatureWeight', 
+        feature_names=feature_cols  
+    )
+
+    print("\n========== Train EModel_BiGRU ==========")
+    (train_lossB, val_lossB, val_rmseB, val_mapeB, val_r2B, _) = train_model(
+        modelB, train_loader, val_loader, 
+        model_name='EModel_BiGRU', 
+        feature_names=feature_cols
+    )
+
     # 可视化对比
     plot_predictions_comparison(
         y_actual_real      = labelsA_real,
@@ -581,6 +653,25 @@ def main():
     plot_training_curves(train_lossA, val_lossA, val_rmseA, model_name='EModel_FeatureWeight')
     plot_training_curves(train_lossB, val_lossB, val_rmseB, model_name='EModel_BiGRU')
     plot_two_model_val_rmse(val_rmseA, val_rmseB, labelA='EModel_FeatureWeight', labelB='EModel_BiGRU')
+
+    plot_training_curves_extended(
+        train_lossA, 
+        val_lossA, 
+        val_rmseA, 
+        val_mapeA, 
+        val_r2A,
+        model_name='EModel_FeatureWeight'
+    )
+
+    # 同理 B 模型
+    plot_training_curves_extended(
+        train_lossB, 
+        val_lossB, 
+        val_rmseB, 
+        val_mapeB, 
+        val_r2B,
+        model_name='EModel_BiGRU'
+    )
 
     print("[Info] Done!")
 

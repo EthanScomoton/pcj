@@ -19,10 +19,10 @@ from torch.nn.utils import clip_grad_norm_
 # 0. 全局超参数
 # ---------------------------
 learning_rate = 3e-4
-num_epochs    = 50          # 调整为 50
-batch_size    = 32          # 调整为 32
-weight_decay  = 1e-5        # 调整为 1e-5
-patience      = 15          # 提前停止轮数改为 15
+num_epochs    = 200
+batch_size    = 64
+weight_decay  = 1e-4
+patience      = 25
 num_workers   = 0
 window_size   = 5
 
@@ -59,10 +59,12 @@ def feature_engineering(data_df):
     data_df['month_sin']     = np.sin(2 * np.pi * (data_df['month'] - 1) / 12)
     data_df['month_cos']     = np.cos(2 * np.pi * (data_df['month'] - 1) / 12)
 
+    # ------ 注意：这里将 E_grid 从特征列表中移除，改为当作预测目标 ------
     renewable_features = [
         'season', 'holiday', 'weather', 'temperature',
         'working_hours', 'E_PV', 'E_storage_discharge',
-        'E_grid', 'ESCFR', 'ESCFG'
+        # 'E_grid',  <-- 此处删除，避免将目标当作输入
+        'ESCFR', 'ESCFG'
     ]
     load_features = ['ship_grade', 'dock_position', 'destination']
 
@@ -79,9 +81,10 @@ def feature_engineering(data_df):
 
     feature_columns = renewable_features + load_features + time_feature_cols
 
-    # 目标列
-    target_column   = 'energyconsumption'
+    # ------ 将目标列改为 E_grid ------
+    target_column = 'E_grid'
 
+    # 仅选择所需的 feature_columns 和 target_column
     data_selected = data_df[feature_columns + [target_column]].copy()
 
     scaler_X = StandardScaler()
@@ -115,11 +118,12 @@ class PositionalEncoding(nn.Module):
         super(PositionalEncoding, self).__init__()
         pe = torch.zeros(max_len, d_model)
         position = torch.arange(0, max_len, dtype=torch.float32).unsqueeze(1)
+        # 注意这里使用 -log(10000.0)，原理同标准 Transformer
         div_term = torch.exp(-(torch.arange(0, d_model, 2).float() * math.log(10000.0) / d_model))
 
         pe[:, 0::2] = torch.sin(position * div_term)
         pe[:, 1::2] = torch.cos(position * div_term)
-        pe = pe.unsqueeze(1)
+        pe = pe.unsqueeze(1)  # 增加一个 batch_size=1 的维度
         self.register_buffer('pe', pe)
 
     def forward(self, x):
@@ -143,7 +147,7 @@ class EncoderDecoderTransformer(nn.Module):
         src_enc = self.encoder_pe(src)
         memory  = self.transformer_encoder(src_enc)
 
-        # Decoder (此处仅做示意，如果是多步预测需修改 tgt)
+        # Decoder (此处仅做示意，如果多步预测则需按照实际逻辑修改)
         tgt = self.decoder_pe(src)
         out = self.transformer_decoder(tgt, memory)
         return out
@@ -156,14 +160,15 @@ class Attention(nn.Module):
             nn.Tanh(),
             nn.Linear(input_dim, 1)
         )
-        self.dropout = nn.Dropout(0.3)  # 加大Dropout到0.3
+        self.dropout = nn.Dropout(0.2)
 
     def forward(self, x):
-        attn_weights = self.attention(x)
+        # x 形状: [batch_size, seq_len, input_dim]
+        attn_weights = self.attention(x)       # [batch_size, seq_len, 1]
         attn_weights = self.dropout(attn_weights)
         attn_weights = F.softmax(attn_weights, dim=1)
-        weighted = x * attn_weights
-        return torch.sum(weighted, dim=1)
+        weighted = x * attn_weights            # 广播乘法
+        return torch.sum(weighted, dim=1)      # [batch_size, input_dim]
 
 class EModel_FeatureWeight(nn.Module):
     def __init__(self, feature_dim):
@@ -173,23 +178,20 @@ class EModel_FeatureWeight(nn.Module):
 
         self.lstm = nn.LSTM(
             input_size=feature_dim,
-            hidden_size=256,    # 调大 hidden_size
+            hidden_size=128,
             num_layers=2,
             batch_first=True,
             bidirectional=True,
-            dropout=0.3         # 加大Dropout到0.3
+            dropout=0.2
         )
         self.transformer_block = EncoderDecoderTransformer(
-            d_model=2*256, 
-            nhead=4, 
-            num_encoder_layers=2, 
-            num_decoder_layers=2
+            d_model=2*128, nhead=4, num_encoder_layers=2, num_decoder_layers=2
         )
-        self.attention = Attention(input_dim=2*256)
+        self.attention = Attention(input_dim=2*128)
         self.fc = nn.Sequential(
-            nn.Linear(2*256, 128),
+            nn.Linear(2*128, 128),
             nn.ReLU(),
-            nn.Dropout(0.3),
+            nn.Dropout(0.2),
             nn.Linear(128, 1)
         )
 
@@ -203,7 +205,7 @@ class EModel_FeatureWeight(nn.Module):
         return out.squeeze(-1)
 
 class EModel_BiGRU(nn.Module):
-    def __init__(self, feature_dim, hidden_size=256, num_layers=2, dropout=0.3):
+    def __init__(self, feature_dim, hidden_size=128, num_layers=2, dropout=0.2):
         super(EModel_BiGRU, self).__init__()
         self.feature_dim = feature_dim
         self.hidden_size = hidden_size
@@ -222,7 +224,7 @@ class EModel_BiGRU(nn.Module):
         )
 
         self.transformer_block = EncoderDecoderTransformer(
-            d_model=2 * self.hidden_size,  
+            d_model=2 * self.hidden_size,  # 双向，因此是 2 * hidden_size
             nhead=4,
             num_encoder_layers=2,
             num_decoder_layers=2
@@ -232,7 +234,7 @@ class EModel_BiGRU(nn.Module):
         self.fc = nn.Sequential(
             nn.Linear(2 * self.hidden_size, 128),
             nn.ReLU(),
-            nn.Dropout(0.3),
+            nn.Dropout(0.2),
             nn.Linear(128, 1)
         )
 
@@ -273,34 +275,35 @@ def evaluate(model, dataloader, criterion):
             labels_list.append(batch_labels.cpu().numpy())
 
     val_loss   = running_loss / num_samples
-    preds_arr  = np.concatenate(preds_list, axis=0)
-    labels_arr = np.concatenate(labels_list, axis=0)
+    preds_arr  = np.concatenate(preds_list, axis=0)  # shape: [num_samples,]
+    labels_arr = np.concatenate(labels_list, axis=0) # shape: [num_samples,]
 
+    # ---- 1. 计算 RMSE（标准化域下）----
     rmse_std = np.sqrt(mean_squared_error(labels_arr, preds_arr))
-    # 若目标中含有 0 或极小值，则 mape 会变得非常敏感，需要业务上特殊处理
-    mape_std = np.mean(np.abs((labels_arr - preds_arr) / (labels_arr+1e-8))) * 100.0
 
+    # ---- 2. 计算 MAPE（标准化域下）----
+    # 注意：若 y_i = 0 会导致除零，根据业务需求可做额外过滤，这里未处理
+    mape_std = np.mean(np.abs((labels_arr - preds_arr) / labels_arr)) * 100.0
+
+    # ---- 3. 计算 R^2（标准化域下）----
     ss_res = np.sum((labels_arr - preds_arr)**2)
     ss_tot = np.sum((labels_arr - np.mean(labels_arr))**2)
     r2_std = 1 - (ss_res / ss_tot) if ss_tot != 0 else 0.0
 
     return val_loss, rmse_std, mape_std, r2_std, preds_arr, labels_arr
 
-
 def train_model(model, train_loader, val_loader, model_name='Model', feature_names=None):
     criterion = nn.SmoothL1Loss(beta=1.0)
     optimizer = AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
 
-    # ============= 修改 warmup 比例 =============
     total_steps  = num_epochs * len(train_loader)
-    warmup_steps = int(0.2 * total_steps)  # 这里调整为 20% 的 warmup
-    # ===========================================
-
+    warmup_steps = int(0.1 * total_steps)
+    
     def lr_lambda(current_step):
+        # 先 warmup 再线性衰减
         if current_step < warmup_steps:
             return float(current_step) / float(max(1, warmup_steps))
         else:
-            # 线性衰减到 0
             return max(0.0, 1 - (current_step - warmup_steps) / (total_steps - warmup_steps))
 
     scheduler = LambdaLR(optimizer, lr_lambda)
@@ -329,8 +332,7 @@ def train_model(model, train_loader, val_loader, model_name='Model', feature_nam
             loss  = criterion(preds, batch_labels)
             loss.backward()
 
-            # 这里把梯度裁剪改为 max_norm=1.0
-            clip_grad_norm_(model.parameters(), max_norm=1.0)
+            clip_grad_norm_(model.parameters(), max_norm=5.0)
             optimizer.step()
             scheduler.step()
 
@@ -374,8 +376,8 @@ def train_model(model, train_loader, val_loader, model_name='Model', feature_nam
         train_loss_history, 
         val_loss_history, 
         val_rmse_history,
-        val_mape_history,   
-        val_r2_history,     
+        val_mape_history,
+        val_r2_history,
         feature_importance_history
     )
 
@@ -455,7 +457,6 @@ def plot_correlation_heatmap(df, feature_cols, title = "Heat map of different ty
     plt.xticks(rotation=45, ha='right')
     plt.tight_layout()
     plt.show()
-
 
 def analyze_target_distribution(data_df, target_col):
     """
@@ -537,15 +538,18 @@ def main():
     data_df = load_data()
 
     # ========== 基于原始 df 画 NxN 热力图 ==========
+    # 将 E_grid 纳入以便观察其与其它字段的相关性
     feature_cols_to_plot = [
         'season', 'holiday', 'weather', 'temperature',
-        'working_hours', 'energyconsumption'
+        'working_hours', 'E_grid'
     ]
     feature_cols_to_plot = [c for c in feature_cols_to_plot if c in data_df.columns]
     plot_correlation_heatmap(data_df, feature_cols_to_plot)
 
-    analyze_target_distribution(data_df, "energyconsumption")
+    # 分析目标列 E_grid 的分布
+    analyze_target_distribution(data_df, "E_grid")
 
+    # ========== 特征工程 + 序列构建 + 训练测试拆分 ==========
     data_all, feature_cols, target_col, scaler_y = feature_engineering(data_df)
     feature_dim = len(feature_cols)
 
@@ -580,7 +584,7 @@ def main():
     (train_lossA, val_lossA, val_rmseA, _, _, _) = train_model(
         modelA, train_loader, val_loader, 
         model_name='EModel_FeatureWeight', 
-        feature_names=feature_cols
+        feature_names=feature_cols  
     )
 
     print("\n========== Train EModel_BiGRU ==========")
@@ -600,7 +604,9 @@ def main():
     print("\n[Info] Testing...")
     criterion = nn.SmoothL1Loss(beta=1.0)
 
+    # Evaluate A
     test_lossA, test_rmseA_std, predsA_std, labelsA_std, _, _ = evaluate(best_modelA, test_loader, criterion)
+    # Evaluate B
     test_lossB, test_rmseB_std, predsB_std, labelsB_std, _, _ = evaluate(best_modelB, test_loader, criterion)
 
     print("\n========== Test Results (standardized domain) ==========")
@@ -613,6 +619,7 @@ def main():
     labelsA_real = scaler_y.inverse_transform(labelsA_std.reshape(-1,1)).ravel()
     labelsB_real = scaler_y.inverse_transform(labelsB_std.reshape(-1,1)).ravel()
 
+    # 在原空间重新计算RMSE
     test_rmseA_real = np.sqrt(mean_squared_error(labelsA_real, predsA_real))
     test_rmseB_real = np.sqrt(mean_squared_error(labelsB_real, predsB_real))
 
@@ -620,14 +627,14 @@ def main():
     print(f"[EModel_FeatureWeight] => RMSE(real): {test_rmseA_real:.4f}")
     print(f"[EModel_BiGRU]         => RMSE(real): {test_rmseB_real:.4f}")
 
-    print("\n========== Train EModel_FeatureWeight (extended) ==========")
+    print("\n========== Train EModel_FeatureWeight (with extended metrics) ==========")
     (train_lossA, val_lossA, val_rmseA, val_mapeA, val_r2A, _) = train_model(
         modelA, train_loader, val_loader, 
         model_name='EModel_FeatureWeight', 
-        feature_names=feature_cols
+        feature_names=feature_cols  
     )
 
-    print("\n========== Train EModel_BiGRU (extended) ==========")
+    print("\n========== Train EModel_BiGRU (with extended metrics) ==========")
     (train_lossB, val_lossB, val_rmseB, val_mapeB, val_r2B, _) = train_model(
         modelB, train_loader, val_loader, 
         model_name='EModel_BiGRU', 

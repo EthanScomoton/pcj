@@ -19,13 +19,13 @@ from torch.nn.utils import clip_grad_norm_
 # ---------------------------
 # 0. 全局超参数
 # ---------------------------
-learning_rate = 1e-5
-num_epochs    = 100
-batch_size    = 128
+learning_rate = 3e-4
+num_epochs    = 200
+batch_size    = 64
 weight_decay  = 1e-4
-patience      = 10
+patience      = 25
 num_workers   = 0
-window_size   = 3
+window_size   = 5
 
 # 设置随机种子
 torch.manual_seed(42)
@@ -126,7 +126,7 @@ class PositionalEncoding(nn.Module):
         return x + self.pe[:seq_len, 0, :]
 
 class EncoderDecoderTransformer(nn.Module):
-    def __init__(self, d_model, nhead=8, num_encoder_layers=2, num_decoder_layers=2):
+    def __init__(self, d_model, nhead=4, num_encoder_layers=2, num_decoder_layers=2):
         super(EncoderDecoderTransformer, self).__init__()
         self.encoder_pe = PositionalEncoding(d_model)
         self.decoder_pe = PositionalEncoding(d_model)
@@ -155,7 +155,7 @@ class Attention(nn.Module):
             nn.Tanh(),
             nn.Linear(input_dim, 1)
         )
-        self.dropout = nn.Dropout(0.5)
+        self.dropout = nn.Dropout(0.2)
 
     def forward(self, x):
         attn_weights = self.attention(x)
@@ -179,13 +179,13 @@ class EModel_FeatureWeight(nn.Module):
             dropout=0.2
         )
         self.transformer_block = EncoderDecoderTransformer(
-            d_model=2*128, nhead=8, num_encoder_layers=2, num_decoder_layers=2
+            d_model=2*128, nhead=4, num_encoder_layers=2, num_decoder_layers=2
         )
         self.attention = Attention(input_dim=2*128)
         self.fc = nn.Sequential(
             nn.Linear(2*128, 128),
             nn.ReLU(),
-            nn.Dropout(0.3),
+            nn.Dropout(0.2),
             nn.Linear(128, 1)
         )
 
@@ -199,7 +199,7 @@ class EModel_FeatureWeight(nn.Module):
         return out.squeeze(-1)
 
 class EModel_BiGRU(nn.Module):
-    def __init__(self, feature_dim, hidden_size=128, num_layers=2, dropout=0.3):
+    def __init__(self, feature_dim, hidden_size=128, num_layers=2, dropout=0.2):
         super(EModel_BiGRU, self).__init__()
         self.feature_dim = feature_dim
         self.hidden_size = hidden_size
@@ -219,7 +219,7 @@ class EModel_BiGRU(nn.Module):
 
         self.transformer_block = EncoderDecoderTransformer(
             d_model=2 * self.hidden_size,  # 双向，因此是 2 * hidden_size
-            nhead=8,
+            nhead=4,
             num_encoder_layers=2,
             num_decoder_layers=2
         )
@@ -228,7 +228,7 @@ class EModel_BiGRU(nn.Module):
         self.fc = nn.Sequential(
             nn.Linear(2 * self.hidden_size, 128),
             nn.ReLU(),
-            nn.Dropout(0.3),
+            nn.Dropout(0.2),
             nn.Linear(128, 1)
         )
 
@@ -587,14 +587,14 @@ def main():
     modelB = EModel_BiGRU(feature_dim).to(device)
 
     print("\n========== Train EModel_FeatureWeight ==========")
-    (train_lossA, val_lossA, val_rmseA, _) = train_model(
+    (train_lossA, val_lossA, val_rmseA, _, _) = train_model(
         modelA, train_loader, val_loader, 
         model_name='EModel_FeatureWeight', 
         feature_names=feature_cols  # 虽然目前内部未用，但示例保留
     )
 
     print("\n========== Train EModel_BiGRU ==========")
-    (train_lossB, val_lossB, val_rmseB, _) = train_model(
+    (train_lossB, val_lossB, val_rmseB, _, _) = train_model(
         modelB, train_loader, val_loader, 
         model_name='EModel_BiGRU', 
         feature_names=feature_cols

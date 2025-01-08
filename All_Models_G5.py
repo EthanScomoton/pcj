@@ -313,8 +313,8 @@ def train_model(model, train_loader, val_loader, model_name='Model', feature_nam
     train_loss_history = []
     val_loss_history   = []
     val_rmse_history   = []
-    val_mape_history   = []  # ← 新增
-    val_r2_history     = []  # ← 新增
+    val_mape_history   = []  
+    val_r2_history     = []  
 
     feature_importance_history = []
 
@@ -587,14 +587,14 @@ def main():
     modelB = EModel_BiGRU(feature_dim).to(device)
 
     print("\n========== Train EModel_FeatureWeight ==========")
-    (train_lossA, val_lossA, val_rmseA, _, _) = train_model(
+    (train_lossA, val_lossA, val_rmseA, _) = train_model(
         modelA, train_loader, val_loader, 
         model_name='EModel_FeatureWeight', 
         feature_names=feature_cols  # 虽然目前内部未用，但示例保留
     )
 
     print("\n========== Train EModel_BiGRU ==========")
-    (train_lossB, val_lossB, val_rmseB, _, _) = train_model(
+    (train_lossB, val_lossB, val_rmseB, _) = train_model(
         modelB, train_loader, val_loader, 
         model_name='EModel_BiGRU', 
         feature_names=feature_cols

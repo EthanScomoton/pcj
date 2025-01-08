@@ -79,7 +79,7 @@ def feature_engineering(data_df):
     ]
 
     feature_columns = renewable_features + load_features + time_feature_cols
-    target_column   = 'energyconsumption'
+    target_column   = 'E_grid'
 
     data_selected = data_df[feature_columns + [target_column]].copy()
 

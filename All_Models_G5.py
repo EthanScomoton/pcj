@@ -587,14 +587,14 @@ def main():
     modelB = EModel_BiGRU(feature_dim).to(device)
 
     print("\n========== Train EModel_FeatureWeight ==========")
-    (train_lossA, val_lossA, val_rmseA, _) = train_model(
+    (train_lossA, val_lossA, val_rmseA, _, _, _) = train_model(
         modelA, train_loader, val_loader, 
         model_name='EModel_FeatureWeight', 
         feature_names=feature_cols  # 虽然目前内部未用，但示例保留
     )
 
     print("\n========== Train EModel_BiGRU ==========")
-    (train_lossB, val_lossB, val_rmseB, _) = train_model(
+    (train_lossB, val_lossB, val_rmseB, _, _, _) = train_model(
         modelB, train_loader, val_loader, 
         model_name='EModel_BiGRU', 
         feature_names=feature_cols
@@ -608,8 +608,8 @@ def main():
 
     print("\n[Info] Testing...")
     criterion = nn.SmoothL1Loss(beta=1.0)
-    test_lossA, test_rmseA_std, predsA_std, labelsA_std = evaluate(best_modelA, test_loader, criterion)
-    test_lossB, test_rmseB_std, predsB_std, _           = evaluate(best_modelB, test_loader, criterion)
+    test_lossA, test_rmseA_std, predsA_std, labelsA_std, _, _ = evaluate(best_modelA, test_loader, criterion)
+    test_lossB, test_rmseB_std, predsB_std, _, _, _           = evaluate(best_modelB, test_loader, criterion)
 
     print("\n========== Test Results (standardized domain) ==========")
     print(f"[EModel_FeatureWeight] => Test Loss(std): {test_lossA:.4f}, RMSE(std): {test_rmseA_std:.4f}")

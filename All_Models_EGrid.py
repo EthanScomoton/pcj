@@ -59,11 +59,9 @@ def feature_engineering(data_df):
     data_df['month_sin']     = np.sin(2 * np.pi * (data_df['month'] - 1) / 12)
     data_df['month_cos']     = np.cos(2 * np.pi * (data_df['month'] - 1) / 12)
 
-    # ------ 注意：这里将 E_grid 从特征列表中移除，改为当作预测目标 ------
     renewable_features = [
         'season', 'holiday', 'weather', 'temperature',
         'working_hours', 'E_PV', 'E_storage_discharge',
-        # 'E_grid',  <-- 此处删除，避免将目标当作输入
         'ESCFR', 'ESCFG'
     ]
     load_features = ['ship_grade', 'dock_position', 'destination']
@@ -130,9 +128,9 @@ class PositionalEncoding(nn.Module):
         seq_len = x.size(1)
         return x + self.pe[:seq_len, 0, :]
 
-class EncoderDecoderTransformer(nn.Module):
+class Transformer(nn.Module):
     def __init__(self, d_model, nhead=4, num_encoder_layers=2, num_decoder_layers=2):
-        super(EncoderDecoderTransformer, self).__init__()
+        super(Transformer, self).__init__()
         self.encoder_pe = PositionalEncoding(d_model)
         self.decoder_pe = PositionalEncoding(d_model)
 
@@ -152,6 +150,39 @@ class EncoderDecoderTransformer(nn.Module):
         out = self.transformer_decoder(tgt, memory)
         return out
 
+class CNNBlock(nn.Module):
+    def __init__(self, feature_dim, hidden_size, dropout=0.2):
+        super(CNNBlock, self).__init__()
+        self.conv1 = nn.Conv1d(feature_dim, hidden_size, kernel_size=3, padding=1)
+        self.conv2 = nn.Conv1d(hidden_size, hidden_size, kernel_size=5, padding=2)
+        self.conv3 = nn.Conv1d(hidden_size, 2 * hidden_size, kernel_size=7, padding=3)
+        
+        self.bn1 = nn.BatchNorm1d(hidden_size)
+        self.bn2 = nn.BatchNorm1d(hidden_size)
+        self.bn3 = nn.BatchNorm1d(2 * hidden_size)
+        
+        self.dropout = nn.Dropout(dropout)
+        self.relu = nn.ReLU()
+
+    def forward(self, x):
+        # 输入 x: [batch_size, seq_len, feature_dim]
+        x = x.transpose(1, 2)  # 转换为 [batch_size, feature_dim, seq_len]
+        
+        x = self.conv1(x)  # [batch_size, hidden_size, seq_len]
+        x = self.bn1(x)
+        x = self.relu(x)
+        
+        x = self.conv2(x)  # [batch_size, hidden_size, seq_len]
+        x = self.bn2(x)
+        x = self.relu(x)
+        
+        x = self.conv3(x)  # [batch_size, 2 * hidden_size, seq_len]
+        x = self.bn3(x)
+        x = self.relu(x)
+        
+        x = self.dropout(x)
+        x = x.transpose(1, 2)  # 转换回 [batch_size, seq_len, 2 * hidden_size]
+        return x
 class Attention(nn.Module):
     def __init__(self, input_dim):
         super(Attention, self).__init__()
@@ -184,7 +215,7 @@ class EModel_FeatureWeight(nn.Module):
             bidirectional=True,
             dropout=0.2
         )
-        self.transformer_block = EncoderDecoderTransformer(
+        self.transformer_block = Transformer(
             d_model=2*128, nhead=4, num_encoder_layers=2, num_decoder_layers=2
         )
         self.attention = Attention(input_dim=2*128)
@@ -204,9 +235,9 @@ class EModel_FeatureWeight(nn.Module):
         out = self.fc(attn_out)
         return out.squeeze(-1)
 
-class EModel_BiGRU(nn.Module):
+class EModel_CNN_Transformer(nn.Module):
     def __init__(self, feature_dim, hidden_size=128, num_layers=2, dropout=0.2):
-        super(EModel_BiGRU, self).__init__()
+        super(EModel_CNN_Transformer, self).__init__()
         self.feature_dim = feature_dim
         self.hidden_size = hidden_size
         self.num_layers = num_layers
@@ -214,25 +245,23 @@ class EModel_BiGRU(nn.Module):
         # 可学习的特征权重
         self.feature_importance = nn.Parameter(torch.ones(feature_dim), requires_grad=True)
 
-        self.bigru = nn.GRU(
-            input_size=feature_dim,
-            hidden_size=self.hidden_size,
-            num_layers=self.num_layers,
-            batch_first=True,
-            bidirectional=True,
-            dropout=dropout
-        )
+        # 替换 BiGRU 为三阶 CNN 模块
+        self.cnn_block = CNNBlock(feature_dim, hidden_size, dropout)
 
-        self.transformer_block = EncoderDecoderTransformer(
-            d_model=2 * self.hidden_size,  # 双向，因此是 2 * hidden_size
+        # Transformer模块 (Encoder + Decoder)
+        self.transformer_block = Transformer(
+            d_model=2 * hidden_size,  # CNN 输出的维度
             nhead=4,
             num_encoder_layers=2,
             num_decoder_layers=2
         )
-        self.attention = Attention(input_dim=2 * self.hidden_size)
 
+        # Attention模块
+        self.attention = Attention(input_dim=2 * hidden_size)
+
+        # 全连接层
         self.fc = nn.Sequential(
-            nn.Linear(2 * self.hidden_size, 128),
+            nn.Linear(2 * hidden_size, 128),
             nn.ReLU(),
             nn.Dropout(0.2),
             nn.Linear(128, 1)
@@ -242,14 +271,20 @@ class EModel_BiGRU(nn.Module):
         # 利用可学习的特征权重
         x = x * self.feature_importance.unsqueeze(0).unsqueeze(0)
 
-        # 显式初始化 hidden state => [num_layers * 2, batch_size, hidden_size]
-        batch_size = x.size(0)
-        h0 = torch.zeros(self.num_layers * 2, batch_size, self.hidden_size).to(x.device)
+        # 三阶CNN模块
+        cnn_out = self.cnn_block(x)  # [batch_size, seq_len, 2 * hidden_size]
 
-        gru_out, _ = self.bigru(x, h0)
-        transformer_out = self.transformer_block(gru_out)
-        attn_out = self.attention(transformer_out)
-        out = self.fc(attn_out)
+        # Transformer Encoder-Decoder
+        # Transformer需要一个目标序列 (tgt)，这里假设目标序列是输入序列的简单映射
+        src = cnn_out  # [batch_size, seq_len, 2 * hidden_size]
+        tgt = cnn_out  # 使用源序列作为目标序列
+        transformer_out = self.transformer_block(src, tgt)  # [batch_size, seq_len, 2 * hidden_size]
+
+        # Attention模块
+        attn_out = self.attention(transformer_out)  # [batch_size, 2 * hidden_size]
+
+        # 全连接层
+        out = self.fc(attn_out)  # [batch_size, 1]
         return out.squeeze(-1)
 
 # ---------------------------
@@ -578,7 +613,7 @@ def main():
 
     print("[Info] Building models...")
     modelA = EModel_FeatureWeight(feature_dim).to(device)
-    modelB = EModel_BiGRU(feature_dim).to(device)
+    modelB = EModel_CNN_Transformer(feature_dim).to(device)
 
     print("\n========== Train EModel_FeatureWeight ==========")
     (train_lossA, val_lossA, val_rmseA, _, _, _) = train_model(
@@ -587,10 +622,10 @@ def main():
         feature_names=feature_cols  
     )
 
-    print("\n========== Train EModel_BiGRU ==========")
+    print("\n========== Train EModel_CNN_Transformer ==========")
     (train_lossB, val_lossB, val_rmseB, _, _, _) = train_model(
         modelB, train_loader, val_loader, 
-        model_name='EModel_BiGRU', 
+        model_name='EModel_CNN_Transformer', 
         feature_names=feature_cols
     )
 
@@ -598,8 +633,8 @@ def main():
     best_modelA = EModel_FeatureWeight(feature_dim).to(device)
     best_modelA.load_state_dict(torch.load('best_EModel_FeatureWeight.pth', weights_only=True))
 
-    best_modelB = EModel_BiGRU(feature_dim).to(device)
-    best_modelB.load_state_dict(torch.load('best_EModel_BiGRU.pth', weights_only=True))
+    best_modelB = EModel_CNN_Transformer(feature_dim).to(device)
+    best_modelB.load_state_dict(torch.load('best_EModel_CNN_Transformer.pth', weights_only=True))
 
     print("\n[Info] Testing...")
     criterion = nn.SmoothL1Loss(beta=1.0)
@@ -611,7 +646,7 @@ def main():
 
     print("\n========== Test Results (standardized domain) ==========")
     print(f"[EModel_FeatureWeight] => Test Loss(std): {test_lossA:.4f}, RMSE(std): {test_rmseA_std:.4f}")
-    print(f"[EModel_BiGRU]         => Test Loss(std): {test_lossB:.4f}, RMSE(std): {test_rmseB_std:.4f}")
+    print(f"[EModel_CNN_Transformer]         => Test Loss(std): {test_lossB:.4f}, RMSE(std): {test_rmseB_std:.4f}")
 
     # 反标准化
     predsA_real  = scaler_y.inverse_transform(predsA_std.reshape(-1,1)).ravel()
@@ -625,7 +660,7 @@ def main():
 
     print("\n========== Test Results (real domain) ==========")
     print(f"[EModel_FeatureWeight] => RMSE(real): {test_rmseA_real:.4f}")
-    print(f"[EModel_BiGRU]         => RMSE(real): {test_rmseB_real:.4f}")
+    print(f"[EModel_CNN_Transformer]         => RMSE(real): {test_rmseB_real:.4f}")
 
     print("\n========== Train EModel_FeatureWeight (with extended metrics) ==========")
     (train_lossA, val_lossA, val_rmseA, val_mapeA, val_r2A, _) = train_model(
@@ -634,10 +669,10 @@ def main():
         feature_names=feature_cols  
     )
 
-    print("\n========== Train EModel_BiGRU (with extended metrics) ==========")
+    print("\n========== Train EModel_CNN_Transformer (with extended metrics) ==========")
     (train_lossB, val_lossB, val_rmseB, val_mapeB, val_r2B, _) = train_model(
         modelB, train_loader, val_loader, 
-        model_name='EModel_BiGRU', 
+        model_name='EModel_CNN_Transformer', 
         feature_names=feature_cols
     )
 
@@ -647,11 +682,11 @@ def main():
         y_pred_model1_real = predsA_real,
         y_pred_model2_real = predsB_real,
         model1_name        = 'EModel_FeatureWeight',
-        model2_name        = 'EModel_BiGRU'
+        model2_name        = 'EModel_CNN_Transformer'
     )
     plot_training_curves(train_lossA, val_lossA, val_rmseA, model_name='EModel_FeatureWeight')
-    plot_training_curves(train_lossB, val_lossB, val_rmseB, model_name='EModel_BiGRU')
-    plot_two_model_val_rmse(val_rmseA, val_rmseB, labelA='EModel_FeatureWeight', labelB='EModel_BiGRU')
+    plot_training_curves(train_lossB, val_lossB, val_rmseB, model_name='EModel_CNN_Transformer')
+    plot_two_model_val_rmse(val_rmseA, val_rmseB, labelA='EModel_FeatureWeight', labelB='EModel_CNN_Transformer')
 
     plot_training_curves_extended(
         train_lossA, 
@@ -668,7 +703,7 @@ def main():
         val_rmseB, 
         val_mapeB, 
         val_r2B,
-        model_name='EModel_BiGRU'
+        model_name='EModel_CNN_Transformer'
     )
 
     print("[Info] Done!")

@@ -145,14 +145,14 @@ class Transformer(nn.Module):
         decoder_layer = nn.TransformerDecoderLayer(d_model=d_model, nhead=nhead, batch_first=True)
         self.transformer_decoder = nn.TransformerDecoder(decoder_layer, num_layers=num_decoder_layers)
 
-    def forward(self, src):
-        # Encoder
+    def forward(self, src, tgt):
+        # === Encoder ===
         src_enc = self.encoder_pe(src)
         memory  = self.transformer_encoder(src_enc)
 
-        # Decoder (此处仅做示意，如果多步预测则需按照实际逻辑修改)
-        tgt = self.decoder_pe(src)
-        out = self.transformer_decoder(tgt, memory)
+        # === Decoder ===
+        tgt_enc = self.decoder_pe(tgt)
+        out     = self.transformer_decoder(tgt_enc, memory)
         return out
 
 class CNNBlock(nn.Module):
@@ -250,7 +250,7 @@ class EModel_CNN_Transformer(nn.Module):
         # 可学习的特征权重
         self.feature_importance = nn.Parameter(torch.ones(feature_dim), requires_grad=True)
 
-        # 替换 BiGRU 为三阶 CNN 模块
+        # 三阶 CNN 模块
         self.cnn_block = CNNBlock(feature_dim, hidden_size, dropout)
 
         # Transformer模块 (Encoder + Decoder)
@@ -280,9 +280,10 @@ class EModel_CNN_Transformer(nn.Module):
         cnn_out = self.cnn_block(x)  # [batch_size, seq_len, 2 * hidden_size]
 
         # Transformer Encoder-Decoder
-        # Transformer需要一个目标序列 (tgt)，这里假设目标序列是输入序列的简单映射
-        src = cnn_out  # [batch_size, seq_len, 2 * hidden_size]
-        tgt = cnn_out  # 使用源序列作为目标序列
+        # 注意：这里将 cnn_out 作为 src 和 tgt 同时输入，仅供示例
+        # 如果是真正的多步预测或自回归预测，可能需要更复杂的逻辑来构造 tgt
+        src = cnn_out  
+        tgt = cnn_out  
         transformer_out = self.transformer_block(src, tgt)  # [batch_size, seq_len, 2 * hidden_size]
 
         # Attention模块

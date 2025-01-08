@@ -6,7 +6,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
 import seaborn as sns
-import matplotlib.colors as mcolors  # <-- 用于自定义颜色
+import matplotlib.colors as mcolors  # 自定义颜色
 
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import LambdaLR
@@ -481,9 +481,9 @@ def main():
 
     # 加载最优权重 & 测试
     best_modelA = EModel_FeatureWeight(feature_dim).to(device)
-    best_modelA.load_state_dict(torch.load('best_EModel_FeatureWeight.pth'))
+    best_modelA.load_state_dict(torch.load('best_EModel_FeatureWeight.pth', weights_only=True))
     best_modelB = EModel_BiGRU(feature_dim).to(device)
-    best_modelB.load_state_dict(torch.load('best_EModel_BiGRU.pth'))
+    best_modelB.load_state_dict(torch.load('best_EModel_BiGRU.pth', weights_only=True))
 
     print("\n[Info] Testing...")
     criterion = nn.SmoothL1Loss(beta=1.0)

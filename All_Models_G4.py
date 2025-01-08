@@ -189,6 +189,7 @@ class EModel_FeatureWeight(nn.Module):
         )
 
     def forward(self, x):
+        # 利用可学习的特征权重
         x = x * self.feature_importance.unsqueeze(0).unsqueeze(0)
         lstm_out, _ = self.lstm(x)
         transformer_out = self.transformer_block(lstm_out)
@@ -222,6 +223,7 @@ class EModel_BiGRU(nn.Module):
         )
 
     def forward(self, x):
+        # 利用可学习的特征权重
         x = x * self.feature_importance.unsqueeze(0).unsqueeze(0)
         gru_out, _ = self.bigru(x)
         transformer_out = self.transformer_block(gru_out)
@@ -390,12 +392,20 @@ def plot_two_model_val_rmse(val_rmseA, val_rmseB, labelA='ModelA', labelB='Model
 # =============== 新增的热力图函数（替换原先的特征权重可视化） ===============
 def plot_correlation_heatmap(df, feature_cols, title = "Heat map of different types of loads and external factors"):
     """
-    绘制 NxN 热力图，横纵坐标为同一批特征(如 [Cooling, Heating, Power, DBT, RH] 等)。
+    绘制 NxN 热力图，横纵坐标为同一批特征(如 [season, holiday, weather, temperature, ...])。
     - 不显示数字 (annot=False)
     - 使用从红到紫的色系，增强对比度
+    - 若列中含有字符串（如 'winter'），则先用 LabelEncoder 转为数值
     """
+    df_encoded = df.copy()
+    for col in feature_cols:
+        # 如果这一列是字符串/对象类型，先做一个简单的编码
+        if df_encoded[col].dtype == 'object':
+            le = LabelEncoder()
+            df_encoded[col] = le.fit_transform(df_encoded[col].astype(str))
+
     # 1) 计算 NxN 矩阵 (以相关系数为例)
-    corr_matrix = df[feature_cols].corr()
+    corr_matrix = df_encoded[feature_cols].corr()
 
     # 2) 自定义一个从红到粉到紫的颜色映射
     colors_list = ["red", "magenta", "purple"]
@@ -425,13 +435,6 @@ def main():
 
     # ========== 在做特征工程前，或之后，也可基于原始 df 画 NxN 热力图 ==========
     # 比如先简单地在原始 DataFrame 上做一下选择
-    # 这里拿 data_df 里的一些列来演示:
-    # (你可以按需替换成自己真正想画的列，比如 [Cooling, Heating, Power, DBT, RH])
-    # -----------------------------------------------------
-    # 例如选择这几个特征做相关矩阵:
-    # 只要确实存在于 data_df 中，就可以:
-    #  feature_cols_to_plot = ['season', 'weather', 'temperature', 'energyconsumption']
-    # 也可一次性拿更多列
     feature_cols_to_plot = [
         'season', 'holiday', 'weather', 'temperature',
         'working_hours', 'energyconsumption'

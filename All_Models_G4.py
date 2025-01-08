@@ -59,24 +59,16 @@ def feature_engineering(data_df):
     data_df['month_sin']     = np.sin(2 * np.pi * (data_df['month'] - 1) / 12)
     data_df['month_cos']     = np.cos(2 * np.pi * (data_df['month'] - 1) / 12)
 
-    renewable_features = [
-        'season', 'holiday', 'weather', 'temperature',
-        'working_hours', 'E_PV', 'E_storage_discharge',
-        'E_grid', 'ESCFR', 'ESCFG'
-    ]
-    load_features = [
-        'ship_grade', 'dock_position', 'destination'
-    ]
+    renewable_features = ['season', 'holiday', 'weather', 'temperature','working_hours', 'E_PV', 'E_storage_discharge','E_grid', 'ESCFR', 'ESCFG']
+    load_features = ['ship_grade', 'dock_position', 'destination']
+
     for col in renewable_features + load_features:
         if col in data_df.columns:
             le = LabelEncoder()
             data_df[col] = le.fit_transform(data_df[col].astype(str))
 
-    time_feature_cols = [
-        'dayofweek_sin', 'dayofweek_cos',
-        'hour_sin', 'hour_cos',
-        'month_sin', 'month_cos'
-    ]
+    time_feature_cols = ['dayofweek_sin', 'dayofweek_cos','hour_sin', 'hour_cos','month_sin', 'month_cos']
+
     feature_columns = renewable_features + load_features + time_feature_cols
     target_column   = 'energyconsumption'
 
@@ -125,7 +117,7 @@ class PositionalEncoding(nn.Module):
         return x + self.pe[:seq_len, 0, :]
 
 class EncoderDecoderTransformer(nn.Module):
-    def __init__(self, d_model, nhead=8, num_encoder_layers=2, num_decoder_layers=2):
+    def __init__(self, d_model, nhead = 8, num_encoder_layers = 2, num_decoder_layers = 2):
         super(EncoderDecoderTransformer, self).__init__()
         self.encoder_pe = PositionalEncoding(d_model)
         self.decoder_pe = PositionalEncoding(d_model)
@@ -341,8 +333,7 @@ def train_model(model, train_loader, val_loader, model_name='Model', feature_nam
 # ---------------------------
 # 4. 可视化
 # ---------------------------
-def plot_predictions_comparison(y_actual_real, y_pred_model1_real, y_pred_model2_real,
-                                model1_name='Model1', model2_name='Model2'):
+def plot_predictions_comparison(y_actual_real, y_pred_model1_real, y_pred_model2_real, model1_name='Model1', model2_name='Model2'):
     plt.figure(figsize=(10,5))
     x_axis = np.arange(len(y_actual_real))
 

@@ -221,7 +221,10 @@ class EModel_FeatureWeight(nn.Module):
             dropout=0.2
         )
         self.transformer_block = Transformer(
-            d_model=2*128, nhead=4, num_encoder_layers=2, num_decoder_layers=2
+            d_model=2*128,  # 与 LSTM hidden_size=128 双向 => 输出 2*128
+            nhead=4,
+            num_encoder_layers=2,
+            num_decoder_layers=2
         )
         self.attention = Attention(input_dim=2*128)
         self.fc = nn.Sequential(
@@ -234,9 +237,17 @@ class EModel_FeatureWeight(nn.Module):
     def forward(self, x):
         # 利用可学习的特征权重
         x = x * self.feature_importance.unsqueeze(0).unsqueeze(0)
-        lstm_out, _ = self.lstm(x)
-        transformer_out = self.transformer_block(lstm_out)
+
+        # LSTM
+        lstm_out, _ = self.lstm(x)  # [batch_size, seq_len, 2*128]
+
+        # 传入 src 和 tgt，这里简单做法是让 tgt = lstm_out
+        transformer_out = self.transformer_block(lstm_out, lstm_out)
+
+        # Attention
         attn_out = self.attention(transformer_out)
+
+        # 全连接
         out = self.fc(attn_out)
         return out.squeeze(-1)
 

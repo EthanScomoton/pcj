@@ -29,8 +29,8 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 # 加载和预处理数据
 def load_and_preprocess_data():
-    renewable_df = pd.read_csv(r'C:\Users\Administrator\Desktop\renewable_data.csv')
-    load_df = pd.read_csv(r'C:\Users\Administrator\Desktop\load_data.csv')
+    renewable_df = pd.read_csv(r'C:\Users\Administrator\Desktop\renewable_data10.csv')
+    load_df = pd.read_csv(r'C:\Users\Administrator\Desktop\load_data10.csv')
 
     renewable_df['timestamp'] = pd.to_datetime(renewable_df['timestamp'])
     load_df['timestamp'] = pd.to_datetime(load_df['timestamp'])

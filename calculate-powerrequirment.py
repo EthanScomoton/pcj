@@ -9,7 +9,7 @@ edge_indices = None
 energy_matrix = None
 start_point = 1
 
-load_data_path = "/Users/ethan/Desktop/load_data.csv"
+load_data_path = "/Users/ethan/Desktop/load_data10.csv"
 load_data_df = pd.read_csv(load_data_path)
 
 

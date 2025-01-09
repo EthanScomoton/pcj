@@ -59,11 +59,7 @@ def feature_engineering(data_df):
     data_df['month_sin']     = np.sin(2 * np.pi * (data_df['month'] - 1) / 12)
     data_df['month_cos']     = np.cos(2 * np.pi * (data_df['month'] - 1) / 12)
 
-    renewable_features = [
-        'season', 'holiday', 'weather', 'temperature',
-        'working_hours', 'E_PV', 'E_wind', 'E_storage_discharge',
-        'ESCFR', 'ESCFG'
-    ]
+    renewable_features = ['season', 'holiday', 'weather', 'temperature','working_hours', 'E_PV', 'E_wind', 'E_storage_discharge','ESCFR', 'ESCFG']
     load_features = ['ship_grade', 'dock_position', 'destination', 'energyconsumption']
 
     # 对分类特征进行LabelEncoder编码
@@ -123,10 +119,6 @@ class PositionalEncoding(nn.Module):
         self.register_buffer('pe', pe)
 
     def forward(self, x, step_offset=0):
-        """
-        x: [batch_size, seq_len, d_model]
-        step_offset: 当做多步预测时，如需对每一新步加不同的位置编码，可用此偏移量
-        """
         seq_len = x.size(1)
         pos_enc = self.pe[step_offset: step_offset + seq_len, 0, :]
         return x + pos_enc.unsqueeze(0)  # [batch_size, seq_len, d_model]

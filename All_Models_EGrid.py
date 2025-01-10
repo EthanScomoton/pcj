@@ -577,6 +577,37 @@ def plot_training_curves_extended(
     plt.tight_layout()
     plt.show()
 
+# =========== 新增可视化函数 ===========
+def plot_Egrid_over_time(data_df):
+    """
+    绘制整段时间序列上 E_grid 值的变化趋势（原始域数据）。
+    data_df 需要包含 'timestamp' 和 'E_grid' 两列，并保证已按时间排序。
+    """
+    plt.figure(figsize=(10, 5))
+    plt.plot(data_df['timestamp'], data_df['E_grid'], color='blue', marker='o', markersize=2, linewidth=1)
+    plt.xlabel('Timestamp')
+    plt.ylabel('E_grid')
+    plt.title('E_grid over Time (entire dataset)')
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show()
+
+def plot_test_predictions_over_time(test_timestamps, y_actual_real, y_pred_real):
+    """
+    在时间轴上同时画出 E_grid 的实际值和预测值随时间变化曲线（针对测试集）。
+    test_timestamps: 测试集对应的 timestamp 列（长度与 y_actual_real 一致）。
+    """
+    plt.figure(figsize=(10,5))
+    plt.plot(test_timestamps, y_actual_real, 'r-o', label='Actual E_grid', markersize=2, linewidth=1)
+    plt.plot(test_timestamps, y_pred_real,   'b--*', label='Predicted E_grid', markersize=2, linewidth=1)
+    plt.xlabel('Timestamp (Test Data)')
+    plt.ylabel('E_grid (real domain)')
+    plt.title('Comparison of Actual vs Predicted E_grid over Time')
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show()
+
 # ---------------------------
 # 5. 主函数
 # ---------------------------
@@ -596,6 +627,10 @@ def main():
     # 分析目标列 E_grid 的分布
     analyze_target_distribution(data_df, "E_grid")
 
+    # ========== 新增：在整段时间序列上，画出 E_grid 的变化趋势 ==========
+    # (这里 data_df['E_grid'] 还是原始域数据)
+    plot_Egrid_over_time(data_df)
+
     # ========== 特征工程 + 序列构建 + 训练测试拆分 ==========
     data_all, feature_cols, target_col, scaler_y = feature_engineering(data_df)
     feature_dim = len(feature_cols)
@@ -611,8 +646,8 @@ def main():
     test_size     = total_samples - train_size - val_size
 
     X_train, y_train = X_all[:train_size], y_all[:train_size]
-    X_val,   y_val   = X_all[train_size : train_size+val_size], y_all[train_size : train_size+val_size]
-    X_test,  y_test  = X_all[train_size+val_size:], y_all[train_size+val_size:]
+    X_val,   y_val   = X_all[train_size : train_size + val_size], y_all[train_size : train_size + val_size]
+    X_test,  y_test  = X_all[train_size + val_size:], y_all[train_size + val_size:]
     print(f"[Info] Split data => Train: {train_size}, Val: {val_size}, Test: {test_size}")
 
     train_dataset = TensorDataset(torch.from_numpy(X_train), torch.from_numpy(y_train))
@@ -622,6 +657,14 @@ def main():
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True,  num_workers=num_workers)
     val_loader   = DataLoader(val_dataset,   batch_size=batch_size, shuffle=False, num_workers=num_workers)
     test_loader  = DataLoader(test_dataset,  batch_size=batch_size, shuffle=False, num_workers=num_workers)
+
+    # ========== 生成与序列数据对应的时间戳 ==========
+    # 注意：X_all, y_all 的样本个数是 (len(data_df) - window_size)
+    # 对应的时间戳应从 window_size 之后开始，这样 i-th 样本对应 data_df.loc[i+window_size].
+    timestamps_all = data_df['timestamp'].values[window_size:]
+    train_timestamps = timestamps_all[:train_size]
+    val_timestamps   = timestamps_all[train_size : train_size + val_size]
+    test_timestamps  = timestamps_all[train_size + val_size :]
 
     print("[Info] Building models...")
     modelA = EModel_FeatureWeight(feature_dim).to(device)
@@ -690,7 +733,11 @@ def main():
         feature_names=feature_cols
     )
 
-    # 可视化对比
+    # ========== 新增：在时间轴上同时画出测试集的实际值和预测值 ==========
+    # 这里为了方便，直接用 modelA 作为示例，也可以画 modelB 或者都画
+    plot_test_predictions_over_time(test_timestamps, labelsA_real, predsA_real)
+
+    # 其余可视化对比
     plot_predictions_comparison(
         y_actual_real      = labelsA_real,
         y_pred_model1_real = predsA_real,

@@ -6,7 +6,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
 import seaborn as sns
-import matplotlib.colors as mcolors  # 自定义颜色
+import matplotlib.colors as mcolors  # 颜色
 import matplotlib as mpl  # 用于统一修改全局字体大小
 
 from torch.optim import AdamW
@@ -20,11 +20,11 @@ from torch.nn.utils import clip_grad_norm_
 # 全局字体及样式设置
 # ---------------------------
 mpl.rcParams.update({
-    'font.size': 12,        # 整体文字大小
-    'axes.labelsize': 14,   # 坐标轴标签文字大小
-    'axes.titlesize': 16,   # 图表标题文字大小
-    'xtick.labelsize': 12,  # x 轴刻度文字大小
-    'ytick.labelsize': 12   # y 轴刻度文字大小
+    'font.size': 16,        # 整体文字大小
+    'axes.labelsize': 16,   # 坐标轴标签文字大小
+    'axes.titlesize': 18,   # 图表标题文字大小
+    'xtick.labelsize': 14,  # x 轴刻度文字大小
+    'ytick.labelsize': 14   # y 轴刻度文字大小
 })
 
 # ---------------------------

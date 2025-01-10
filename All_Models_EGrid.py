@@ -7,6 +7,7 @@ import torch.nn.functional as F
 import matplotlib.pyplot as plt
 import seaborn as sns
 import matplotlib.colors as mcolors  # 自定义颜色
+import matplotlib as mpl  # 用于统一修改全局字体大小
 
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import LambdaLR
@@ -14,6 +15,17 @@ from torch.utils.data import DataLoader, TensorDataset
 from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.metrics import mean_squared_error
 from torch.nn.utils import clip_grad_norm_
+
+# ---------------------------
+# 全局字体及样式设置
+# ---------------------------
+mpl.rcParams.update({
+    'font.size': 12,        # 整体文字大小
+    'axes.labelsize': 14,   # 坐标轴标签文字大小
+    'axes.titlesize': 16,   # 图表标题文字大小
+    'xtick.labelsize': 12,  # x 轴刻度文字大小
+    'ytick.labelsize': 12   # y 轴刻度文字大小
+})
 
 # ---------------------------
 # 0. 全局超参数
@@ -59,10 +71,16 @@ def feature_engineering(data_df):
     data_df['month_sin']     = np.sin(2 * np.pi * (data_df['month'] - 1) / 12)
     data_df['month_cos']     = np.cos(2 * np.pi * (data_df['month'] - 1) / 12)
 
-    renewable_features = ['season', 'holiday', 'weather', 'temperature','working_hours', 'E_PV', 'E_wind', 'E_storage_discharge','ESCFR', 'ESCFG']
-    load_features = ['ship_grade', 'dock_position', 'destination', 'energyconsumption']
+    renewable_features = [
+        'season', 'holiday', 'weather', 'temperature',
+        'working_hours', 'E_PV', 'E_wind', 'E_storage_discharge',
+        'ESCFR', 'ESCFG'
+    ]
+    load_features = [
+        'ship_grade', 'dock_position', 'destination', 'energyconsumption'
+    ]
 
-    # 对分类特征进行LabelEncoder编码
+    # 对分类特征进行 LabelEncoder 编码
     for col in renewable_features + load_features:
         if col in data_df.columns:
             le = LabelEncoder()
@@ -435,9 +453,9 @@ def plot_predictions_comparison(y_actual_real, y_pred_model1_real, y_pred_model2
     plt.figure(figsize=(10,5))
     x_axis = np.arange(len(y_actual_real))
 
-    plt.plot(x_axis, y_actual_real,        'r-o',  label='Actual', linewidth=1)
-    plt.plot(x_axis, y_pred_model1_real,   'g--*', label=model1_name, linewidth=1)
-    plt.plot(x_axis, y_pred_model2_real,   'b-.*', label=model2_name, linewidth=1)
+    plt.plot(x_axis, y_actual_real,        'r-o',  label='Actual', linewidth=1, markersize=4)
+    plt.plot(x_axis, y_pred_model1_real,   'g--*', label=model1_name, linewidth=1, markersize=4)
+    plt.plot(x_axis, y_pred_model2_real,   'b-.*', label=model2_name, linewidth=1, markersize=4)
     plt.xlabel('Index')
     plt.ylabel('Value (real domain)')
     plt.title(f'Comparison: Actual vs {model1_name} vs {model2_name}')
@@ -450,9 +468,9 @@ def plot_training_curves(train_loss_history, val_loss_history, val_rmse_history,
     epochs = range(1, len(train_loss_history) + 1)
     plt.figure(figsize=(10,5))
 
-    plt.plot(epochs, train_loss_history, 'r-o',  label='Train Loss(std)')
-    plt.plot(epochs, val_loss_history,   'b-o',  label='Val Loss(std)')
-    plt.plot(epochs, val_rmse_history,   'g--*', label='Val RMSE(std)')
+    plt.plot(epochs, train_loss_history, 'r-o',  label='Train Loss(std)', markersize=4)
+    plt.plot(epochs, val_loss_history,   'b-o',  label='Val Loss(std)',   markersize=4)
+    plt.plot(epochs, val_rmse_history,   'g--*', label='Val RMSE(std)',   markersize=4)
 
     plt.xlabel('Epoch')
     plt.ylabel('Loss / RMSE (standardized domain)')
@@ -467,8 +485,8 @@ def plot_two_model_val_rmse(val_rmseA, val_rmseB, labelA='ModelA', labelB='Model
     epochsB = range(1, len(val_rmseB) + 1)
 
     plt.figure(figsize=(8,5))
-    plt.plot(epochsA, val_rmseA, 'r-o', label=f'{labelA} Val RMSE (std)')
-    plt.plot(epochsB, val_rmseB, 'b-o', label=f'{labelB} Val RMSE (std)')
+    plt.plot(epochsA, val_rmseA, 'r-o', label=f'{labelA} Val RMSE (std)', markersize=4)
+    plt.plot(epochsB, val_rmseB, 'b-o', label=f'{labelB} Val RMSE (std)', markersize=4)
 
     plt.xlabel('Epoch')
     plt.ylabel('RMSE (standardized domain)')
@@ -479,6 +497,12 @@ def plot_two_model_val_rmse(val_rmseA, val_rmseB, labelA='ModelA', labelB='Model
     plt.show()
 
 def plot_correlation_heatmap(df, feature_cols, title = "Heat map of different types of loads and external factors"):
+    """
+    修改后的热力图绘制函数：
+    1. 调整颜色：从红 -> 黄 -> 绿的平滑过渡
+    2. 使用 annot=True 在格子中显示数值
+    3. 增加字体
+    """
     df_encoded = df.copy()
     for col in feature_cols:
         if df_encoded[col].dtype == 'object':
@@ -487,20 +511,28 @@ def plot_correlation_heatmap(df, feature_cols, title = "Heat map of different ty
 
     corr_matrix = df_encoded[feature_cols].corr()
 
-    colors_list = ["red", "magenta", "green"]
-    cmap_custom = mcolors.LinearSegmentedColormap.from_list("my_rdpu", colors_list, N=256)
+    # 自定义从红 -> 黄 -> 绿的平滑渐变色表
+    colors_list = [
+        (1.0, 0.0, 0.0),  # 红
+        (1.0, 1.0, 0.0),  # 黄
+        (0.0, 1.0, 0.0)   # 绿
+    ]
+    cmap_custom = mcolors.LinearSegmentedColormap.from_list("red_yellow_green", colors_list, N=256)
 
-    plt.figure(figsize=(6, 5))
+    plt.figure(figsize=(8, 6))
     sns.heatmap(
         corr_matrix,
         cmap=cmap_custom,
-        annot=False,
+        annot=True,     # 显示数值
+        fmt=".2f",      # 保留两位小数
         square=True,
         linewidths=1,
         linecolor='white',
-        cbar=True
+        cbar=True,
+        vmin=-1,
+        vmax=1
     )
-    plt.title(title)
+    plt.title(title, fontsize=16)
     plt.xticks(rotation=45, ha='right')
     plt.tight_layout()
     plt.show()
@@ -538,8 +570,8 @@ def plot_training_curves_extended(
 
     # (1) Loss
     plt.subplot(2, 2, 1)
-    plt.plot(epochs, train_loss_history, 'r-o', label='Train Loss(std)')
-    plt.plot(epochs, val_loss_history,   'b-o', label='Val Loss(std)')
+    plt.plot(epochs, train_loss_history, 'r-o', label='Train Loss(std)', markersize=4)
+    plt.plot(epochs, val_loss_history,   'b-o', label='Val Loss(std)',   markersize=4)
     plt.xlabel('Epoch')
     plt.ylabel('Loss (std)')
     plt.title('Loss')
@@ -548,7 +580,7 @@ def plot_training_curves_extended(
 
     # (2) RMSE
     plt.subplot(2, 2, 2)
-    plt.plot(epochs, val_rmse_history, 'g--*', label='Val RMSE(std)')
+    plt.plot(epochs, val_rmse_history, 'g--*', label='Val RMSE(std)', markersize=4)
     plt.xlabel('Epoch')
     plt.ylabel('RMSE (std)')
     plt.title('RMSE')
@@ -557,7 +589,7 @@ def plot_training_curves_extended(
 
     # (3) MAPE
     plt.subplot(2, 2, 3)
-    plt.plot(epochs, val_mape_history, 'm-*', label='Val MAPE(%)')
+    plt.plot(epochs, val_mape_history, 'm-*', label='Val MAPE(%)', markersize=4)
     plt.xlabel('Epoch')
     plt.ylabel('MAPE (%)')
     plt.title('MAPE')
@@ -566,7 +598,7 @@ def plot_training_curves_extended(
 
     # (4) R^2
     plt.subplot(2, 2, 4)
-    plt.plot(epochs, val_r2_history, 'c-o', label='Val R^2')
+    plt.plot(epochs, val_r2_history, 'c-o', label='Val R^2', markersize=4)
     plt.xlabel('Epoch')
     plt.ylabel('R^2')
     plt.title('R^2')
@@ -577,14 +609,15 @@ def plot_training_curves_extended(
     plt.tight_layout()
     plt.show()
 
-# =========== 新增可视化函数 ===========
+# =========== 可视化函数 ===========
 def plot_Egrid_over_time(data_df):
     """
     绘制整段时间序列上 E_grid 值的变化趋势（原始域数据）。
     data_df 需要包含 'timestamp' 和 'E_grid' 两列，并保证已按时间排序。
     """
     plt.figure(figsize=(10, 5))
-    plt.plot(data_df['timestamp'], data_df['E_grid'], color='blue', marker='o', markersize=2, linewidth=1)
+    plt.plot(data_df['timestamp'], data_df['E_grid'],
+             color='blue', marker='o', markersize=3, linewidth=1)
     plt.xlabel('Timestamp')
     plt.ylabel('E_grid')
     plt.title('E_grid over Time (entire dataset)')
@@ -598,8 +631,8 @@ def plot_test_predictions_over_time(test_timestamps, y_actual_real, y_pred_real)
     test_timestamps: 测试集对应的 timestamp 列（长度与 y_actual_real 一致）。
     """
     plt.figure(figsize=(10,5))
-    plt.plot(test_timestamps, y_actual_real, 'r-o', label='Actual E_grid', markersize=2, linewidth=1)
-    plt.plot(test_timestamps, y_pred_real,   'b--*', label='Predicted E_grid', markersize=2, linewidth=1)
+    plt.plot(test_timestamps, y_actual_real, 'r-o',  label='Actual E_grid',   markersize=3, linewidth=1)
+    plt.plot(test_timestamps, y_pred_real,   'b--*', label='Predicted E_grid', markersize=3, linewidth=1)
     plt.xlabel('Timestamp (Test Data)')
     plt.ylabel('E_grid (real domain)')
     plt.title('Comparison of Actual vs Predicted E_grid over Time')
@@ -627,8 +660,7 @@ def main():
     # 分析目标列 E_grid 的分布
     analyze_target_distribution(data_df, "E_grid")
 
-    # ========== 新增：在整段时间序列上，画出 E_grid 的变化趋势 ==========
-    # (这里 data_df['E_grid'] 还是原始域数据)
+    # ========== 在整段时间序列上，画出 E_grid 的变化趋势 ==========
     plot_Egrid_over_time(data_df)
 
     # ========== 特征工程 + 序列构建 + 训练测试拆分 ==========
@@ -659,8 +691,6 @@ def main():
     test_loader  = DataLoader(test_dataset,  batch_size=batch_size, shuffle=False, num_workers=num_workers)
 
     # ========== 生成与序列数据对应的时间戳 ==========
-    # 注意：X_all, y_all 的样本个数是 (len(data_df) - window_size)
-    # 对应的时间戳应从 window_size 之后开始，这样 i-th 样本对应 data_df.loc[i+window_size].
     timestamps_all = data_df['timestamp'].values[window_size:]
     train_timestamps = timestamps_all[:train_size]
     val_timestamps   = timestamps_all[train_size : train_size + val_size]
@@ -733,11 +763,10 @@ def main():
         feature_names=feature_cols
     )
 
-    # ========== 新增：在时间轴上同时画出测试集的实际值和预测值 ==========
-    # 这里为了方便，直接用 modelA 作为示例，也可以画 modelB 或者都画
+    # ========== 在时间轴上同时画出测试集的实际值和预测值 (示例：modelA) ==========
     plot_test_predictions_over_time(test_timestamps, labelsA_real, predsA_real)
 
-    # 其余可视化对比
+    # 其他可视化对比
     plot_predictions_comparison(
         y_actual_real      = labelsA_real,
         y_pred_model1_real = predsA_real,

@@ -32,7 +32,7 @@ mpl.rcParams.update({
 # ---------------------------
 learning_rate = 1e-4
 num_epochs    = 150
-batch_size    = 128
+batch_size    = 64
 weight_decay  = 1e-6
 patience      = 5
 num_workers   = 0

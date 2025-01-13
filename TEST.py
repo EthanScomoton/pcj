@@ -1,7 +1,7 @@
 import math
 import numpy as np
 import pandas as pd
-import pywt  # 用于小波变换示例
+import pywt 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -49,10 +49,6 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 # ============ 数据预处理辅助函数 ============
 
 def fill_missing_values(df, method='ffill'):
-    """
-    数据清洗：缺失值填充 (示例性演示，可根据实际需求更换策略)
-    method: 'ffill' / 'bfill' / 'mean' 等
-    """
     if method in ['ffill', 'bfill']:
         df.fillna(method=method, inplace=True)
     elif method == 'mean':
@@ -62,11 +58,6 @@ def fill_missing_values(df, method='ffill'):
     return df
 
 def remove_outliers_by_zscore(df, cols, threshold=3.0):
-    """
-    数据清洗：利用 z-score 方法去除异常值 (示例性演示)
-    cols: 需要进行异常值检测的列
-    threshold: z-score 阈值，默认 3.0
-    """
     for col in cols:
         if col not in df.columns:
             continue
@@ -102,10 +93,6 @@ def wavelet_denoising(signal, wavelet='db4', level=1):
     return reconstructed
 
 def feature_selection_by_correlation(df, target, threshold=0.1):
-    """
-    特征选择：根据与目标列的相关性进行初步筛选 (示例性演示)
-    threshold: 相关系数绝对值低于阈值则剔除
-    """
     corr_matrix = df.corr()[target].abs()
     selected_features = corr_matrix[corr_matrix >= threshold].index.tolist()
     return selected_features
@@ -128,7 +115,7 @@ def load_data():
 
     # 3) 数据清洗：缺失值、异常值处理
     data_df = fill_missing_values(data_df, method='ffill')
-    # 示例性对部分列进行异常值检测
+
     numeric_cols = data_df.select_dtypes(include=[np.number]).columns.tolist()
     data_df = remove_outliers_by_zscore(data_df, cols=numeric_cols, threshold=3.0)
     
@@ -165,8 +152,7 @@ def feature_engineering(data_df):
             le = LabelEncoder()
             data_df[col] = le.fit_transform(data_df[col].astype(str))
 
-    # 3) 数据分解与去噪（示例：对 'E_grid' 做小波去噪）
-    #    如果要对其他列去噪，也可在此批量处理
+    # 3) 数据分解与去噪（对 'E_grid' 做小波去噪）
     if 'E_grid' in data_df.columns:
         e_grid_denoised = wavelet_denoising(data_df['E_grid'].values, wavelet='db4', level=1)
         
@@ -347,24 +333,24 @@ class EModel_FeatureWeight(nn.Module):
 
         self.lstm = nn.LSTM(
             input_size=feature_dim,
-            hidden_size=64,
+            hidden_size=128,
             num_layers=2,
             batch_first=True,
             bidirectional=True,
             dropout=0
         )
         self.transformer_block = Transformer(
-            d_model=2*64,  # 与 LSTM 双向 => 输出 2*hidden_size
+            d_model=2*128,  # 与 LSTM 双向 => 输出 2*hidden_size
             nhead=4,
             num_encoder_layers=2,
             num_decoder_layers=2
         )
-        self.attention = Attention(input_dim=2*64)
+        self.attention = Attention(input_dim=2*128)
         self.fc = nn.Sequential(
-            nn.Linear(2*64, 64),
+            nn.Linear(2*128, 128),
             nn.ReLU(),
             nn.Dropout(0),
-            nn.Linear(64, 1)
+            nn.Linear(128, 1)
         )
 
     def forward(self, x):
@@ -372,7 +358,7 @@ class EModel_FeatureWeight(nn.Module):
         x = x * self.feature_importance.unsqueeze(0).unsqueeze(0)
 
         # LSTM
-        lstm_out, _ = self.lstm(x)  # [batch_size, seq_len, 2*64]
+        lstm_out, _ = self.lstm(x)  # [batch_size, seq_len, 2*128]
 
         # 传入 src 和 tgt，这里简单做法是让 tgt = lstm_out
         transformer_out = self.transformer_block(lstm_out, lstm_out)
@@ -388,7 +374,7 @@ class EModel_CNN_Transformer(nn.Module):
     """
     三阶 CNN + Transformer + Attention 的组合，额外引入 feature_importance 作为可学习权重。
     """
-    def __init__(self, feature_dim, hidden_size=64, num_layers=2, dropout=0):
+    def __init__(self, feature_dim, hidden_size=128, num_layers=2, dropout=0):
         super(EModel_CNN_Transformer, self).__init__()
         self.feature_dim = feature_dim
         self.hidden_size = hidden_size

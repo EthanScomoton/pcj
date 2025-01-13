@@ -59,6 +59,14 @@ def load_data():
     return data_df
 
 def feature_engineering(data_df):
+    """
+    在此函数中对 E_grid 进行 EWMA 平滑处理，并进行后续的特征工程
+    """
+    # ====== 加入对 E_grid 的 EWMA 平滑处理 ======
+    span = 10
+    data_df['E_grid'] = data_df['E_grid'].ewm(span=span, adjust=False).mean()
+
+    # ====== 时间特征构造 ======
     data_df['dayofweek'] = data_df['timestamp'].dt.dayofweek
     data_df['hour']      = data_df['timestamp'].dt.hour
     data_df['month']     = data_df['timestamp'].dt.month
@@ -225,24 +233,24 @@ class EModel_FeatureWeight(nn.Module):
 
         self.lstm = nn.LSTM(
             input_size=feature_dim,
-            hidden_size=64,
+            hidden_size=128,
             num_layers=2,
             batch_first=True,
             bidirectional=True,
             dropout=0
         )
         self.transformer_block = Transformer(
-            d_model=2*64,  # 与 LSTM 双向 => 输出 2*hidden_size
+            d_model=2*128,  # 与 LSTM 双向 => 输出 2*hidden_size
             nhead=4,
             num_encoder_layers=2,
             num_decoder_layers=2
         )
-        self.attention = Attention(input_dim=2*64)
+        self.attention = Attention(input_dim=2*128)
         self.fc = nn.Sequential(
-            nn.Linear(2*64, 64),
+            nn.Linear(2*128, 128),
             nn.ReLU(),
             nn.Dropout(0),
-            nn.Linear(64, 1)
+            nn.Linear(128, 1)
         )
 
     def forward(self, x):
@@ -266,7 +274,7 @@ class EModel_CNN_Transformer(nn.Module):
     """
     三阶 CNN + Transformer + Attention 的组合，额外引入 feature_importance 作为可学习权重。
     """
-    def __init__(self, feature_dim, hidden_size=64, num_layers=2, dropout=0):
+    def __init__(self, feature_dim, hidden_size=128, num_layers=2, dropout=0):
         super(EModel_CNN_Transformer, self).__init__()
         self.feature_dim = feature_dim
         self.hidden_size = hidden_size
@@ -642,7 +650,6 @@ def main():
     data_df = load_data()
 
     # ========== 基于原始 df 画 NxN 热力图（此处保留 E_grid=0 的数据） ==========
-    # 将 E_grid 纳入以便观察其与其它字段的相关性
     feature_cols_to_plot = [
         'season', 'holiday', 'weather', 'temperature',
         'working_hours', 'E_grid'
@@ -762,20 +769,15 @@ def main():
 
     # ========== 在时间轴上同时画出测试集的实际值和预测值 (示例：modelA) ==========
     plot_test_predictions_over_time(test_timestamps, labelsA_real, predsA_real)
-    # ========== 额外示例：可视化训练集和验证集的时序预测结果 ==========
 
-    # 1) 计算训练集上的预测结果
+    # ========== 计算并绘制训练集和验证集的预测曲线 (modelA) ==========
     train_lossA, train_rmseA_std, train_mapeA_std, train_r2A_std, predsA_train_std, labelsA_train_std = evaluate(best_modelA, train_loader, criterion)
     predsA_train_real  = scaler_y.inverse_transform(predsA_train_std.reshape(-1, 1)).ravel()
     labelsA_train_real = scaler_y.inverse_transform(labelsA_train_std.reshape(-1, 1)).ravel()
 
-    # 2) 计算验证集上的预测结果
     val_lossA, val_rmseA_std, val_mapeA_std, val_r2A_std, predsA_val_std, labelsA_val_std = evaluate(best_modelA, val_loader, criterion)
     predsA_val_real  = scaler_y.inverse_transform(predsA_val_std.reshape(-1, 1)).ravel()
     labelsA_val_real = scaler_y.inverse_transform(labelsA_val_std.reshape(-1, 1)).ravel()
-
-    # 3) 分别绘制训练集、验证集的预测曲线
-    # train_timestamps, val_timestamps 与训练集、验证集的数据长度对应
 
     print("\n[Info] Plot predictions for Training Set:")
     plot_test_predictions_over_time(train_timestamps, labelsA_train_real, predsA_train_real)

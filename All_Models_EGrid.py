@@ -237,12 +237,12 @@ class EModel_FeatureWeight(nn.Module):
             num_encoder_layers=2,
             num_decoder_layers=2
         )
-        self.attention = Attention(input_dim=2*128)
+        self.attention = Attention(input_dim=2*64)
         self.fc = nn.Sequential(
-            nn.Linear(2*128, 128),
+            nn.Linear(2*64, 64),
             nn.ReLU(),
             nn.Dropout(0),
-            nn.Linear(128, 1)
+            nn.Linear(64, 1)
         )
 
     def forward(self, x):

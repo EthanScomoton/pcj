@@ -347,8 +347,11 @@ def evaluate(model, dataloader, criterion):
     rmse_std = np.sqrt(mean_squared_error(labels_arr, preds_arr))
 
     # ---- 2. 计算 MAPE（标准化域下）----
-    # 注意：若 y_i = 0 会导致除零问题，如有需求可筛除
-    mape_std = np.mean(np.abs((labels_arr - preds_arr) / labels_arr)) * 100.0
+    # 注意：若 y_i = 0 会导致除零问题，如有需求可筛除或加极小值
+    # 这里只是演示；有些用法会对 0 做特殊处理
+    nonzero_mask = (labels_arr != 0)
+    mape_std = np.mean(np.abs((labels_arr[nonzero_mask] - preds_arr[nonzero_mask]) 
+                              / labels_arr[nonzero_mask])) * 100.0 if np.sum(nonzero_mask) > 0 else 0.0
 
     # ---- 3. 计算 R^2（标准化域下）----
     ss_res = np.sum((labels_arr - preds_arr)**2)
@@ -429,6 +432,7 @@ def train_model(model, train_loader, val_loader, model_name='Model', feature_nam
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             counter       = 0
+            # 注意：如果本地 PyTorch 版本低，可直接使用 torch.save(model.state_dict(), "xxx.pth")
             torch.save(model.state_dict(), f"best_{model_name}.pth")
             print(f"[{model_name}] 模型已保存。")
         else:
@@ -648,7 +652,7 @@ def main():
     print("[Info] Loading and preprocessing data...")
     data_df = load_data()
 
-    # ========== 基于原始 df 画 NxN 热力图 ==========
+    # ========== 基于原始 df 画 NxN 热力图（此处保留 E_grid=0 的数据） ==========
     # 将 E_grid 纳入以便观察其与其它字段的相关性
     feature_cols_to_plot = [
         'season', 'holiday', 'weather', 'temperature',
@@ -657,10 +661,14 @@ def main():
     feature_cols_to_plot = [c for c in feature_cols_to_plot if c in data_df.columns]
     plot_correlation_heatmap(data_df, feature_cols_to_plot)
 
-    # 分析目标列 E_grid 的分布
+    # ========= 在绘制完热力图后，删除 E_grid == 0 的行，并重置索引 =========
+    data_df = data_df[data_df['E_grid'] != 0].copy()
+    data_df.reset_index(drop=True, inplace=True)
+    
+    # 分析目标列 E_grid 的分布（此时已经不含 E_grid=0）
     analyze_target_distribution(data_df, "E_grid")
 
-    # ========== 在整段时间序列上，画出 E_grid 的变化趋势 ==========
+    # ========== 在整段时间序列上，画出 E_grid 的变化趋势（此时已无 0 值）==========
     plot_Egrid_over_time(data_df)
 
     # ========== 特征工程 + 序列构建 + 训练测试拆分 ==========
@@ -690,7 +698,7 @@ def main():
     val_loader   = DataLoader(val_dataset,   batch_size=batch_size, shuffle=False, num_workers=num_workers)
     test_loader  = DataLoader(test_dataset,  batch_size=batch_size, shuffle=False, num_workers=num_workers)
 
-    # ========== 生成与序列数据对应的时间戳 ==========
+    # ========== 生成与序列数据对应的时间戳 (已去除 E_grid=0 的行后) ==========
     timestamps_all = data_df['timestamp'].values[window_size:]
     train_timestamps = timestamps_all[:train_size]
     val_timestamps   = timestamps_all[train_size : train_size + val_size]

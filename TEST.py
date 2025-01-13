@@ -83,16 +83,22 @@ def remove_outliers_by_zscore(df, cols, threshold=3.0):
     return df
 
 def wavelet_denoising(signal, wavelet='db4', level=1):
-    """
-    数据分解与去噪：采用小波变换去除高频噪声 (示例性演示)
-    signal: 1D 序列
-    wavelet: 小波基，如 db4、haar 等
-    level: 分解层数
-    """
     coeffs = pywt.wavedec(signal, wavelet, mode='periodization', level=level)
-    # 将最高频率分量置零以去噪
+    # 将最高频率分量置零(示例性)，以实现简单降噪
     coeffs[-1] = np.zeros_like(coeffs[-1])
     reconstructed = pywt.waverec(coeffs, wavelet, mode='periodization')
+    
+    # 如果重构后长度不一致，就截断或填充
+    if len(reconstructed) > len(signal):
+        reconstructed = reconstructed[:len(signal)]
+    elif len(reconstructed) < len(signal):
+        # 这里简单示例用 np.pad 让它和原 signal 一样长，也可以只截断 DataFrame
+        reconstructed = np.pad(
+            reconstructed,
+            (0, len(signal) - len(reconstructed)),
+            mode='edge'
+        )
+    
     return reconstructed
 
 def feature_selection_by_correlation(df, target, threshold=0.1):
@@ -163,7 +169,14 @@ def feature_engineering(data_df):
     #    如果要对其他列去噪，也可在此批量处理
     if 'E_grid' in data_df.columns:
         e_grid_denoised = wavelet_denoising(data_df['E_grid'].values, wavelet='db4', level=1)
-        # 用去噪后的值替换原列
+        
+        # 确保去噪结果与 data_df 长度匹配
+        if len(e_grid_denoised) != len(data_df):
+            print(f"[Warning] wavelet_denoising produced length {len(e_grid_denoised)} != {len(data_df)}.")
+            min_len = min(len(e_grid_denoised), len(data_df))
+            e_grid_denoised = e_grid_denoised[:min_len]
+            data_df = data_df.iloc[:min_len].copy()
+        
         data_df['E_grid'] = e_grid_denoised
 
     # 4) 特征选择：根据与目标列 E_grid 的相关性进行筛选

@@ -33,7 +33,7 @@ mpl.rcParams.update({
 learning_rate = 1e-4
 num_epochs    = 200
 batch_size    = 64
-weight_decay  = 1e-4
+weight_decay  = 1e-5
 patience      = 15
 num_workers   = 0
 window_size   = 12
@@ -765,6 +765,26 @@ def main():
 
     # ========== 在时间轴上同时画出测试集的实际值和预测值 (示例：modelA) ==========
     plot_test_predictions_over_time(test_timestamps, labelsA_real, predsA_real)
+    # ========== 额外示例：可视化训练集和验证集的时序预测结果 ==========
+
+    # 1) 计算训练集上的预测结果
+    train_lossA, train_rmseA_std, train_mapeA_std, train_r2A_std, predsA_train_std, labelsA_train_std = evaluate(best_modelA, train_loader, criterion)
+    predsA_train_real  = scaler_y.inverse_transform(predsA_train_std.reshape(-1, 1)).ravel()
+    labelsA_train_real = scaler_y.inverse_transform(labelsA_train_std.reshape(-1, 1)).ravel()
+
+    # 2) 计算验证集上的预测结果
+    val_lossA, val_rmseA_std, val_mapeA_std, val_r2A_std, predsA_val_std, labelsA_val_std = evaluate(best_modelA, val_loader, criterion)
+    predsA_val_real  = scaler_y.inverse_transform(predsA_val_std.reshape(-1, 1)).ravel()
+    labelsA_val_real = scaler_y.inverse_transform(labelsA_val_std.reshape(-1, 1)).ravel()
+
+    # 3) 分别绘制训练集、验证集的预测曲线
+    # train_timestamps, val_timestamps 与训练集、验证集的数据长度对应
+
+    print("\n[Info] Plot predictions for Training Set:")
+    plot_test_predictions_over_time(train_timestamps, labelsA_train_real, predsA_train_real)
+
+    print("\n[Info] Plot predictions for Validation Set:")
+    plot_test_predictions_over_time(val_timestamps, labelsA_val_real, predsA_val_real)
 
     # 其他可视化对比
     plot_predictions_comparison(

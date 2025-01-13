@@ -32,12 +32,11 @@ mpl.rcParams.update({
 # ---------------------------
 learning_rate = 1e-4
 num_epochs    = 200
-batch_size    = 64
+batch_size    = 128
 weight_decay  = 1e-5
-patience      = 15
+patience      = 5
 num_workers   = 0
-window_size   = 12
-
+window_size   = 30
 # 设置随机种子
 torch.manual_seed(42)
 np.random.seed(42)

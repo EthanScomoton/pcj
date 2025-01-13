@@ -31,12 +31,12 @@ mpl.rcParams.update({
 # 0. 全局超参数
 # ---------------------------
 learning_rate = 1e-4
-num_epochs    = 200
+num_epochs    = 150
 batch_size    = 128
-weight_decay  = 1e-5
+weight_decay  = 1e-6
 patience      = 5
 num_workers   = 0
-window_size   = 30
+window_size   = 20
 # 设置随机种子
 torch.manual_seed(42)
 np.random.seed(42)
@@ -225,14 +225,14 @@ class EModel_FeatureWeight(nn.Module):
 
         self.lstm = nn.LSTM(
             input_size=feature_dim,
-            hidden_size=128,
+            hidden_size=64,
             num_layers=2,
             batch_first=True,
             bidirectional=True,
             dropout=0
         )
         self.transformer_block = Transformer(
-            d_model=2*128,  # 与 LSTM hidden_size=128 双向 => 输出 2*128
+            d_model=2*64,  # 与 LSTM 双向 => 输出 2*hidden_size
             nhead=4,
             num_encoder_layers=2,
             num_decoder_layers=2
@@ -266,7 +266,7 @@ class EModel_CNN_Transformer(nn.Module):
     """
     三阶 CNN + Transformer + Attention 的组合，额外引入 feature_importance 作为可学习权重。
     """
-    def __init__(self, feature_dim, hidden_size=128, num_layers=2, dropout=0):
+    def __init__(self, feature_dim, hidden_size=64, num_layers=2, dropout=0):
         super(EModel_CNN_Transformer, self).__init__()
         self.feature_dim = feature_dim
         self.hidden_size = hidden_size
@@ -346,11 +346,8 @@ def evaluate(model, dataloader, criterion):
     rmse_std = np.sqrt(mean_squared_error(labels_arr, preds_arr))
 
     # ---- 2. 计算 MAPE（标准化域下）----
-    # 注意：若 y_i = 0 会导致除零问题，如有需求可筛除或加极小值
-    # 这里只是演示；有些用法会对 0 做特殊处理
     nonzero_mask = (labels_arr != 0)
-    mape_std = np.mean(np.abs((labels_arr[nonzero_mask] - preds_arr[nonzero_mask]) 
-                              / labels_arr[nonzero_mask])) * 100.0 if np.sum(nonzero_mask) > 0 else 0.0
+    mape_std = np.mean(np.abs((labels_arr[nonzero_mask] - preds_arr[nonzero_mask]) / labels_arr[nonzero_mask])) * 100.0 if np.sum(nonzero_mask) > 0 else 0.0
 
     # ---- 3. 计算 R^2（标准化域下）----
     ss_res = np.sum((labels_arr - preds_arr)**2)

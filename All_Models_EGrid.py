@@ -164,7 +164,7 @@ class Transformer(nn.Module):
         return out
 
 class CNNBlock(nn.Module):
-    def __init__(self, feature_dim, hidden_size, dropout=0.2):
+    def __init__(self, feature_dim, hidden_size, dropout=0):
         super(CNNBlock, self).__init__()
         self.conv1 = nn.Conv1d(feature_dim, hidden_size, kernel_size=3, padding=1)
         self.conv2 = nn.Conv1d(hidden_size, hidden_size, kernel_size=5, padding=2)
@@ -205,7 +205,7 @@ class Attention(nn.Module):
             nn.Tanh(),
             nn.Linear(input_dim, 1)
         )
-        self.dropout = nn.Dropout(0.2)
+        self.dropout = nn.Dropout(0)
 
     def forward(self, x):
         # x 形状: [batch_size, seq_len, input_dim]
@@ -230,7 +230,7 @@ class EModel_FeatureWeight(nn.Module):
             num_layers=2,
             batch_first=True,
             bidirectional=True,
-            dropout=0.2
+            dropout=0
         )
         self.transformer_block = Transformer(
             d_model=2*128,  # 与 LSTM hidden_size=128 双向 => 输出 2*128
@@ -242,7 +242,7 @@ class EModel_FeatureWeight(nn.Module):
         self.fc = nn.Sequential(
             nn.Linear(2*128, 128),
             nn.ReLU(),
-            nn.Dropout(0.2),
+            nn.Dropout(0),
             nn.Linear(128, 1)
         )
 
@@ -267,7 +267,7 @@ class EModel_CNN_Transformer(nn.Module):
     """
     三阶 CNN + Transformer + Attention 的组合，额外引入 feature_importance 作为可学习权重。
     """
-    def __init__(self, feature_dim, hidden_size=128, num_layers=2, dropout=0.2):
+    def __init__(self, feature_dim, hidden_size=128, num_layers=2, dropout=0):
         super(EModel_CNN_Transformer, self).__init__()
         self.feature_dim = feature_dim
         self.hidden_size = hidden_size
@@ -294,7 +294,7 @@ class EModel_CNN_Transformer(nn.Module):
         self.fc = nn.Sequential(
             nn.Linear(2 * hidden_size, 128),
             nn.ReLU(),
-            nn.Dropout(0.2),
+            nn.Dropout(0),
             nn.Linear(128, 1)
         )
 

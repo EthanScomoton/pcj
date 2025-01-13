@@ -497,12 +497,6 @@ def plot_two_model_val_rmse(val_rmseA, val_rmseB, labelA='ModelA', labelB='Model
     plt.show()
 
 def plot_correlation_heatmap(df, feature_cols, title = "Heat map of different types of loads and external factors"):
-    """
-    修改后的热力图绘制函数：
-    1. 调整颜色：从红 -> 黄 -> 绿的平滑过渡
-    2. 使用 annot=True 在格子中显示数值
-    3. 增加字体
-    """
     df_encoded = df.copy()
     for col in feature_cols:
         if df_encoded[col].dtype == 'object':
@@ -616,8 +610,7 @@ def plot_Egrid_over_time(data_df):
     data_df 需要包含 'timestamp' 和 'E_grid' 两列，并保证已按时间排序。
     """
     plt.figure(figsize=(10, 5))
-    plt.plot(data_df['timestamp'], data_df['E_grid'],
-             color='blue', marker='o', markersize=3, linewidth=1)
+    plt.plot(data_df['timestamp'], data_df['E_grid'], color='blue', marker='o', markersize=3, linewidth=1)
     plt.xlabel('Timestamp')
     plt.ylabel('E_grid')
     plt.title('E_grid over Time (entire dataset)')

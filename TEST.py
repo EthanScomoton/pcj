@@ -1,6 +1,7 @@
 import math
 import numpy as np
 import pandas as pd
+import pywt  # 用于小波变换示例
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -15,6 +16,8 @@ from torch.utils.data import DataLoader, TensorDataset
 from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.metrics import mean_squared_error
 from torch.nn.utils import clip_grad_norm_
+from sklearn.decomposition import PCA  # 用于示例性的降维
+from scipy import stats  # 用于示例性的异常值处理
 
 # ---------------------------
 # 全局字体及样式设置
@@ -31,18 +34,75 @@ mpl.rcParams.update({
 # 0. 全局超参数
 # ---------------------------
 learning_rate = 1e-4
-num_epochs    = 200
-batch_size    = 64
-weight_decay  = 1e-4
-patience      = 15
+num_epochs    = 150
+batch_size    = 128
+weight_decay  = 1e-6
+patience      = 5
 num_workers   = 0
-window_size   = 12
-
+window_size   = 20
 # 设置随机种子
 torch.manual_seed(42)
 np.random.seed(42)
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+# ============ 数据预处理辅助函数 ============
+
+def fill_missing_values(df, method='ffill'):
+    """
+    数据清洗：缺失值填充 (示例性演示，可根据实际需求更换策略)
+    method: 'ffill' / 'bfill' / 'mean' 等
+    """
+    if method in ['ffill', 'bfill']:
+        df.fillna(method=method, inplace=True)
+    elif method == 'mean':
+        for col in df.columns:
+            df[col].fillna(df[col].mean(), inplace=True)
+    # 其他填充策略可自行扩展
+    return df
+
+def remove_outliers_by_zscore(df, cols, threshold=3.0):
+    """
+    数据清洗：利用 z-score 方法去除异常值 (示例性演示)
+    cols: 需要进行异常值检测的列
+    threshold: z-score 阈值，默认 3.0
+    """
+    for col in cols:
+        if col not in df.columns:
+            continue
+        # 去除缺失值，否则 stats.zscore 会报错
+        df_clean = df[col].dropna()
+        z_scores = np.abs(stats.zscore(df_clean))
+        # 标记需要过滤的行
+        filter_idx = z_scores > threshold
+        # 将超过阈值的行置为 np.nan 或直接删除
+        outlier_indices = df_clean[filter_idx].index
+        df.loc[outlier_indices, col] = np.nan
+    # 对异常值处理后再进行一次缺失值处理
+    df = fill_missing_values(df, method='ffill')
+    return df
+
+def wavelet_denoising(signal, wavelet='db4', level=1):
+    """
+    数据分解与去噪：采用小波变换去除高频噪声 (示例性演示)
+    signal: 1D 序列
+    wavelet: 小波基，如 db4、haar 等
+    level: 分解层数
+    """
+    coeffs = pywt.wavedec(signal, wavelet, mode='periodization', level=level)
+    # 将最高频率分量置零以去噪
+    coeffs[-1] = np.zeros_like(coeffs[-1])
+    reconstructed = pywt.waverec(coeffs, wavelet, mode='periodization')
+    return reconstructed
+
+def feature_selection_by_correlation(df, target, threshold=0.1):
+    """
+    特征选择：根据与目标列的相关性进行初步筛选 (示例性演示)
+    threshold: 相关系数绝对值低于阈值则剔除
+    """
+    corr_matrix = df.corr()[target].abs()
+    selected_features = corr_matrix[corr_matrix >= threshold].index.tolist()
+    return selected_features
 
 # ---------------------------
 # 1. 数据加载与预处理
@@ -51,15 +111,27 @@ def load_data():
     renewable_df = pd.read_csv(r'C:\Users\Administrator\Desktop\renewable_data10.csv')
     load_df      = pd.read_csv(r'C:\Users\Administrator\Desktop\load_data10.csv')
 
+    # 1) 转换时间格式
     renewable_df['timestamp'] = pd.to_datetime(renewable_df['timestamp'])
     load_df['timestamp']      = pd.to_datetime(load_df['timestamp'])
 
+    # 2) 合并
     data_df = pd.merge(renewable_df, load_df, on='timestamp', how='inner')
     data_df.sort_values('timestamp', inplace=True)
     data_df.reset_index(drop=True, inplace=True)
+
+    # 3) 数据清洗：缺失值、异常值处理
+    data_df = fill_missing_values(data_df, method='ffill')
+    # 示例性对部分列进行异常值检测
+    numeric_cols = data_df.select_dtypes(include=[np.number]).columns.tolist()
+    data_df = remove_outliers_by_zscore(data_df, cols=numeric_cols, threshold=3.0)
+    
+    # 这里还可以选择删除全部为 0 或全部为同一值的列，以保证数据质量
+
     return data_df
 
 def feature_engineering(data_df):
+    # 1) 特征提取：日期、时间、历史负荷等
     data_df['dayofweek'] = data_df['timestamp'].dt.dayofweek
     data_df['hour']      = data_df['timestamp'].dt.hour
     data_df['month']     = data_df['timestamp'].dt.month
@@ -71,6 +143,7 @@ def feature_engineering(data_df):
     data_df['month_sin']     = np.sin(2 * np.pi * (data_df['month'] - 1) / 12)
     data_df['month_cos']     = np.cos(2 * np.pi * (data_df['month'] - 1) / 12)
 
+    # 2) 其他特征
     renewable_features = [
         'season', 'holiday', 'weather', 'temperature',
         'working_hours', 'E_PV', 'E_wind', 'E_storage_discharge',
@@ -80,32 +153,67 @@ def feature_engineering(data_df):
         'ship_grade', 'dock_position', 'destination', 'energyconsumption'
     ]
 
-    # 对分类特征进行 LabelEncoder 编码
+    # 对分类特征进行编码
     for col in renewable_features + load_features:
         if col in data_df.columns:
             le = LabelEncoder()
             data_df[col] = le.fit_transform(data_df[col].astype(str))
 
-    time_feature_cols = [
+    # 3) 数据分解与去噪（示例：对 'E_grid' 做小波去噪）
+    #    如果要对其他列去噪，也可在此批量处理
+    if 'E_grid' in data_df.columns:
+        e_grid_denoised = wavelet_denoising(data_df['E_grid'].values, wavelet='db4', level=1)
+        # 用去噪后的值替换原列
+        data_df['E_grid'] = e_grid_denoised
+
+    # 4) 特征选择：根据与目标列 E_grid 的相关性进行筛选
+    target_column = 'E_grid'
+    base_feature_cols = renewable_features + load_features + [
         'dayofweek_sin', 'dayofweek_cos',
         'hour_sin', 'hour_cos',
         'month_sin', 'month_cos'
     ]
+    exist_features = [col for col in base_feature_cols if col in data_df.columns]
+    
+    # 先暂时将所有存在的特征与目标列合并做相关性分析
+    correlation_df = data_df[exist_features + [target_column]].copy()
+    selected_cols  = feature_selection_by_correlation(correlation_df, target_column, threshold=0.05)
+    # 这里也可以做更严格的筛选，比如 threshold=0.1，根据实际需要调整
 
-    feature_columns = renewable_features + load_features + time_feature_cols
-    target_column   = 'E_grid'
-
-    # 仅选择所需的 feature_columns 和 target_column
-    data_selected = data_df[feature_columns + [target_column]].copy()
-
+    # 最终用于建模的特征
+    # 如果 selected_cols 中已包含 target 列，需要去除
+    feature_columns = [col for col in selected_cols if col != target_column]
+    
+    # 也可以在这里做 PCA 或其他降维操作
+    # 先做标准化
     scaler_X = StandardScaler()
-    data_selected[feature_columns] = scaler_X.fit_transform(data_selected[feature_columns].values)
+    # 注意：要只对 feature_columns 做标准化
+    data_df[feature_columns] = scaler_X.fit_transform(data_df[feature_columns].values.reshape(-1, len(feature_columns)))
 
+    # 对目标列进行标准化
     scaler_y = StandardScaler()
-    data_selected[[target_column]] = scaler_y.fit_transform(data_selected[[target_column]].values)
+    data_df[[target_column]] = scaler_y.fit_transform(data_df[[target_column]].values)
 
+    # 如果想做 PCA，请在标准化之后进行
+    # 例如只做一个演示：将特征降至前 8 个主成分
+    # 若特征非常多才适合 PCA，这里仅作示例
+    if len(feature_columns) > 8:
+        pca = PCA(n_components=8)
+        pca_features = pca.fit_transform(data_df[feature_columns].values)
+        # 用新的特征替换原有列
+        pca_cols = [f'pca_{i}' for i in range(pca_features.shape[1])]
+        pca_df = pd.DataFrame(pca_features, columns=pca_cols)
+        for col in feature_columns:
+            data_df.drop(col, axis=1, inplace=True)
+        data_df = pd.concat([data_df, pca_df], axis=1)
+        # 更新新的特征列表
+        feature_columns = pca_cols
+
+    # 最终保留必要列
+    data_selected = data_df[feature_columns + [target_column]].copy()
     data_all = data_selected.values
-    return data_all, feature_columns, target_column, scaler_y
+
+    return data_all, feature_columns, target_column, scaler_y, data_df
 
 def create_sequences(data_all, window_size, feature_dim):
     X_list, y_list = [], []
@@ -163,6 +271,40 @@ class Transformer(nn.Module):
         out     = self.transformer_decoder(tgt_enc, memory)
         return out
 
+class CNNBlock(nn.Module):
+    def __init__(self, feature_dim, hidden_size, dropout=0):
+        super(CNNBlock, self).__init__()
+        self.conv1 = nn.Conv1d(feature_dim, hidden_size, kernel_size=3, padding=1)
+        self.conv2 = nn.Conv1d(hidden_size, hidden_size, kernel_size=5, padding=2)
+        self.conv3 = nn.Conv1d(hidden_size, 2 * hidden_size, kernel_size=7, padding=3)
+        
+        self.bn1 = nn.BatchNorm1d(hidden_size)
+        self.bn2 = nn.BatchNorm1d(hidden_size)
+        self.bn3 = nn.BatchNorm1d(2 * hidden_size)
+        
+        self.dropout = nn.Dropout(dropout)
+        self.relu = nn.ReLU()
+
+    def forward(self, x):
+        # 输入 x: [batch_size, seq_len, feature_dim]
+        x = x.transpose(1, 2)  # 转换为 [batch_size, feature_dim, seq_len]
+        
+        x = self.conv1(x)  # [batch_size, hidden_size, seq_len]
+        x = self.bn1(x)
+        x = self.relu(x)
+        
+        x = self.conv2(x)  # [batch_size, hidden_size, seq_len]
+        x = self.bn2(x)
+        x = self.relu(x)
+        
+        x = self.conv3(x)  # [batch_size, 2 * hidden_size, seq_len]
+        x = self.bn3(x)
+        x = self.relu(x)
+        
+        x = self.dropout(x)
+        x = x.transpose(1, 2)  # 转换回 [batch_size, seq_len, 2 * hidden_size]
+        return x
+
 class Attention(nn.Module):
     def __init__(self, input_dim):
         super(Attention, self).__init__()
@@ -171,7 +313,7 @@ class Attention(nn.Module):
             nn.Tanh(),
             nn.Linear(input_dim, 1)
         )
-        self.dropout = nn.Dropout(0.2)
+        self.dropout = nn.Dropout(0)
 
     def forward(self, x):
         # x 形状: [batch_size, seq_len, input_dim]
@@ -192,24 +334,24 @@ class EModel_FeatureWeight(nn.Module):
 
         self.lstm = nn.LSTM(
             input_size=feature_dim,
-            hidden_size=128,
+            hidden_size=64,
             num_layers=2,
             batch_first=True,
             bidirectional=True,
-            dropout=0.2
+            dropout=0
         )
         self.transformer_block = Transformer(
-            d_model=2*128,  # 与 LSTM hidden_size=128 双向 => 输出 2*128
+            d_model=2*64,  # 与 LSTM 双向 => 输出 2*hidden_size
             nhead=4,
             num_encoder_layers=2,
             num_decoder_layers=2
         )
-        self.attention = Attention(input_dim=2*128)
+        self.attention = Attention(input_dim=2*64)
         self.fc = nn.Sequential(
-            nn.Linear(2*128, 128),
+            nn.Linear(2*64, 64),
             nn.ReLU(),
-            nn.Dropout(0.2),
-            nn.Linear(128, 1)
+            nn.Dropout(0),
+            nn.Linear(64, 1)
         )
 
     def forward(self, x):
@@ -217,7 +359,7 @@ class EModel_FeatureWeight(nn.Module):
         x = x * self.feature_importance.unsqueeze(0).unsqueeze(0)
 
         # LSTM
-        lstm_out, _ = self.lstm(x)  # [batch_size, seq_len, 2*128]
+        lstm_out, _ = self.lstm(x)  # [batch_size, seq_len, 2*64]
 
         # 传入 src 和 tgt，这里简单做法是让 tgt = lstm_out
         transformer_out = self.transformer_block(lstm_out, lstm_out)
@@ -229,16 +371,11 @@ class EModel_FeatureWeight(nn.Module):
         out = self.fc(attn_out)
         return out.squeeze(-1)
 
-# ========================================================
-#  ！！仅保留 Transformer 模块，去除 CNNBlock 的版本 ！！
-# ========================================================
 class EModel_CNN_Transformer(nn.Module):
     """
-    原先是三阶 CNN + Transformer + Attention 的组合；
-    现仅保留 Transformer + Attention，并通过线性层将输入
-    投影到与 Transformer 匹配的维度 (2 * hidden_size)。
+    三阶 CNN + Transformer + Attention 的组合，额外引入 feature_importance 作为可学习权重。
     """
-    def __init__(self, feature_dim, hidden_size=128, num_layers=2, dropout=0.2):
+    def __init__(self, feature_dim, hidden_size=64, num_layers=2, dropout=0):
         super(EModel_CNN_Transformer, self).__init__()
         self.feature_dim = feature_dim
         self.hidden_size = hidden_size
@@ -247,12 +384,12 @@ class EModel_CNN_Transformer(nn.Module):
         # 可学习的特征权重
         self.feature_importance = nn.Parameter(torch.ones(feature_dim), requires_grad=True)
 
-        # 将输入从 feature_dim 映射到 2 * hidden_size
-        self.input_projection = nn.Linear(feature_dim, 2 * hidden_size)
+        # 三阶 CNN 模块
+        self.cnn_block = CNNBlock(feature_dim, hidden_size, dropout)
 
         # Transformer模块 (Encoder + Decoder)
         self.transformer_block = Transformer(
-            d_model=2 * hidden_size, 
+            d_model=2 * hidden_size,  # CNN 输出的维度
             nhead=4,
             num_encoder_layers=2,
             num_decoder_layers=2
@@ -265,7 +402,7 @@ class EModel_CNN_Transformer(nn.Module):
         self.fc = nn.Sequential(
             nn.Linear(2 * hidden_size, 128),
             nn.ReLU(),
-            nn.Dropout(dropout),
+            nn.Dropout(0),
             nn.Linear(128, 1)
         )
 
@@ -273,12 +410,12 @@ class EModel_CNN_Transformer(nn.Module):
         # 利用可学习的特征权重
         x = x * self.feature_importance.unsqueeze(0).unsqueeze(0)
 
-        # 将输入投影到 (batch_size, seq_len, 2*hidden_size)
-        x_proj = self.input_projection(x)
+        # 三阶CNN模块
+        cnn_out = self.cnn_block(x)  # [batch_size, seq_len, 2 * hidden_size]
 
         # Transformer
-        src = x_proj  
-        tgt = x_proj  
+        src = cnn_out  
+        tgt = cnn_out  
         transformer_out = self.transformer_block(src, tgt)  # [batch_size, seq_len, 2 * hidden_size]
 
         # Attention
@@ -318,12 +455,15 @@ def evaluate(model, dataloader, criterion):
     rmse_std = np.sqrt(mean_squared_error(labels_arr, preds_arr))
 
     # ---- 2. 计算 MAPE（标准化域下）----
-    # 注意：若 y_i = 0 会导致除零问题，如有需求可筛除
-    mape_std = np.mean(np.abs((labels_arr - preds_arr) / labels_arr)) * 100.0
+    nonzero_mask = (labels_arr != 0)
+    mape_std = (
+        np.mean(np.abs((labels_arr[nonzero_mask] - preds_arr[nonzero_mask]) / labels_arr[nonzero_mask])) * 100.0 
+        if np.sum(nonzero_mask) > 0 else 0.0
+    )
 
     # ---- 3. 计算 R^2（标准化域下）----
-    ss_res = np.sum((labels_arr - preds_arr)**2)
-    ss_tot = np.sum((labels_arr - np.mean(labels_arr))**2)
+    ss_res = np.sum((labels_arr - preds_arr) ** 2)
+    ss_tot = np.sum((labels_arr - np.mean(labels_arr)) ** 2)
     r2_std = 1 - (ss_res / ss_tot) if ss_tot != 0 else 0.0
 
     return val_loss, rmse_std, mape_std, r2_std, preds_arr, labels_arr
@@ -400,6 +540,7 @@ def train_model(model, train_loader, val_loader, model_name='Model', feature_nam
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             counter       = 0
+            # 注意：如果本地 PyTorch 版本低，可直接使用 torch.save(model.state_dict(), "xxx.pth")
             torch.save(model.state_dict(), f"best_{model_name}.pth")
             print(f"[{model_name}] 模型已保存。")
         else:
@@ -468,12 +609,6 @@ def plot_two_model_val_rmse(val_rmseA, val_rmseB, labelA='ModelA', labelB='Model
     plt.show()
 
 def plot_correlation_heatmap(df, feature_cols, title = "Heat map of different types of loads and external factors"):
-    """
-    修改后的热力图绘制函数：
-    1. 调整颜色：从红 -> 黄 -> 绿的平滑过渡
-    2. 使用 annot=True 在格子中显示数值
-    3. 增加字体
-    """
     df_encoded = df.copy()
     for col in feature_cols:
         if df_encoded[col].dtype == 'object':
@@ -587,8 +722,7 @@ def plot_Egrid_over_time(data_df):
     data_df 需要包含 'timestamp' 和 'E_grid' 两列，并保证已按时间排序。
     """
     plt.figure(figsize=(10, 5))
-    plt.plot(data_df['timestamp'], data_df['E_grid'],
-             color='blue', marker='o', markersize=3, linewidth=1)
+    plt.plot(data_df['timestamp'], data_df['E_grid'], color='blue', marker='o', markersize=3, linewidth=1)
     plt.xlabel('Timestamp')
     plt.ylabel('E_grid')
     plt.title('E_grid over Time (entire dataset)')
@@ -619,26 +753,34 @@ def main():
     print("[Info] Loading and preprocessing data...")
     data_df = load_data()
 
-    # ========== 基于原始 df 画 NxN 热力图 ==========
+    # ========== 基于原始 df 画 NxN 热力图（此处保留 E_grid=0 的数据） ==========
     # 将 E_grid 纳入以便观察其与其它字段的相关性
     feature_cols_to_plot = [
         'season', 'holiday', 'weather', 'temperature',
         'working_hours', 'E_grid'
     ]
+    # 根据实际存在的列再做筛选
     feature_cols_to_plot = [c for c in feature_cols_to_plot if c in data_df.columns]
-    plot_correlation_heatmap(data_df, feature_cols_to_plot)
+    if len(feature_cols_to_plot) > 1:
+        plot_correlation_heatmap(data_df, feature_cols_to_plot)
 
-    # 分析目标列 E_grid 的分布
-    analyze_target_distribution(data_df, "E_grid")
+    # ========= 在绘制完热力图后，可选删除 E_grid == 0 的行，并重置索引 =========
+    if 'E_grid' in data_df.columns:
+        data_df = data_df[data_df['E_grid'] != 0].copy()
+        data_df.reset_index(drop=True, inplace=True)
 
-    # ========== 在整段时间序列上，画出 E_grid 的变化趋势 ==========
-    plot_Egrid_over_time(data_df)
+        # 分析目标列 E_grid 的分布（此时已经不含 E_grid=0）
+        analyze_target_distribution(data_df, "E_grid")
+
+        # ========== 在整段时间序列上，画出 E_grid 的变化趋势（此时已无 0 值）==========
+        plot_Egrid_over_time(data_df)
 
     # ========== 特征工程 + 序列构建 + 训练测试拆分 ==========
-    data_all, feature_cols, target_col, scaler_y = feature_engineering(data_df)
+    data_all, feature_cols, target_col, scaler_y, data_df_afterFE = feature_engineering(data_df)
     feature_dim = len(feature_cols)
 
     print(f"[Info] Model will predict target column: {target_col}")
+    print(f"[Info] Selected feature columns: {feature_cols}")
 
     X_all, y_all = create_sequences(data_all, window_size=window_size, feature_dim=feature_dim)
     print(f"[Info] X_all shape: {X_all.shape}, y_all shape: {y_all.shape}")
@@ -661,8 +803,8 @@ def main():
     val_loader   = DataLoader(val_dataset,   batch_size=batch_size, shuffle=False, num_workers=num_workers)
     test_loader  = DataLoader(test_dataset,  batch_size=batch_size, shuffle=False, num_workers=num_workers)
 
-    # ========== 生成与序列数据对应的时间戳 ==========
-    timestamps_all = data_df['timestamp'].values[window_size:]
+    # ========== 生成与序列数据对应的时间戳 (已去除 E_grid=0 的行后) ==========
+    timestamps_all = data_df_afterFE['timestamp'].values[window_size:]
     train_timestamps = timestamps_all[:train_size]
     val_timestamps   = timestamps_all[train_size : train_size + val_size]
     test_timestamps  = timestamps_all[train_size + val_size :]
@@ -736,6 +878,24 @@ def main():
 
     # ========== 在时间轴上同时画出测试集的实际值和预测值 (示例：modelA) ==========
     plot_test_predictions_over_time(test_timestamps, labelsA_real, predsA_real)
+    # ========== 额外示例：可视化训练集和验证集的时序预测结果 ==========
+
+    # 1) 计算训练集上的预测结果
+    train_lossA, train_rmseA_std, train_mapeA_std, train_r2A_std, predsA_train_std, labelsA_train_std = evaluate(best_modelA, train_loader, criterion)
+    predsA_train_real  = scaler_y.inverse_transform(predsA_train_std.reshape(-1, 1)).ravel()
+    labelsA_train_real = scaler_y.inverse_transform(labelsA_train_std.reshape(-1, 1)).ravel()
+
+    # 2) 计算验证集上的预测结果
+    val_lossA, val_rmseA_std, val_mapeA_std, val_r2A_std, predsA_val_std, labelsA_val_std = evaluate(best_modelA, val_loader, criterion)
+    predsA_val_real  = scaler_y.inverse_transform(predsA_val_std.reshape(-1, 1)).ravel()
+    labelsA_val_real = scaler_y.inverse_transform(labelsA_val_std.reshape(-1, 1)).ravel()
+
+    # 3) 分别绘制训练集、验证集的预测曲线
+    print("\n[Info] Plot predictions for Training Set:")
+    plot_test_predictions_over_time(train_timestamps, labelsA_train_real, predsA_train_real)
+
+    print("\n[Info] Plot predictions for Validation Set:")
+    plot_test_predictions_over_time(val_timestamps, labelsA_val_real, predsA_val_real)
 
     # 其他可视化对比
     plot_predictions_comparison(

@@ -64,7 +64,14 @@ def feature_engineering(data_df):
     """
     # ====== 加入对 E_grid 的 EWMA 平滑处理 ======
     span = 10
-    data_df['E_grid'] = data_df['E_grid'].ewm(span=span, adjust=False).mean()
+    Q1 = data_df['E_grid'].quantile(0.25)
+    Q3 = data_df['E_grid'].quantile(0.75)
+    IQR = Q3 - Q1
+    data_df = data_df[~((data_df['E_grid'] < (Q1 - 1.5 * IQR)) | 
+                       (data_df['E_grid'] > (Q3 + 1.5 * IQR)))]
+    data_df['E_grid'] = data_df['E_grid'].ewm(span=10, adjust=False).mean()
+    data_df['E_PV'] = data_df['E_PV'].ewm(span=5, adjust=False).mean()
+    data_df['E_wind'] = data_df['E_wind'].ewm(span=5, adjust=False).mean()
 
     # ====== 时间特征构造 ======
     data_df['dayofweek'] = data_df['timestamp'].dt.dayofweek
@@ -190,38 +197,20 @@ class Transformer(nn.Module):
         return out
 
 class CNNBlock(nn.Module):
-    def __init__(self, feature_dim, hidden_size, dropout=0):
+    def __init__(self, in_channels, out_channels, kernel_size=3, dropout=0.2):
         super(CNNBlock, self).__init__()
-        self.conv1 = nn.Conv1d(feature_dim, hidden_size, kernel_size=3, padding=1)
-        self.conv2 = nn.Conv1d(hidden_size, hidden_size, kernel_size=5, padding=2)
-        self.conv3 = nn.Conv1d(hidden_size, 2 * hidden_size, kernel_size=7, padding=3)
-        
-        self.bn1 = nn.BatchNorm1d(hidden_size)
-        self.bn2 = nn.BatchNorm1d(hidden_size)
-        self.bn3 = nn.BatchNorm1d(2 * hidden_size)
-        
+        self.conv1 = nn.Conv1d(in_channels, out_channels, kernel_size, padding='same')
+        self.bn1 = nn.BatchNorm1d(out_channels)
+        self.conv2 = nn.Conv1d(out_channels, out_channels, kernel_size, padding='same')
+        self.bn2 = nn.BatchNorm1d(out_channels)
         self.dropout = nn.Dropout(dropout)
-        self.relu = nn.ReLU()
-
+        self.pool = nn.MaxPool1d(kernel_size=2)
+        
     def forward(self, x):
-        # 输入 x: [batch_size, seq_len, feature_dim]
-        x = x.transpose(1, 2)  # 转换为 [batch_size, feature_dim, seq_len]
-        
-        x = self.conv1(x)  # [batch_size, hidden_size, seq_len]
-        x = self.bn1(x)
-        x = self.relu(x)
-        
-        x = self.conv2(x)  # [batch_size, hidden_size, seq_len]
-        x = self.bn2(x)
-        x = self.relu(x)
-        
-        x = self.conv3(x)  # [batch_size, 2 * hidden_size, seq_len]
-        x = self.bn3(x)
-        x = self.relu(x)
-        
+        x = F.relu(self.bn1(self.conv1(x)))
         x = self.dropout(x)
-        x = x.transpose(1, 2)  # 转换回 [batch_size, seq_len, 2 * hidden_size]
-        return x
+        x = F.relu(self.bn2(self.conv2(x)))
+        return self.pool(x)
 
 class Attention(nn.Module):
     def __init__(self, input_dim):
@@ -396,67 +385,82 @@ def evaluate(model, dataloader, criterion):
 
     return val_loss, rmse_std, mape_std, r2_std, preds_arr, labels_arr
 
-def train_model(model, train_loader, val_loader, model_name='Model', feature_names=None):
-    criterion = nn.MSELoss()
-    optimizer = AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
-
-    total_steps  = num_epochs * len(train_loader)
-    warmup_steps = int(0.1 * total_steps)
+def train_model(model, train_loader, val_loader, model_name='Model', feature_names=None, 
+                num_epochs=100, patience=10, device='cuda'):
+    criterion = nn.SmoothL1Loss(beta=1.0)
+    mse_criterion = nn.MSELoss()
+    optimizer = AdamW(model.parameters(), lr=1e-4, weight_decay=1e-5)
     
-    def lr_lambda(current_step):
-        # 先 warmup 再线性衰减
-        if current_step < warmup_steps:
-            return float(current_step) / float(max(1, warmup_steps))
-        else:
-            return max(0.0, 1 - (current_step - warmup_steps) / (total_steps - warmup_steps))
+    # 学习率调度器
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, 
+        mode='min',
+        factor=0.5,
+        patience=3,
+        verbose=True
+    )
 
-    scheduler = LambdaLR(optimizer, lr_lambda)
-    best_val_loss = float('inf')
-    counter = 0
-    global_step = 0
-
+    # 训练记录
     train_loss_history = []
-    val_loss_history   = []
-    val_rmse_history   = []
-    val_mape_history   = []
-    val_r2_history     = []
-
+    val_loss_history = []
+    val_rmse_history = []
+    val_mape_history = []
+    val_r2_history = []
     feature_importance_history = []
 
-    max_grad_norm = 1.0
+    best_val_loss = float('inf')
+    patience_counter = 0
 
     for epoch in range(num_epochs):
         model.train()
         running_loss, num_samples = 0.0, 0
 
+        # 训练阶段
         for batch_inputs, batch_labels in train_loader:
             batch_inputs = batch_inputs.to(device)
             batch_labels = batch_labels.to(device)
 
             optimizer.zero_grad()
-            preds = model(batch_inputs)
-            loss  = criterion(preds, batch_labels)
+            
+            # 前向传播
+            outputs = model(batch_inputs)
+            
+            # 计算损失
+            loss = 0.7 * criterion(outputs, batch_labels) + 0.3 * mse_criterion(outputs, batch_labels)
+            
+            # 反向传播
             loss.backward()
-
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
-
-            clip_grad_norm_(model.parameters(), max_norm=5.0)
+            
+            # 梯度裁剪
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            
+            # 参数更新
             optimizer.step()
-            scheduler.step()
 
             running_loss += loss.item() * batch_inputs.size(0)
-            num_samples  += batch_inputs.size(0)
-            global_step  += 1
+            num_samples += batch_inputs.size(0)
 
-        train_loss = running_loss / num_samples
+        # 验证阶段
+        model.eval()
         val_loss, val_rmse_std, val_mape_std, val_r2_std, _, _ = evaluate(model, val_loader, criterion)
-
+        
+        # 更新学习率
+        scheduler.step(val_loss)
+        
+        # 记录训练信息
+        train_loss = running_loss / num_samples
         train_loss_history.append(train_loss)
         val_loss_history.append(val_loss)
         val_rmse_history.append(val_rmse_std)
         val_mape_history.append(val_mape_std)
         val_r2_history.append(val_r2_std)
 
+        # 记录特征重要性
+        if hasattr(model, 'feature_importance'):
+            current_fi = model.feature_importance.detach().cpu().numpy().copy()
+            feature_importance_history.append(current_fi)
+
+        # 打印训练信息
         print(f"[{model_name}] Epoch {epoch+1}/{num_epochs}, "
               f"Train Loss(std): {train_loss:.4f}, "
               f"Val Loss(std): {val_loss:.4f}, "
@@ -464,20 +468,15 @@ def train_model(model, train_loader, val_loader, model_name='Model', feature_nam
               f"MAPE(%): {val_mape_std:.2f}, "
               f"R^2: {val_r2_std:.4f}")
 
-        if hasattr(model, 'feature_importance'):
-            current_fi = model.feature_importance.detach().cpu().numpy().copy()
-            feature_importance_history.append(current_fi)
-
-        # Early Stopping
+        # 早停机制
         if val_loss < best_val_loss:
             best_val_loss = val_loss
-            counter       = 0
-            # 注意：如果本地 PyTorch 版本低，可直接使用 torch.save(model.state_dict(), "xxx.pth")
+            patience_counter = 0
             torch.save(model.state_dict(), f"best_{model_name}.pth")
             print(f"[{model_name}] 模型已保存。")
         else:
-            counter += 1
-            if counter >= patience:
+            patience_counter += 1
+            if patience_counter >= patience:
                 print(f"[{model_name}] 验证集无改善，提前停止。")
                 break
 

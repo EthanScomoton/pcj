@@ -498,8 +498,8 @@ def plot_predictions_comparison(y_actual_real, y_pred_model1_real, y_pred_model2
     x_axis = np.arange(len(y_actual_real))
 
     plt.plot(x_axis, y_actual_real,        'red',  label='Actual', linewidth=1, markersize=4)
-    plt.plot(x_axis, y_pred_model1_real,   'green', label=model1_name, linewidth=1, markersize=4)
-    plt.plot(x_axis, y_pred_model2_real,   'blue', label=model2_name, linewidth=1, markersize=4)
+    plt.plot(x_axis, y_pred_model1_real,   'lightgreen', label=model1_name, linewidth=1, markersize=4)
+    plt.plot(x_axis, y_pred_model2_real,   'lightblue', label=model2_name, linewidth=1, markersize=4)
     plt.xlabel('Index')
     plt.ylabel('Value (real domain)')
     plt.title(f'Comparison: Actual vs {model1_name} vs {model2_name}')

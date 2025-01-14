@@ -30,9 +30,9 @@ mpl.rcParams.update({
 # ---------------------------
 # 0. 全局超参数
 # ---------------------------
-learning_rate = 1e-4
+learning_rate = 1e-3
 num_epochs    = 150
-batch_size    = 64
+batch_size    = 128
 weight_decay  = 1e-6
 patience      = 5
 num_workers   = 0
@@ -154,11 +154,27 @@ class Transformer(nn.Module):
         self.encoder_pe = PositionalEncoding(d_model)
         self.decoder_pe = PositionalEncoding(d_model)
 
-        encoder_layer = nn.TransformerEncoderLayer(d_model=d_model, nhead=nhead, batch_first=True)
+        # 添加dropout
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=d_model, 
+            nhead=nhead, 
+            dim_feedforward=4*d_model,  # 增加FFN维度
+            dropout=0.1,  # 添加dropout
+            batch_first=True
+        )
         self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_encoder_layers)
 
-        decoder_layer = nn.TransformerDecoderLayer(d_model=d_model, nhead=nhead, batch_first=True)
+        decoder_layer = nn.TransformerDecoderLayer(
+            d_model=d_model,
+            nhead=nhead,
+            dim_feedforward=4*d_model,
+            dropout=0.1,
+            batch_first=True
+        )
         self.transformer_decoder = nn.TransformerDecoder(decoder_layer, num_layers=num_decoder_layers)
+
+        # 添加LayerNorm
+        self.norm = nn.LayerNorm(d_model)
 
     def forward(self, src, tgt):
         # === Encoder ===
@@ -168,6 +184,9 @@ class Transformer(nn.Module):
         # === Decoder ===
         tgt_enc = self.decoder_pe(tgt)
         out     = self.transformer_decoder(tgt_enc, memory)
+        
+        # 添加LayerNorm
+        out = self.norm(out)
         return out
 
 class CNNBlock(nn.Module):
@@ -305,9 +324,19 @@ class EModel_CNN_Transformer(nn.Module):
             nn.Linear(128, 1)
         )
 
+        self.residual = nn.Sequential(
+            nn.Linear(feature_dim, 2 * hidden_size),
+            nn.ReLU()
+        )
+        
+        # 添加dropout
+        self.dropout = nn.Dropout(dropout)
+
     def forward(self, x):
         # 利用可学习的特征权重
         x = x * self.feature_importance.unsqueeze(0).unsqueeze(0)
+
+        residual = self.residual(x[:, -1, :])  # 取最后一个时间步
 
         # 三阶CNN模块
         cnn_out = self.cnn_block(x)  # [batch_size, seq_len, 2 * hidden_size]
@@ -316,6 +345,9 @@ class EModel_CNN_Transformer(nn.Module):
         src = cnn_out  
         tgt = cnn_out  
         transformer_out = self.transformer_block(src, tgt)  # [batch_size, seq_len, 2 * hidden_size]
+
+        # 改进4：添加残差连接
+        transformer_out = transformer_out + residual.unsqueeze(1)
 
         # Attention
         attn_out = self.attention(transformer_out)  # [batch_size, 2 * hidden_size]
@@ -365,7 +397,7 @@ def evaluate(model, dataloader, criterion):
     return val_loss, rmse_std, mape_std, r2_std, preds_arr, labels_arr
 
 def train_model(model, train_loader, val_loader, model_name='Model', feature_names=None):
-    criterion = nn.SmoothL1Loss(beta=1.0)
+    criterion = nn.MSELoss()
     optimizer = AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
 
     total_steps  = num_epochs * len(train_loader)
@@ -391,6 +423,8 @@ def train_model(model, train_loader, val_loader, model_name='Model', feature_nam
 
     feature_importance_history = []
 
+    max_grad_norm = 1.0
+
     for epoch in range(num_epochs):
         model.train()
         running_loss, num_samples = 0.0, 0
@@ -403,6 +437,8 @@ def train_model(model, train_loader, val_loader, model_name='Model', feature_nam
             preds = model(batch_inputs)
             loss  = criterion(preds, batch_labels)
             loss.backward()
+
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
 
             clip_grad_norm_(model.parameters(), max_norm=5.0)
             optimizer.step()

@@ -414,8 +414,7 @@ def train_model(model, train_loader, val_loader, model_name='Model', feature_nam
         optimizer, 
         mode='min',
         factor=0.5,
-        patience=3,
-        verbose=True
+        patience=3
     )
 
     # 训练记录

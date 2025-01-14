@@ -199,7 +199,6 @@ class Transformer(nn.Module):
 class CNNBlock(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size=3, dropout=0.2):
         super(CNNBlock, self).__init__()
-        # 修改1：添加padding计算，确保输出尺寸合适
         padding = (kernel_size - 1) // 2
         self.conv1 = nn.Conv1d(in_channels, out_channels, kernel_size, padding=padding)
         self.bn1 = nn.BatchNorm1d(out_channels)
@@ -209,14 +208,19 @@ class CNNBlock(nn.Module):
         self.pool = nn.MaxPool1d(kernel_size=2)
         
     def forward(self, x):
-        # 修改2：调整输入维度 [batch_size, seq_len, feature_dim] -> [batch_size, feature_dim, seq_len]
-        x = x.permute(0, 2, 1)
+        # 确保输入维度正确 [batch_size, seq_len, feature_dim] -> [batch_size, feature_dim, seq_len]
+        if x.dim() == 3:
+            x = x.permute(0, 2, 1)
         
+        # 添加维度检查
+        if x.size(1) != self.conv1.in_channels:
+            raise ValueError(f"Input channels {x.size(1)} does not match conv1.in_channels {self.conv1.in_channels}")
+            
         x = F.relu(self.bn1(self.conv1(x)))
         x = self.dropout(x)
         x = F.relu(self.bn2(self.conv2(x)))
         
-        # 修改3：调整输出维度 [batch_size, feature_dim, seq_len] -> [batch_size, seq_len, feature_dim]
+        # 调整输出维度 [batch_size, feature_dim, seq_len] -> [batch_size, seq_len, feature_dim]
         x = x.permute(0, 2, 1)
         return self.pool(x)
 

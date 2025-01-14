@@ -668,8 +668,8 @@ def plot_test_predictions_over_time(test_timestamps, y_actual_real, y_pred_real)
     test_timestamps: 测试集对应的 timestamp 列（长度与 y_actual_real 一致）。
     """
     plt.figure(figsize=(10,5))
-    plt.plot(test_timestamps, y_actual_real, 'r-o',  label='Actual E_grid',   markersize=3, linewidth=1)
-    plt.plot(test_timestamps, y_pred_real,   'b--*', label='Predicted E_grid', markersize=3, linewidth=1)
+    plt.plot(test_timestamps, y_actual_real, color='lightcoral',  label='Actual E_grid',   linewidth=1)
+    plt.plot(test_timestamps, y_pred_real,   color='lightblue', label='Predicted E_grid', linewidth=1, linestyle='--')
     plt.xlabel('Timestamp (Test Data)')
     plt.ylabel('E_grid (real domain)')
     plt.title('Comparison of Actual vs Predicted E_grid over Time')

@@ -197,41 +197,38 @@ class Transformer(nn.Module):
         return out
 
 class CNNBlock(nn.Module):
-    def __init__(self, in_channels, out_channels, kernel_size=3, dropout=0.2):
+    def __init__(self, feature_dim, hidden_size, dropout=0):
         super(CNNBlock, self).__init__()
-        # 确保kernel_size是奇数，这样padding计算不会出现负数
-        if kernel_size % 2 == 0:
-            kernel_size += 1  # 确保kernel_size是奇数
-        padding = (kernel_size - 1) // 2  # 计算padding
+        self.conv1 = nn.Conv1d(feature_dim, hidden_size, kernel_size=3, padding=1)
+        self.conv2 = nn.Conv1d(hidden_size, hidden_size, kernel_size=5, padding=2)
+        self.conv3 = nn.Conv1d(hidden_size, 2 * hidden_size, kernel_size=7, padding=3)
         
-        self.conv1 = nn.Conv1d(in_channels, out_channels, kernel_size, padding=padding)
-        self.bn1 = nn.BatchNorm1d(out_channels)
-        self.conv2 = nn.Conv1d(out_channels, out_channels, kernel_size, padding=padding)
-        self.bn2 = nn.BatchNorm1d(out_channels)
+        self.bn1 = nn.BatchNorm1d(hidden_size)
+        self.bn2 = nn.BatchNorm1d(hidden_size)
+        self.bn3 = nn.BatchNorm1d(2 * hidden_size)
+        
         self.dropout = nn.Dropout(dropout)
-        self.pool = nn.MaxPool1d(kernel_size=2)
-        
+        self.relu = nn.ReLU()
+
     def forward(self, x):
-        # 确保输入维度正确 [batch_size, seq_len, feature_dim] -> [batch_size, feature_dim, seq_len]
-        if x.dim() == 3:
-            x = x.permute(0, 2, 1)
+        # 输入 x: [batch_size, seq_len, feature_dim]
+        x = x.transpose(1, 2)  # 转换为 [batch_size, feature_dim, seq_len]
         
-        # 检查输入通道数是否匹配
-        if x.size(1) != self.conv1.in_channels:
-            raise ValueError(f"Input channels {x.size(1)} does not match conv1.in_channels {self.conv1.in_channels}")
-            
-        # 第一层卷积
-        x = F.relu(self.bn1(self.conv1(x)))
+        x = self.conv1(x)  # [batch_size, hidden_size, seq_len]
+        x = self.bn1(x)
+        x = self.relu(x)
+        
+        x = self.conv2(x)  # [batch_size, hidden_size, seq_len]
+        x = self.bn2(x)
+        x = self.relu(x)
+        
+        x = self.conv3(x)  # [batch_size, 2 * hidden_size, seq_len]
+        x = self.bn3(x)
+        x = self.relu(x)
+        
         x = self.dropout(x)
-        
-        # 第二层卷积
-        x = F.relu(self.bn2(self.conv2(x)))
-        
-        # 调整输出维度 [batch_size, feature_dim, seq_len] -> [batch_size, seq_len, feature_dim]
-        x = x.permute(0, 2, 1)
-        
-        # 池化层
-        return self.pool(x)
+        x = x.transpose(1, 2)  # 转换回 [batch_size, seq_len, 2 * hidden_size]
+        return x
 
 class Attention(nn.Module):
     def __init__(self, input_dim):

@@ -497,9 +497,9 @@ def plot_predictions_comparison(y_actual_real, y_pred_model1_real, y_pred_model2
     plt.figure(figsize=(10,5))
     x_axis = np.arange(len(y_actual_real))
 
-    plt.plot(x_axis, y_actual_real,        'r-o',  label='Actual', linewidth=1, markersize=4)
-    plt.plot(x_axis, y_pred_model1_real,   'g--*', label=model1_name, linewidth=1, markersize=4)
-    plt.plot(x_axis, y_pred_model2_real,   'b-.*', label=model2_name, linewidth=1, markersize=4)
+    plt.plot(x_axis, y_actual_real,        'red',  label='Actual', linewidth=1, markersize=4)
+    plt.plot(x_axis, y_pred_model1_real,   'green', label=model1_name, linewidth=1, markersize=4)
+    plt.plot(x_axis, y_pred_model2_real,   'blue', label=model2_name, linewidth=1, markersize=4)
     plt.xlabel('Index')
     plt.ylabel('Value (real domain)')
     plt.title(f'Comparison: Actual vs {model1_name} vs {model2_name}')
@@ -668,8 +668,8 @@ def plot_test_predictions_over_time(test_timestamps, y_actual_real, y_pred_real)
     test_timestamps: 测试集对应的 timestamp 列（长度与 y_actual_real 一致）。
     """
     plt.figure(figsize=(10,5))
-    plt.plot(test_timestamps, y_actual_real, color='lightcoral',  label='Actual E_grid',   linewidth=1)
-    plt.plot(test_timestamps, y_pred_real,   color='lightblue', label='Predicted E_grid', linewidth=1, linestyle='--')
+    plt.plot(test_timestamps, y_actual_real, color='red',  label='Actual E_grid',   linewidth=1)
+    plt.plot(test_timestamps, y_pred_real,   color='blue', label='Predicted E_grid', linewidth=1, linestyle='--')
     plt.xlabel('Timestamp (Test Data)')
     plt.ylabel('E_grid (real domain)')
     plt.title('Comparison of Actual vs Predicted E_grid over Time')

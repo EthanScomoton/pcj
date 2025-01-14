@@ -199,7 +199,11 @@ class Transformer(nn.Module):
 class CNNBlock(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size=3, dropout=0.2):
         super(CNNBlock, self).__init__()
-        padding = (kernel_size - 1) // 2
+        # 确保kernel_size是奇数，这样padding计算不会出现负数
+        if kernel_size % 2 == 0:
+            kernel_size += 1  # 确保kernel_size是奇数
+        padding = (kernel_size - 1) // 2  # 计算padding
+        
         self.conv1 = nn.Conv1d(in_channels, out_channels, kernel_size, padding=padding)
         self.bn1 = nn.BatchNorm1d(out_channels)
         self.conv2 = nn.Conv1d(out_channels, out_channels, kernel_size, padding=padding)
@@ -212,16 +216,21 @@ class CNNBlock(nn.Module):
         if x.dim() == 3:
             x = x.permute(0, 2, 1)
         
-        # 添加维度检查
+        # 检查输入通道数是否匹配
         if x.size(1) != self.conv1.in_channels:
             raise ValueError(f"Input channels {x.size(1)} does not match conv1.in_channels {self.conv1.in_channels}")
             
+        # 第一层卷积
         x = F.relu(self.bn1(self.conv1(x)))
         x = self.dropout(x)
+        
+        # 第二层卷积
         x = F.relu(self.bn2(self.conv2(x)))
         
         # 调整输出维度 [batch_size, feature_dim, seq_len] -> [batch_size, seq_len, feature_dim]
         x = x.permute(0, 2, 1)
+        
+        # 池化层
         return self.pool(x)
 
 class Attention(nn.Module):

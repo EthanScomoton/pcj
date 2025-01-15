@@ -28,13 +28,13 @@ mpl.rcParams.update({
 })
 
 # ---------------------------
-# 0. 全局超参数 (做了若干改动)
+# 0. 全局超参数
 # ---------------------------
-learning_rate = 1e-4    # 调低学习率
-num_epochs    = 300     # 增加最大训练轮数
+learning_rate = 1e-3
+num_epochs    = 150
 batch_size    = 128
 weight_decay  = 1e-6
-patience      = 20      # 加大 Early Stopping 的耐心
+patience      = 8
 num_workers   = 0
 window_size   = 20
 
@@ -49,7 +49,7 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 # =====================================================================
 def load_data():
     """
-    加载原始数据，并按时间戳merge。
+    加载原始的可再生能源与负荷数据，并按时间戳做 merge。
     """
     renewable_df = pd.read_csv(r'C:\Users\Administrator\Desktop\renewable_data10.csv')
     load_df      = pd.read_csv(r'C:\Users\Administrator\Desktop\load_data10.csv')
@@ -68,9 +68,10 @@ def load_data():
 # =====================================================================
 def feature_engineering(data_df):
     """
-    - E_grid 做 EWMA 平滑
-    - 时间特征
+    - E_grid 的 EWMA 平滑
+    - 时间特征构造
     - 分类特征 LabelEncoder
+    - 不做数值标准化（避免数据泄露）
     """
     span = 10
     data_df['E_grid'] = data_df['E_grid'].ewm(span=span, adjust=False).mean()
@@ -128,7 +129,7 @@ def create_sequences(X_data, y_data, window_size):
 
 
 # =====================================================================
-#   4. 模型定义 (加大Dropout)
+#   4. 模型定义
 # =====================================================================
 class PositionalEncoding(nn.Module):
     def __init__(self, d_model, max_len=5000):
@@ -149,7 +150,7 @@ class PositionalEncoding(nn.Module):
 
 
 class Transformer(nn.Module):
-    def __init__(self, d_model, nhead=4, num_encoder_layers=2, num_decoder_layers=2, dropout=0.2):
+    def __init__(self, d_model, nhead=4, num_encoder_layers=2, num_decoder_layers=2):
         super(Transformer, self).__init__()
         self.encoder_pe = PositionalEncoding(d_model)
         self.decoder_pe = PositionalEncoding(d_model)
@@ -158,7 +159,7 @@ class Transformer(nn.Module):
             d_model=d_model,
             nhead=nhead,
             dim_feedforward=4*d_model,
-            dropout=dropout,
+            dropout=0.1,
             batch_first=True
         )
         self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_encoder_layers)
@@ -167,7 +168,7 @@ class Transformer(nn.Module):
             d_model=d_model,
             nhead=nhead,
             dim_feedforward=4*d_model,
-            dropout=dropout,
+            dropout=0.1,
             batch_first=True
         )
         self.transformer_decoder = nn.TransformerDecoder(decoder_layer, num_layers=num_decoder_layers)
@@ -183,7 +184,7 @@ class Transformer(nn.Module):
 
 
 class CNNBlock(nn.Module):
-    def __init__(self, feature_dim, hidden_size, dropout=0.2):
+    def __init__(self, feature_dim, hidden_size, dropout=0):
         super(CNNBlock, self).__init__()
         self.conv1 = nn.Conv1d(feature_dim, hidden_size, kernel_size=3, padding=1)
         self.conv2 = nn.Conv1d(hidden_size, hidden_size, kernel_size=5, padding=2)
@@ -223,18 +224,18 @@ class Attention(nn.Module):
             nn.Tanh(),
             nn.Linear(input_dim, 1)
         )
-        self.dropout = nn.Dropout(0.2)
+        self.dropout = nn.Dropout(0)
 
     def forward(self, x):
         attn_weights = self.attention(x)       # [batch_size, seq_len, 1]
         attn_weights = self.dropout(attn_weights)
         attn_weights = F.softmax(attn_weights, dim=1)
         weighted = x * attn_weights
-        return torch.sum(weighted, dim=1)
+        return torch.sum(weighted, dim=1)      # => [batch_size, input_dim]
 
 
 class EModel_FeatureWeight(nn.Module):
-    def __init__(self, feature_dim, dropout=0.2):
+    def __init__(self, feature_dim):
         super(EModel_FeatureWeight, self).__init__()
         self.feature_dim = feature_dim
         self.feature_importance = nn.Parameter(torch.ones(feature_dim), requires_grad=True)
@@ -245,27 +246,21 @@ class EModel_FeatureWeight(nn.Module):
             num_layers=2,
             batch_first=True,
             bidirectional=True,
-            dropout=dropout
+            dropout=0
         )
-        self.transformer_block = Transformer(
-            d_model=2*128, 
-            nhead=4, 
-            num_encoder_layers=2, 
-            num_decoder_layers=2,
-            dropout=dropout
-        )
+        self.transformer_block = Transformer(d_model=2*128, nhead=4, num_encoder_layers=2, num_decoder_layers=2)
         self.attention = Attention(input_dim=2*128)
 
         self.fc = nn.Sequential(
             nn.Linear(2*128, 128),
             nn.ReLU(),
-            nn.Dropout(dropout),
+            nn.Dropout(0),
             nn.Linear(128, 1)
         )
 
     def forward(self, x):
         x = x * self.feature_importance.unsqueeze(0).unsqueeze(0)
-        lstm_out, _ = self.lstm(x)
+        lstm_out, _ = self.lstm(x)  
         transformer_out = self.transformer_block(lstm_out, lstm_out)
         attn_out = self.attention(transformer_out)
         out = self.fc(attn_out)
@@ -273,7 +268,7 @@ class EModel_FeatureWeight(nn.Module):
 
 
 class EModel_CNN_Transformer(nn.Module):
-    def __init__(self, feature_dim, hidden_size=128, num_layers=2, dropout=0.2):
+    def __init__(self, feature_dim, hidden_size=128, num_layers=2, dropout=0):
         super(EModel_CNN_Transformer, self).__init__()
         self.feature_dim = feature_dim
         self.hidden_size = hidden_size
@@ -286,14 +281,13 @@ class EModel_CNN_Transformer(nn.Module):
             d_model=2*hidden_size,
             nhead=4,
             num_encoder_layers=2,
-            num_decoder_layers=2,
-            dropout=dropout
+            num_decoder_layers=2
         )
         self.attention = Attention(input_dim=2*hidden_size)
         self.fc = nn.Sequential(
             nn.Linear(2 * hidden_size, 128),
             nn.ReLU(),
-            nn.Dropout(dropout),
+            nn.Dropout(0),
             nn.Linear(128, 1)
         )
         self.residual = nn.Sequential(
@@ -304,7 +298,7 @@ class EModel_CNN_Transformer(nn.Module):
 
     def forward(self, x):
         x = x * self.feature_importance.unsqueeze(0).unsqueeze(0)
-        residual = self.residual(x[:, -1, :])
+        residual = self.residual(x[:, -1, :])  
         cnn_out = self.cnn_block(x)
         transformer_out = self.transformer_block(cnn_out, cnn_out)
         transformer_out = transformer_out + residual.unsqueeze(1)
@@ -314,7 +308,7 @@ class EModel_CNN_Transformer(nn.Module):
 
 
 # =====================================================================
-#   5. 评估工具
+#   5. 评估工具: 计算 MSELoss / RMSE / MAPE / R^2 / SMAPE / MAE
 # =====================================================================
 def evaluate(model, dataloader, criterion):
     model.eval()
@@ -371,13 +365,19 @@ def evaluate(model, dataloader, criterion):
 
 
 # =====================================================================
-#   6. 训练工具
+#   6. 训练工具: 同时记录训练集、验证集指标
 # =====================================================================
 def train_model(model, train_loader, val_loader, model_name='Model'):
+    """
+    每个 epoch:
+      1) evaluate(model, train_loader, ...)
+      2) evaluate(model, val_loader, ...)
+      3) 记录训练与验证各项指标
+      4) early stopping
+    """
     criterion = nn.MSELoss()
     optimizer = AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
 
-    # 重新计算 total_steps
     total_steps  = num_epochs * len(train_loader)
     warmup_steps = int(0.1 * total_steps)
 
@@ -394,7 +394,18 @@ def train_model(model, train_loader, val_loader, model_name='Model'):
 
     # 历史记录
     train_loss_history = []
+    train_rmse_history = []
+    train_mape_history = []
+    train_r2_history   = []
+    train_smape_history= []
+    train_mae_history  = []
+
     val_loss_history   = []
+    val_rmse_history   = []
+    val_mape_history   = []
+    val_r2_history     = []
+    val_smape_history  = []
+    val_mae_history    = []
 
     for epoch in range(num_epochs):
         # === 训练阶段 ===
@@ -418,15 +429,37 @@ def train_model(model, train_loader, val_loader, model_name='Model'):
             global_step  += 1
 
         train_loss_epoch = running_loss / num_samples
-        train_loss_history.append(train_loss_epoch)
 
-        # === 验证 ===
-        val_loss_eval, _, _, _, _, _, _, _ = evaluate(model, val_loader, criterion)
+        # === 计算 train set 上的各指标 ===
+        train_loss_eval, train_rmse_eval, train_mape_eval, train_r2_eval, train_smape_eval, train_mae_eval, _, _ = evaluate(model, train_loader, criterion)
+
+        # === 计算 val set 上的各指标 ===
+        val_loss_eval, val_rmse_eval, val_mape_eval, val_r2_eval, val_smape_eval, val_mae_eval, _, _ = evaluate(model, val_loader, criterion)
+
+        # === 保存各类指标到历史数组 ===
+        train_loss_history.append(train_loss_eval)
+        train_rmse_history.append(train_rmse_eval)
+        train_mape_history.append(train_mape_eval)
+        train_r2_history.append(train_r2_eval)
+        train_smape_history.append(train_smape_eval)
+        train_mae_history.append(train_mae_eval)
+
         val_loss_history.append(val_loss_eval)
+        val_rmse_history.append(val_rmse_eval)
+        val_mape_history.append(val_mape_eval)
+        val_r2_history.append(val_r2_eval)
+        val_smape_history.append(val_smape_eval)
+        val_mae_history.append(val_mae_eval)
 
+        # === 打印日志 ===
         print(f"[{model_name}] Epoch {epoch+1}/{num_epochs}, "
               f"TrainLoss: {train_loss_epoch:.4f}, "
-              f"ValLoss: {val_loss_eval:.4f}")
+              f"ValLoss: {val_loss_eval:.4f}, "
+              f"ValRMSE(std): {val_rmse_eval:.4f}, "
+              f"ValMAPE(%): {val_mape_eval:.2f}, "
+              f"ValR^2: {val_r2_eval:.4f}, "
+              f"ValSMAPE(%): {val_smape_eval:.2f}, "
+              f"ValMAE(std): {val_mae_eval:.4f}")
 
         # === Early Stopping ===
         if val_loss_eval < best_val_loss:
@@ -440,7 +473,22 @@ def train_model(model, train_loader, val_loader, model_name='Model'):
                 print(f"[{model_name}] 验证集无改善，提前停止。")
                 break
 
-    return train_loss_history, val_loss_history
+    # 整合返回
+    return {
+        "train_loss":  train_loss_history,
+        "train_rmse":  train_rmse_history,
+        "train_mape":  train_mape_history,
+        "train_r2":    train_r2_history,
+        "train_smape": train_smape_history,
+        "train_mae":   train_mae_history,
+
+        "val_loss":    val_loss_history,
+        "val_rmse":    val_rmse_history,
+        "val_mape":    val_mape_history,
+        "val_r2":      val_r2_history,
+        "val_smape":   val_smape_history,
+        "val_mae":     val_mae_history
+    }
 
 
 # =====================================================================
@@ -506,33 +554,6 @@ def plot_Egrid_over_time(data_df):
     plt.show()
 
 
-def plot_test_predictions_over_time(test_timestamps, y_actual_real, y_pred_real):
-    plt.figure(figsize=(10,5))
-    plt.plot(test_timestamps, y_actual_real, color='red',  label='Actual E_grid', linewidth=1)
-    plt.plot(test_timestamps, y_pred_real,   color='blue', label='Predicted E_grid', linewidth=1, linestyle='--')
-    plt.xlabel('Timestamp (Test Data)')
-    plt.ylabel('E_grid (real domain)')
-    plt.title('Comparison of Actual vs Predicted E_grid over Time')
-    plt.legend()
-    plt.grid(True)
-    plt.tight_layout()
-    plt.show()
-
-
-def plot_train_val_loss(train_loss_history, val_loss_history, model_name="Model"):
-    epochs = range(1, len(train_loss_history) + 1)
-    plt.figure(figsize=(8,5))
-    plt.plot(epochs, train_loss_history, 'r-o', label='Train Loss', markersize=3)
-    plt.plot(epochs, val_loss_history,   'b-o', label='Val Loss',   markersize=3)
-    plt.xlabel('Epoch')
-    plt.ylabel('Loss (std)')
-    plt.title(f'Train/Val Loss for {model_name}')
-    plt.legend()
-    plt.grid(True)
-    plt.tight_layout()
-    plt.show()
-
-
 def plot_predictions_comparison(y_actual_real, y_pred_model1_real, y_pred_model2_real,
                                model1_name='Model1', model2_name='Model2'):
     plt.figure(figsize=(10,5))
@@ -550,14 +571,100 @@ def plot_predictions_comparison(y_actual_real, y_pred_model1_real, y_pred_model2
     plt.show()
 
 
+def plot_test_predictions_over_time(test_timestamps, y_actual_real, y_pred_real):
+    plt.figure(figsize=(10,5))
+    plt.plot(test_timestamps, y_actual_real, color='red',  label='Actual E_grid', linewidth=1)
+    plt.plot(test_timestamps, y_pred_real,   color='blue', label='Predicted E_grid', linewidth=1, linestyle='--')
+    plt.xlabel('Timestamp (Test Data)')
+    plt.ylabel('E_grid (real domain)')
+    plt.title('Comparison of Actual vs Predicted E_grid over Time')
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show()
+
+
+def plot_training_curves_allmetrics(hist_dict, model_name='Model'):
+    """
+    统一绘制 Loss / RMSE / MAPE / R^2 / SMAPE / MAE 共6种指标的曲线
+    同时绘制 train 和 val
+    """
+    epochs = range(1, len(hist_dict["train_loss"]) + 1)
+    plt.figure(figsize=(15, 12))
+
+    # (1) Loss
+    plt.subplot(3, 2, 1)
+    plt.plot(epochs, hist_dict["train_loss"], 'r-o', label='Train Loss', markersize=4)
+    plt.plot(epochs, hist_dict["val_loss"],   'b-o', label='Val Loss',   markersize=4)
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss (std)')
+    plt.title('Loss')
+    plt.legend()
+    plt.grid(True)
+
+    # (2) RMSE
+    plt.subplot(3, 2, 2)
+    plt.plot(epochs, hist_dict["train_rmse"], 'r-o', label='Train RMSE', markersize=4)
+    plt.plot(epochs, hist_dict["val_rmse"],   'b-o', label='Val RMSE',   markersize=4)
+    plt.xlabel('Epoch')
+    plt.ylabel('RMSE (std)')
+    plt.title('RMSE')
+    plt.legend()
+    plt.grid(True)
+
+    # (3) MAPE
+    plt.subplot(3, 2, 3)
+    plt.plot(epochs, hist_dict["train_mape"], 'r-o', label='Train MAPE', markersize=4)
+    plt.plot(epochs, hist_dict["val_mape"],   'b-o', label='Val MAPE',   markersize=4)
+    plt.xlabel('Epoch')
+    plt.ylabel('MAPE (%)')
+    plt.title('MAPE')
+    plt.legend()
+    plt.grid(True)
+
+    # (4) R^2
+    plt.subplot(3, 2, 4)
+    plt.plot(epochs, hist_dict["train_r2"], 'r-o', label='Train R^2', markersize=4)
+    plt.plot(epochs, hist_dict["val_r2"],   'b-o', label='Val R^2',   markersize=4)
+    plt.xlabel('Epoch')
+    plt.ylabel('R^2')
+    plt.title('R^2')
+    plt.legend()
+    plt.grid(True)
+
+    # (5) SMAPE
+    plt.subplot(3, 2, 5)
+    plt.plot(epochs, hist_dict["train_smape"], 'r-o', label='Train SMAPE', markersize=4)
+    plt.plot(epochs, hist_dict["val_smape"],   'b-o', label='Val SMAPE',   markersize=4)
+    plt.xlabel('Epoch')
+    plt.ylabel('SMAPE (%)')
+    plt.title('SMAPE')
+    plt.legend()
+    plt.grid(True)
+
+    # (6) MAE
+    plt.subplot(3, 2, 6)
+    plt.plot(epochs, hist_dict["train_mae"], 'r-o', label='Train MAE', markersize=4)
+    plt.plot(epochs, hist_dict["val_mae"],   'b-o', label='Val MAE',   markersize=4)
+    plt.xlabel('Epoch')
+    plt.ylabel('MAE (std)')
+    plt.title('MAE')
+    plt.legend()
+    plt.grid(True)
+
+    plt.suptitle(f"Training Curves for {model_name}", fontsize=16)
+    plt.tight_layout()
+    plt.show()
+
+
 # =====================================================================
-#   8. 主函数 (加入更激进的过滤策略)
+#   8. 主函数
 # =====================================================================
-def main(use_log_transform=True, min_egrid_threshold=20000, max_egrid_threshold=200000):
+def main(use_log_transform=True, min_egrid_threshold=1.0):
     print("[Info] 1) Loading raw data...")
     data_df = load_data()
 
-    # -- (可选) 先查看在未过滤 E_grid=0 的情况下特征热力图
+    # -- 画热力图前，不先过滤 E_grid=0
     feature_cols_to_plot = [
         'season', 'holiday', 'weather', 'temperature',
         'working_hours', 'E_grid'
@@ -565,22 +672,21 @@ def main(use_log_transform=True, min_egrid_threshold=20000, max_egrid_threshold=
     feature_cols_to_plot = [c for c in feature_cols_to_plot if c in data_df.columns]
     plot_correlation_heatmap(data_df, feature_cols_to_plot, title="Heat map (including E_grid=0)")
 
-    # -- 过滤掉 E_grid <= 0 的行
-    data_df = data_df[data_df['E_grid'] > 0].copy()
+    # -- 过滤掉 E_grid=0 的行
+    data_df = data_df[data_df['E_grid'] != 0].copy()
     data_df.reset_index(drop=True, inplace=True)
 
-    # -- 基础特征工程
+    # -- 特征工程（不做标准化）
     data_df, feature_cols, target_col = feature_engineering(data_df)
 
-    # -- 更激进过滤 (demo: 限定 E_grid 在[2e4, 2e5]之间)
-    data_df = data_df[(data_df[target_col] >= min_egrid_threshold) & (data_df[target_col] <= max_egrid_threshold)]
+    # -- 再过滤过小值
+    data_df = data_df[data_df[target_col] > min_egrid_threshold].copy()
     data_df.reset_index(drop=True, inplace=True)
 
-    # -- 分析过滤后的目标列
     analyze_target_distribution(data_df, target_col)
     plot_Egrid_over_time(data_df)
 
-    # -- 时间序列拆分
+    # -- 根据时间序列切分 train / val / test
     X_all_raw = data_df[feature_cols].values
     y_all_raw = data_df[target_col].values
     timestamps_all = data_df['timestamp'].values
@@ -601,13 +707,13 @@ def main(use_log_transform=True, min_egrid_threshold=20000, max_egrid_threshold=
     val_timestamps   = timestamps_all[train_size : train_size + val_size]
     test_timestamps  = timestamps_all[train_size + val_size:]
 
-    # -- 对数变换
+    # -- 可选：对目标做对数变换
     if use_log_transform:
         y_train_raw = np.log1p(y_train_raw)
         y_val_raw   = np.log1p(y_val_raw)
         y_test_raw  = np.log1p(y_test_raw)
 
-    # -- 标准化
+    # -- 分别在 train 上 fit 标准化器，val/test 只 transform
     scaler_X = StandardScaler().fit(X_train_raw)
     X_train = scaler_X.transform(X_train_raw)
     X_val   = scaler_X.transform(X_val_raw)
@@ -618,7 +724,7 @@ def main(use_log_transform=True, min_egrid_threshold=20000, max_egrid_threshold=
     y_val    = scaler_y.transform(y_val_raw.reshape(-1,1)).ravel()
     y_test   = scaler_y.transform(y_test_raw.reshape(-1,1)).ravel()
 
-    # -- 序列构造
+    # -- 序列数据构造
     X_train_seq, y_train_seq = create_sequences(X_train, y_train, window_size)
     X_val_seq,   y_val_seq   = create_sequences(X_val,   y_val,   window_size)
     X_test_seq,  y_test_seq  = create_sequences(X_test,  y_test,  window_size)
@@ -634,24 +740,24 @@ def main(use_log_transform=True, min_egrid_threshold=20000, max_egrid_threshold=
     val_loader   = DataLoader(val_dataset,   batch_size=batch_size, shuffle=False, num_workers=num_workers)
     test_loader  = DataLoader(test_dataset,  batch_size=batch_size, shuffle=False, num_workers=num_workers)
 
-    # -- 构建模型 (加大dropout，减少过拟合)
+    # -- 构建模型
     feature_dim = X_train_seq.shape[-1]
-    modelA = EModel_FeatureWeight(feature_dim, dropout=0.2).to(device)
-    modelB = EModel_CNN_Transformer(feature_dim, dropout=0.2).to(device)
+    modelA = EModel_FeatureWeight(feature_dim).to(device)
+    modelB = EModel_CNN_Transformer(feature_dim).to(device)
 
-    # -- 训练 ModelA
+    # -- 训练 EModel_FeatureWeight
     print("\n========== Train EModel_FeatureWeight ==========")
-    train_lossA, val_lossA = train_model(modelA, train_loader, val_loader, model_name='EModel_FeatureWeight')
+    histA = train_model(modelA, train_loader, val_loader, model_name='EModel_FeatureWeight')
 
-    # -- 训练 ModelB
+    # -- 训练 EModel_CNN_Transformer
     print("\n========== Train EModel_CNN_Transformer ==========")
-    train_lossB, val_lossB = train_model(modelB, train_loader, val_loader, model_name='EModel_CNN_Transformer')
+    histB = train_model(modelB, train_loader, val_loader, model_name='EModel_CNN_Transformer')
 
     # -- 加载最优权重
-    best_modelA = EModel_FeatureWeight(feature_dim, dropout=0.2).to(device)
+    best_modelA = EModel_FeatureWeight(feature_dim).to(device)
     best_modelA.load_state_dict(torch.load('best_EModel_FeatureWeight.pth'))
 
-    best_modelB = EModel_CNN_Transformer(feature_dim, dropout=0.2).to(device)
+    best_modelB = EModel_CNN_Transformer(feature_dim).to(device)
     best_modelB.load_state_dict(torch.load('best_EModel_CNN_Transformer.pth'))
 
     # -- 测试集评估
@@ -660,12 +766,12 @@ def main(use_log_transform=True, min_egrid_threshold=20000, max_egrid_threshold=
     (_, test_rmseB_std, test_mapeB_std, test_r2B_std, test_smapeB_std, test_maeB_std, predsB_std, labelsB_std) = evaluate(best_modelB, test_loader, criterion_test)
 
     print("\n========== [Test in Standardized Domain] ==========")
-    print(f"[EModel_FeatureWeight]  RMSE: {test_rmseA_std:.4f}, MAPE: {test_mapeA_std:.2f}%, R^2: {test_r2A_std:.4f}, "
-          f"SMAPE: {test_smapeA_std:.2f}%, MAE: {test_maeA_std:.4f}")
-    print(f"[EModel_CNN_Transformer] RMSE: {test_rmseB_std:.4f}, MAPE: {test_mapeB_std:.2f}%, R^2: {test_r2B_std:.4f}, "
-          f"SMAPE: {test_smapeB_std:.2f}%, MAE: {test_maeB_std:.4f}")
+    print(f"[EModel_FeatureWeight]  RMSE: {test_rmseA_std:.4f}, MAPE: {test_mapeA_std:.2f}, R^2: {test_r2A_std:.4f}, "
+          f"SMAPE: {test_smapeA_std:.2f}, MAE: {test_maeA_std:.4f}")
+    print(f"[EModel_CNN_Transformer] RMSE: {test_rmseB_std:.4f}, MAPE: {test_mapeB_std:.2f}, R^2: {test_r2B_std:.4f}, "
+          f"SMAPE: {test_smapeB_std:.2f}, MAE: {test_maeB_std:.4f}")
 
-    # -- 反标准化 + (可选) 反 log
+    # -- 反标准化 + (可选)反log
     predsA_real_std = scaler_y.inverse_transform(predsA_std.reshape(-1,1)).ravel()
     predsB_real_std = scaler_y.inverse_transform(predsB_std.reshape(-1,1)).ravel()
     labelsA_real_std = scaler_y.inverse_transform(labelsA_std.reshape(-1,1)).ravel()
@@ -682,7 +788,8 @@ def main(use_log_transform=True, min_egrid_threshold=20000, max_egrid_threshold=
         labelsA_real = labelsA_real_std
         labelsB_real = labelsB_real_std
 
-    # -- 在原域上计算 RMSE
+    # -- 在原域上计算RMSE
+    from sklearn.metrics import mean_squared_error
     test_rmseA_real = np.sqrt(mean_squared_error(labelsA_real, predsA_real))
     test_rmseB_real = np.sqrt(mean_squared_error(labelsB_real, predsB_real))
 
@@ -690,7 +797,7 @@ def main(use_log_transform=True, min_egrid_threshold=20000, max_egrid_threshold=
     print(f"[EModel_FeatureWeight] => RMSE(real): {test_rmseA_real:.2f}")
     print(f"[EModel_CNN_Transformer] => RMSE(real): {test_rmseB_real:.2f}")
 
-    # -- 可视化 (modelA)
+    # -- 可视化(以modelA为例)
     plot_test_predictions_over_time(test_timestamps[window_size:], labelsA_real, predsA_real)
     plot_predictions_comparison(
         y_actual_real      = labelsA_real,
@@ -700,13 +807,12 @@ def main(use_log_transform=True, min_egrid_threshold=20000, max_egrid_threshold=
         model2_name='EModel_CNN_Transformer'
     )
 
-    # -- 训练曲线
-    plot_train_val_loss(train_lossA, val_lossA, model_name='EModel_FeatureWeight')
-    plot_train_val_loss(train_lossB, val_lossB, model_name='EModel_CNN_Transformer')
+    # -- 绘制训练曲线(包括 Loss / RMSE / MAPE / R^2 / SMAPE / MAE)
+    plot_training_curves_allmetrics(histA, model_name='EModel_FeatureWeight')
+    plot_training_curves_allmetrics(histB, model_name='EModel_CNN_Transformer')
 
     print("[Info] Done!")
 
 
 if __name__ == "__main__":
-    # 使用更激进过滤区间 [2e4, 2e5]，并对数变换
-    main(use_log_transform=True, min_egrid_threshold=20000, max_egrid_threshold=200000)
+    main(use_log_transform=True, min_egrid_threshold=1.0)

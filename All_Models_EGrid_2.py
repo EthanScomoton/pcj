@@ -20,11 +20,11 @@ from torch.nn.utils import clip_grad_norm_
 # 全局字体及样式设置
 # ---------------------------
 mpl.rcParams.update({
-    'font.size': 16,
-    'axes.labelsize': 16,
-    'axes.titlesize': 18,
-    'xtick.labelsize': 14,
-    'ytick.labelsize': 14
+    'font.size': 16,          # 全局默认字体大小
+    'axes.labelsize': 16,     # 坐标轴标签（xlabel, ylabel）的字体大小
+    'axes.titlesize': 18,     # 图表标题（title）的字体大小
+    'xtick.labelsize': 14,    # x轴刻度标签的字体大小
+    'ytick.labelsize': 14     # y轴刻度标签的字体大小
 })
 
 # ---------------------------

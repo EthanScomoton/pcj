@@ -755,10 +755,10 @@ def main(use_log_transform=True, min_egrid_threshold=1.0):
 
     # -- 加载最优权重
     best_modelA = EModel_FeatureWeight(feature_dim).to(device)
-    best_modelA.load_state_dict(torch.load('best_EModel_FeatureWeight.pth'))
+    best_modelA.load_state_dict(torch.load('best_EModel_FeatureWeight.pth'), weights_only=True)
 
     best_modelB = EModel_CNN_Transformer(feature_dim).to(device)
-    best_modelB.load_state_dict(torch.load('best_EModel_CNN_Transformer.pth'))
+    best_modelB.load_state_dict(torch.load('best_EModel_CNN_Transformer.pth'), weights_only=True)
 
     # -- 测试集评估
     criterion_test = nn.SmoothL1Loss(beta=1.0)

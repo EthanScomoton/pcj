@@ -450,6 +450,13 @@ def train_model(model, train_loader, val_loader, model_name='Model'):
     val_smape_history  = []
     val_mae_history    = []
 
+    train_mape_val_history = []
+    train_r2_val_history = []
+    train_smape_val_history = []
+    val_mape_val_history = []
+    val_r2_val_history = []
+    val_smape_val_history = []
+
     # 改进的checkpoint机制
     checkpoint_path = f'checkpoint_{model_name}.pth'
     best_checkpoint_path = f'best_{model_name}.pth'
@@ -488,10 +495,12 @@ def train_model(model, train_loader, val_loader, model_name='Model'):
         train_samples_history.append(num_samples)
 
         # === 计算 train set 上的各指标 ===
-        train_loss_eval, train_rmse_eval, train_mape_eval, train_r2_eval, train_smape_eval, train_mae_eval, _, _ = evaluate(model, train_loader, criterion)
+        train_loss_eval, train_rmse_eval, train_mape_eval, train_r2_eval, train_smape_eval, train_mae_eval, \
+        train_mape_val, train_r2_val, train_smape_val, _, _ = evaluate(model, train_loader, criterion)
 
         # === 计算 val set 上的各指标 ===
-        val_loss_eval, val_rmse_eval, val_mape_eval, val_r2_eval, val_smape_eval, val_mae_eval, _, _ = evaluate(model, val_loader, criterion)
+        val_loss_eval, val_rmse_eval, val_mape_eval, val_r2_eval, val_smape_eval, val_mae_eval, \
+        val_mape_val, val_r2_val, val_smape_val, _, _ = evaluate(model, val_loader, criterion)
 
         # === 保存各类指标到历史数组 ===
         train_loss_history.append(train_loss_eval)
@@ -500,6 +509,14 @@ def train_model(model, train_loader, val_loader, model_name='Model'):
         train_r2_history.append(train_r2_eval)
         train_smape_history.append(train_smape_eval)
         train_mae_history.append(train_mae_eval)
+
+        # === 保存新增指标到历史数组 ===
+        train_mape_val_history.append(train_mape_val)
+        train_r2_val_history.append(train_r2_val)
+        train_smape_val_history.append(train_smape_val)
+        val_mape_val_history.append(val_mape_val)
+        val_r2_val_history.append(val_r2_val)
+        val_smape_val_history.append(val_smape_val)
 
         val_loss_history.append(val_loss_eval)
         val_rmse_history.append(val_rmse_eval)
@@ -563,14 +580,21 @@ def train_model(model, train_loader, val_loader, model_name='Model'):
         "train_r2":    train_r2_history,
         "train_smape": train_smape_history,
         "train_mae":   train_mae_history,
-        "train_samples": train_samples_history,  # 新增训练样本数
+        "train_samples": train_samples_history,  
 
         "val_loss":    val_loss_history,
         "val_rmse":    val_rmse_history,
         "val_mape":    val_mape_history,
         "val_r2":      val_r2_history,
         "val_smape":   val_smape_history,
-        "val_mae":     val_mae_history
+        "val_mae":     val_mae_history,
+
+        "train_mape_val": train_mape_val_history,
+        "train_r2_val": train_r2_val_history,
+        "train_smape_val": train_smape_val_history,
+        "val_mape_val": val_mape_val_history,
+        "val_r2_val": val_r2_val_history,
+        "val_smape_val": val_smape_val_history
     }
 
 
@@ -760,6 +784,37 @@ def plot_training_curves_allmetrics(hist_dict, model_name='Model'):
     plt.legend()
 
     plt.suptitle(f"Training Curves for {model_name}", fontsize=16)
+    plt.tight_layout()
+    plt.show()
+
+    # 新增绘图
+    plt.subplot(3, 2, 8)
+    plt.plot(epochs, hist_dict["train_mape_val"], 'r-o', label='Train MAPE', markersize=4)
+    plt.plot(epochs, hist_dict["val_mape_val"], 'b-o', label='Val MAPE', markersize=4)
+    plt.xlabel('Epoch')
+    plt.ylabel('MAPE (%)')
+    plt.title('MAPE (val)')
+    plt.legend()
+    plt.grid(True)
+
+    plt.subplot(3, 2, 9)
+    plt.plot(epochs, hist_dict["train_r2_val"], 'r-o', label='Train R^2', markersize=4)
+    plt.plot(epochs, hist_dict["val_r2_val"], 'b-o', label='Val R^2', markersize=4)
+    plt.xlabel('Epoch')
+    plt.ylabel('R^2')
+    plt.title('R^2 (val)')
+    plt.legend()
+    plt.grid(True)
+
+    plt.subplot(3, 2, 10)
+    plt.plot(epochs, hist_dict["train_smape_val"], 'r-o', label='Train SMAPE', markersize=4)
+    plt.plot(epochs, hist_dict["val_smape_val"], 'b-o', label='Val SMAPE', markersize=4)
+    plt.xlabel('Epoch')
+    plt.ylabel('SMAPE (%)')
+    plt.title('SMAPE (val)')
+    plt.legend()
+    plt.grid(True)
+
     plt.tight_layout()
     plt.show()
 

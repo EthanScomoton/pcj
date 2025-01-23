@@ -15,7 +15,7 @@ from torch.utils.data import DataLoader, TensorDataset
 from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.metrics import mean_squared_error
 from torch.nn.utils import clip_grad_norm_
-from x_transformers import RMSNorm, TransformerWrapper, Decoder, AutoregressiveWrapper
+from x_transformers import RMSNorm, Lion, TransformerWrapper, Decoder, RotaryEmbedding
 
 # ---------------------------
 # 全局字体及样式设置
@@ -151,36 +151,51 @@ class PositionalEncoding(nn.Module):
 
 
 class Transformer(nn.Module):
-    def __init__(self, d_model, nhead=4, num_encoder_layers=2, num_decoder_layers=2):
+    def __init__(self, d_model, nhead=8, num_encoder_layers=2, num_decoder_layers=2):
         super(Transformer, self).__init__()
-        self.encoder_pe = PositionalEncoding(d_model)
-        self.decoder_pe = PositionalEncoding(d_model)
-
+        # 使用Rotary Position Embedding替代传统位置编码
+        self.rotary_emb = RotaryEmbedding(dim=d_model//2)
+        
+        # 优化后的Encoder
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=d_model,
             nhead=nhead,
             dim_feedforward=4*d_model,
             dropout=0.1,
-            batch_first=True
+            batch_first=True,
+            activation='gelu'  # 使用GELU激活函数
         )
-        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_encoder_layers)
+        self.transformer_encoder = nn.TransformerEncoder(
+            encoder_layer, 
+            num_layers=num_encoder_layers,
+            norm=RMSNorm(d_model)  # 使用RMSNorm
+        )
 
+        # 优化后的Decoder
         decoder_layer = nn.TransformerDecoderLayer(
             d_model=d_model,
             nhead=nhead,
             dim_feedforward=4*d_model,
             dropout=0.1,
-            batch_first=True
+            batch_first=True,
+            activation='gelu'
         )
-        self.transformer_decoder = nn.TransformerDecoder(decoder_layer, num_layers=num_decoder_layers)
-        self.norm = RMSNorm(d_model)  # 替换原来的LayerNorm
+        self.transformer_decoder = nn.TransformerDecoder(
+            decoder_layer,
+            num_layers=num_decoder_layers,
+            norm=RMSNorm(d_model)
+        )
 
     def forward(self, src, tgt):
-        src_enc = self.encoder_pe(src)
-        memory  = self.transformer_encoder(src_enc)
-        tgt_enc = self.decoder_pe(tgt)
-        out     = self.transformer_decoder(tgt_enc, memory)
-        out     = self.norm(out)
+        # 应用旋转位置编码
+        src = self.rotary_emb(src)
+        tgt = self.rotary_emb(tgt)
+        
+        # Encoder处理
+        memory = self.transformer_encoder(src)
+        
+        # Decoder处理
+        out = self.transformer_decoder(tgt, memory)
         return out
 
 
@@ -218,14 +233,14 @@ class CNNBlock(nn.Module):
 
 
 class Attention(nn.Module):
-    def __init__(self, input_dim):
+    def __init__(self, input_dim, dropout=0.1):  # 添加dropout参数
         super(Attention, self).__init__()
         self.attention = nn.Sequential(
             nn.Linear(input_dim, input_dim),
             nn.Tanh(),
             nn.Linear(input_dim, 1)
         )
-        self.dropout = nn.Dropout(0)
+        self.dropout = nn.Dropout(dropout)  # 使用传入的dropout
 
     def forward(self, x):
         attn_weights = self.attention(x)       # [batch_size, seq_len, 1]
@@ -307,41 +322,66 @@ class EModel_FeatureWeight(nn.Module):
 
 
 class EModel_CNN_Transformer(nn.Module):
-    def __init__(self, feature_dim, hidden_size=128, num_layers=2, dropout=0):
+    def __init__(self, feature_dim, hidden_size=128, num_layers=2, dropout=0.1):
         super(EModel_CNN_Transformer, self).__init__()
         self.feature_dim = feature_dim
         self.hidden_size = hidden_size
         self.num_layers  = num_layers
 
+        # 特征重要性权重
         self.feature_importance = nn.Parameter(torch.ones(feature_dim), requires_grad=True)
+        
+        # CNN特征提取
         self.cnn_block = CNNBlock(feature_dim, hidden_size, dropout)
 
+        # 优化后的Transformer模块
         self.transformer_block = Transformer(
             d_model=2*hidden_size,
-            nhead=4,
-            num_encoder_layers=2,
-            num_decoder_layers=2
+            nhead=8,
+            num_encoder_layers=num_layers,  # 使用传入的num_layers
+            num_decoder_layers=num_layers,  # 使用传入的num_layers
+            dropout=dropout  # 添加dropout参数
         )
+        # 注意力机制
         self.attention = Attention(input_dim=2*hidden_size)
+
+        # 全连接层
         self.fc = nn.Sequential(
             nn.Linear(2 * hidden_size, 128),
-            nn.ReLU(),
-            nn.Dropout(0),
+            nn.GELU(),  # 使用GELU激活函数
+            nn.Dropout(dropout),
             nn.Linear(128, 1)
         )
+
+        # 残差连接
         self.residual = nn.Sequential(
             nn.Linear(feature_dim, 2 * hidden_size),
-            nn.ReLU()
+            nn.GELU()
         )
+
+        # Dropout
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
+        # 特征加权
         x = x * self.feature_importance.unsqueeze(0).unsqueeze(0)
-        residual = self.residual(x[:, -1, :])  
+        
+        # 残差连接
+        residual = self.residual(x[:, -1, :])
+        
+        # CNN特征提取
         cnn_out = self.cnn_block(x)
+        
+        # Transformer处理
         transformer_out = self.transformer_block(cnn_out, cnn_out)
+        
+        # 添加残差连接
         transformer_out = transformer_out + residual.unsqueeze(1)
+        
+        # 注意力机制
         attn_out = self.attention(transformer_out)
+        
+        # 最终预测
         out = self.fc(attn_out)
         return out.squeeze(-1)
 
@@ -349,7 +389,7 @@ class EModel_CNN_Transformer(nn.Module):
 # =====================================================================
 #   5. 评估工具: 计算 MSELoss / RMSE / MAPE / R^2 / SMAPE / MAE
 # =====================================================================
-def evaluate(model, dataloader, criterion):
+def evaluate(model, dataloader, criterion, device='cuda'):
     model.eval()
     running_loss, num_samples = 0.0, 0
     preds_list, labels_list = [], []
@@ -406,7 +446,7 @@ def evaluate(model, dataloader, criterion):
 # =====================================================================
 #   6. 训练工具: 同时记录训练集、验证集指标
 # =====================================================================
-def train_model(model, train_loader, val_loader, model_name='Model'):
+def train_model(model, train_loader, val_loader, model_name='Model', learning_rate=1e-4, weight_decay=1e-2):
     """
     每个 epoch:
       1) evaluate(model, train_loader, ...)
@@ -415,7 +455,11 @@ def train_model(model, train_loader, val_loader, model_name='Model'):
       4) early stopping
     """
     criterion = nn.MSELoss()
-    optimizer = AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+    optimizer = Lion(
+        model.parameters(),
+        lr = learning_rate,  # 保持原有学习率
+        weight_decay = weight_decay  # 保持原有权重衰减
+    )
 
     total_steps  = num_epochs * len(train_loader)
     warmup_steps = int(0.1 * total_steps)

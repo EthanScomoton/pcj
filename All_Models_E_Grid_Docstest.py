@@ -15,6 +15,7 @@ from torch.utils.data import DataLoader, TensorDataset
 from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.metrics import mean_squared_error
 from torch.nn.utils import clip_grad_norm_
+from x_transformers import RMSNorm, TransformerWrapper, Decoder, AutoregressiveWrapper
 
 # ---------------------------
 # 全局字体及样式设置
@@ -150,7 +151,7 @@ class PositionalEncoding(nn.Module):
 
 
 class Transformer(nn.Module):
-    def __init__(self, d_model, nhead=8, num_encoder_layers=2, num_decoder_layers=2):
+    def __init__(self, d_model, nhead=4, num_encoder_layers=2, num_decoder_layers=2):
         super(Transformer, self).__init__()
         self.encoder_pe = PositionalEncoding(d_model)
         self.decoder_pe = PositionalEncoding(d_model)
@@ -172,7 +173,7 @@ class Transformer(nn.Module):
             batch_first=True
         )
         self.transformer_decoder = nn.TransformerDecoder(decoder_layer, num_layers=num_decoder_layers)
-        self.norm = nn.LayerNorm(d_model)
+        self.norm = RMSNorm(d_model)  # 替换原来的LayerNorm
 
     def forward(self, src, tgt):
         src_enc = self.encoder_pe(src)
@@ -270,7 +271,7 @@ class EModel_FeatureWeight(nn.Module):
         self.fc = nn.Sequential(
             nn.Linear(2*lstm_hidden_size, 128),
             nn.ReLU(),
-            nn.Dropout(0.2),
+            nn.Dropout(0.1),
             nn.Linear(128, 1)
         )
 
@@ -317,7 +318,7 @@ class EModel_CNN_Transformer(nn.Module):
 
         self.transformer_block = Transformer(
             d_model=2*hidden_size,
-            nhead=8,
+            nhead=4,
             num_encoder_layers=2,
             num_decoder_layers=2
         )
@@ -349,8 +350,7 @@ class EModel_CNN_Transformer(nn.Module):
 #   5. 评估工具: 计算 MSELoss / RMSE / MAPE / R^2 / SMAPE / MAE
 # =====================================================================
 def evaluate(model, dataloader, criterion):
-    with torch.no_grad():
-        model.eval()
+    model.eval()
     running_loss, num_samples = 0.0, 0
     preds_list, labels_list = [], []
 
@@ -383,19 +383,6 @@ def evaluate(model, dataloader, criterion):
     else:
         mape_std = 0.0
 
-    # 新增指标
-    # 1. 平均绝对百分比误差 (MAPE)
-    mape_val = 100 * np.mean(np.abs((labels_arr - preds_arr) / (labels_arr + 1e-8)))
-        
-    # 2. 对称平均绝对百分比误差 (SMAPE)
-    smape_val = 100 * 2.0 * np.mean(np.abs(labels_arr - preds_arr) / 
-                    (np.abs(labels_arr) + np.abs(preds_arr) + 1e-8))
-    
-    # 3. R-squared
-    ss_res = np.sum((labels_arr - preds_arr)**2)
-    ss_tot = np.sum((labels_arr - np.mean(labels_arr))**2)
-    r2_val = 1 - (ss_res / (ss_tot + 1e-8))
-
     # R^2
     ss_res = np.sum((labels_arr - preds_arr)**2)
     ss_tot = np.sum((labels_arr - np.mean(labels_arr))**2)
@@ -413,23 +400,33 @@ def evaluate(model, dataloader, criterion):
     # MAE
     mae_val = np.mean(np.abs(labels_arr - preds_arr))
 
-    return val_loss, rmse_std, mape_std, r2_std, smape_val, mae_val, preds_arr, labels_arr, mape_val, r2_val, smape_val
+    return val_loss, rmse_std, mape_std, r2_std, smape_val, mae_val, preds_arr, labels_arr
 
 
 # =====================================================================
 #   6. 训练工具: 同时记录训练集、验证集指标
 # =====================================================================
 def train_model(model, train_loader, val_loader, model_name='Model'):
+    """
+    每个 epoch:
+      1) evaluate(model, train_loader, ...)
+      2) evaluate(model, val_loader, ...)
+      3) 记录训练与验证各项指标
+      4) early stopping
+    """
     criterion = nn.MSELoss()
     optimizer = AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
 
-    # 使用余弦退火学习率调度
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer, 
-        T_max=num_epochs * len(train_loader), 
-        eta_min=1e-6
-    )
+    total_steps  = num_epochs * len(train_loader)
+    warmup_steps = int(0.1 * total_steps)
 
+    def lr_lambda(current_step):
+        if current_step < warmup_steps:
+            return float(current_step) / float(max(1, warmup_steps))
+        else:
+            return max(0.0, 1 - (current_step - warmup_steps) / (total_steps - warmup_steps))
+
+    scheduler = LambdaLR(optimizer, lr_lambda)
     best_val_loss = float('inf')
     counter = 0
     global_step = 0
@@ -441,7 +438,6 @@ def train_model(model, train_loader, val_loader, model_name='Model'):
     train_r2_history   = []
     train_smape_history= []
     train_mae_history  = []
-    train_samples_history = []  # 新增训练样本数记录
 
     val_loss_history   = []
     val_rmse_history   = []
@@ -450,20 +446,6 @@ def train_model(model, train_loader, val_loader, model_name='Model'):
     val_smape_history  = []
     val_mae_history    = []
 
-    train_mape_val_history = []
-    train_r2_val_history = []
-    train_smape_val_history = []
-    val_mape_val_history = []
-    val_r2_val_history = []
-    val_smape_val_history = []
-
-    # 改进的checkpoint机制
-    checkpoint_path = f'checkpoint_{model_name}.pth'
-    best_checkpoint_path = f'best_{model_name}.pth'
-
-    # 增加梯度裁剪
-    max_grad_norm = 5.0    
-    
     for epoch in range(num_epochs):
         # === 训练阶段 ===
         model.train()
@@ -485,22 +467,13 @@ def train_model(model, train_loader, val_loader, model_name='Model'):
             num_samples  += batch_inputs.size(0)
             global_step  += 1
 
-            # 梯度裁剪
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
-            
-            optimizer.step()
-            scheduler.step()
-
-        # 记录训练样本数
-        train_samples_history.append(num_samples)
+        train_loss_epoch = running_loss / num_samples
 
         # === 计算 train set 上的各指标 ===
-        train_loss_eval, train_rmse_eval, train_mape_eval, train_r2_eval, train_smape_eval, train_mae_eval, \
-        train_mape_val, train_r2_val, train_smape_val, _, _ = evaluate(model, train_loader, criterion)
+        train_loss_eval, train_rmse_eval, train_mape_eval, train_r2_eval, train_smape_eval, train_mae_eval, _, _ = evaluate(model, train_loader, criterion)
 
         # === 计算 val set 上的各指标 ===
-        val_loss_eval, val_rmse_eval, val_mape_eval, val_r2_eval, val_smape_eval, val_mae_eval, \
-        val_mape_val, val_r2_val, val_smape_val, _, _ = evaluate(model, val_loader, criterion)
+        val_loss_eval, val_rmse_eval, val_mape_eval, val_r2_eval, val_smape_eval, val_mae_eval, _, _ = evaluate(model, val_loader, criterion)
 
         # === 保存各类指标到历史数组 ===
         train_loss_history.append(train_loss_eval)
@@ -509,14 +482,6 @@ def train_model(model, train_loader, val_loader, model_name='Model'):
         train_r2_history.append(train_r2_eval)
         train_smape_history.append(train_smape_eval)
         train_mae_history.append(train_mae_eval)
-
-        # === 保存新增指标到历史数组 ===
-        train_mape_val_history.append(train_mape_val)
-        train_r2_val_history.append(train_r2_val)
-        train_smape_val_history.append(train_smape_val)
-        val_mape_val_history.append(val_mape_val)
-        val_r2_val_history.append(val_r2_val)
-        val_smape_val_history.append(val_smape_val)
 
         val_loss_history.append(val_loss_eval)
         val_rmse_history.append(val_rmse_eval)
@@ -527,7 +492,7 @@ def train_model(model, train_loader, val_loader, model_name='Model'):
 
         # === 打印日志 ===
         print(f"[{model_name}] Epoch {epoch+1}/{num_epochs}, "
-              f"TrainLoss: {train_loss_eval:.4f}, "
+              f"TrainLoss: {train_loss_epoch:.4f}, "
               f"ValLoss: {val_loss_eval:.4f}, "
               f"ValRMSE(std): {val_rmse_eval:.4f}, "
               f"ValMAPE(%): {val_mape_eval:.2f}, "
@@ -535,36 +500,11 @@ def train_model(model, train_loader, val_loader, model_name='Model'):
               f"ValSMAPE(%): {val_smape_eval:.2f}, "
               f"ValMAE(std): {val_mae_eval:.4f}")
 
-        # === 保存checkpoint ===
-        torch.save({
-            'epoch': epoch,
-            'model_state_dict': model.state_dict(),
-            'optimizer_state_dict': optimizer.state_dict(),
-            'loss': val_loss_eval,
-            'train_metrics': {
-                'loss': train_loss_history,
-                'rmse': train_rmse_history,
-                'mape': train_mape_history,
-                'r2': train_r2_history,
-                'smape': train_smape_history,
-                'mae': train_mae_history
-            },
-            'val_metrics': {
-                'loss': val_loss_history,
-                'rmse': val_rmse_history,
-                'mape': val_mape_history,
-                'r2': val_r2_history,
-                'smape': val_smape_history,
-                'mae': val_mae_history
-            }
-        }, checkpoint_path)
-
         # === Early Stopping ===
         if val_loss_eval < best_val_loss:
             best_val_loss = val_loss_eval
-            counter = 0
-            # 保存最佳模型
-            torch.save(model.state_dict(), best_checkpoint_path)
+            counter       = 0
+            torch.save(model.state_dict(), f"best_{model_name}.pth")
             print(f"[{model_name}] 模型已保存 (best val_loss={best_val_loss:.4f}).")
         else:
             counter += 1
@@ -580,21 +520,13 @@ def train_model(model, train_loader, val_loader, model_name='Model'):
         "train_r2":    train_r2_history,
         "train_smape": train_smape_history,
         "train_mae":   train_mae_history,
-        "train_samples": train_samples_history,  
 
         "val_loss":    val_loss_history,
         "val_rmse":    val_rmse_history,
         "val_mape":    val_mape_history,
         "val_r2":      val_r2_history,
         "val_smape":   val_smape_history,
-        "val_mae":     val_mae_history,
-
-        "train_mape_val": train_mape_val_history,
-        "train_r2_val": train_r2_val_history,
-        "train_smape_val": train_smape_val_history,
-        "val_mape_val": val_mape_val_history,
-        "val_r2_val": val_r2_val_history,
-        "val_smape_val": val_smape_val_history
+        "val_mae":     val_mae_history
     }
 
 
@@ -698,14 +630,6 @@ def plot_training_curves_allmetrics(hist_dict, model_name='Model'):
     """
     epochs = range(1, len(hist_dict["train_loss"]) + 1)
     plt.figure(figsize=(15, 12))
-    # 新增训练样本数监控
-    plt.subplot(3, 2, 7)
-    plt.plot(epochs, hist_dict["train_samples"], 'g-o', label='Train Samples', markersize=4)
-    plt.xlabel('Epoch')
-    plt.ylabel('Samples')
-    plt.title('Training Samples per Iteration')
-    plt.legend()
-    plt.grid(True)
 
     # (1) Loss
     plt.subplot(3, 2, 1)
@@ -767,54 +691,7 @@ def plot_training_curves_allmetrics(hist_dict, model_name='Model'):
     plt.legend()
     plt.grid(True)
 
-        # 3. 学习率曲线
-    plt.subplot(2, 2, 3)
-    plt.plot(epochs, hist_dict['lr'], label='Learning Rate')
-    plt.title('Learning Rate Schedule')
-    plt.xlabel('Step')
-    plt.ylabel('Learning Rate')
-    plt.legend()
-    
-    # 4. 梯度范数
-    plt.subplot(2, 2, 4)
-    plt.plot(epochs, hist_dict['grad_norm'], label='Gradient Norm')
-    plt.title('Gradient Norm')
-    plt.xlabel('Step')
-    plt.ylabel('Norm')
-    plt.legend()
-
     plt.suptitle(f"Training Curves for {model_name}", fontsize=16)
-    plt.tight_layout()
-    plt.show()
-
-    # 新增绘图
-    plt.subplot(3, 2, 8)
-    plt.plot(epochs, hist_dict["train_mape_val"], 'r-o', label='Train MAPE', markersize=4)
-    plt.plot(epochs, hist_dict["val_mape_val"], 'b-o', label='Val MAPE', markersize=4)
-    plt.xlabel('Epoch')
-    plt.ylabel('MAPE (%)')
-    plt.title('MAPE (val)')
-    plt.legend()
-    plt.grid(True)
-
-    plt.subplot(3, 2, 9)
-    plt.plot(epochs, hist_dict["train_r2_val"], 'r-o', label='Train R^2', markersize=4)
-    plt.plot(epochs, hist_dict["val_r2_val"], 'b-o', label='Val R^2', markersize=4)
-    plt.xlabel('Epoch')
-    plt.ylabel('R^2')
-    plt.title('R^2 (val)')
-    plt.legend()
-    plt.grid(True)
-
-    plt.subplot(3, 2, 10)
-    plt.plot(epochs, hist_dict["train_smape_val"], 'r-o', label='Train SMAPE', markersize=4)
-    plt.plot(epochs, hist_dict["val_smape_val"], 'b-o', label='Val SMAPE', markersize=4)
-    plt.xlabel('Epoch')
-    plt.ylabel('SMAPE (%)')
-    plt.title('SMAPE (val)')
-    plt.legend()
-    plt.grid(True)
-
     plt.tight_layout()
     plt.show()
 

@@ -15,7 +15,9 @@ from torch.utils.data import DataLoader, TensorDataset
 from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.metrics import mean_squared_error
 from torch.nn.utils import clip_grad_norm_
-from x_transformers import RMSNorm, Lion, TransformerWrapper, Decoder, RotaryEmbedding
+from x_transformers import RMSNorm, TransformerWrapper, Decoder
+from lion_pytorch import Lion
+from rotary_embedding_torch import RotaryEmbedding
 
 # ---------------------------
 # 全局字体及样式设置

@@ -9,13 +9,12 @@ import seaborn as sns
 import matplotlib.colors as mcolors
 import matplotlib as mpl
 
-from torch.optim import AdamW
 from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader, TensorDataset
 from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.metrics import mean_squared_error
 from torch.nn.utils import clip_grad_norm_
-from x_transformers import RMSNorm, TransformerWrapper, Decoder
+from x_transformers import RMSNorm
 from lion_pytorch import Lion
 from rotary_embedding_torch import RotaryEmbedding
 
@@ -40,6 +39,8 @@ weight_decay  = 1e-6
 patience      = 8
 num_workers   = 0
 window_size   = 20
+lstm_hidden_size = 128  # LSTM隐藏层参数
+lstm_num_layers = 2     # LSTM层数参数
 
 # 设置随机种子
 torch.manual_seed(42)
@@ -153,56 +154,49 @@ class PositionalEncoding(nn.Module):
 
 
 class Transformer(nn.Module):
-    def __init__(self, d_model, nhead=8, num_encoder_layers=2, num_decoder_layers=2):
-        super(Transformer, self).__init__()
-        # 使用Rotary Position Embedding替代传统位置编码
+    def __init__(self, d_model, nhead=8, num_encoder_layers=2, num_decoder_layers=2, dropout=0.1):
+        super().__init__()
         self.rotary_emb = RotaryEmbedding(dim=d_model//2)
         
-        # 优化后的Encoder
+        # Encoder
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=d_model,
             nhead=nhead,
             dim_feedforward=4*d_model,
-            dropout=0.1,
+            dropout=dropout,  # 使用传入的dropout
             batch_first=True,
-            activation='gelu'  # 使用GELU激活函数
+            activation='gelu'
         )
         self.transformer_encoder = nn.TransformerEncoder(
             encoder_layer, 
-            num_layers=num_encoder_layers,
-            norm=RMSNorm(d_model)  # 使用RMSNorm
+            num_layers=num_encoder_layers,  # 使用传入的层数
+            norm=RMSNorm(d_model)
         )
 
-        # 优化后的Decoder
+        # Decoder
         decoder_layer = nn.TransformerDecoderLayer(
             d_model=d_model,
             nhead=nhead,
             dim_feedforward=4*d_model,
-            dropout=0.1,
+            dropout=dropout,  # 使用传入的dropout
             batch_first=True,
             activation='gelu'
         )
         self.transformer_decoder = nn.TransformerDecoder(
             decoder_layer,
-            num_layers=num_decoder_layers,
+            num_layers=num_decoder_layers,  # 使用传入的层数
             norm=RMSNorm(d_model)
         )
 
     def forward(self, src, tgt):
-        # 应用旋转位置编码
         src = self.rotary_emb(src)
         tgt = self.rotary_emb(tgt)
-        
-        # Encoder处理
         memory = self.transformer_encoder(src)
-        
-        # Decoder处理
-        out = self.transformer_decoder(tgt, memory)
-        return out
+        return self.transformer_decoder(tgt, memory)
 
 
 class CNNBlock(nn.Module):
-    def __init__(self, feature_dim, hidden_size, dropout=0):
+    def __init__(self, feature_dim, hidden_size, dropout=0.2):
         super(CNNBlock, self).__init__()
         self.conv1 = nn.Conv1d(feature_dim, hidden_size, kernel_size=3, padding=1)
         self.conv2 = nn.Conv1d(hidden_size, hidden_size, kernel_size=5, padding=2)
@@ -325,67 +319,46 @@ class EModel_FeatureWeight(nn.Module):
 
 class EModel_CNN_Transformer(nn.Module):
     def __init__(self, feature_dim, hidden_size=128, num_layers=2, dropout=0.1):
-        super(EModel_CNN_Transformer, self).__init__()
-        self.feature_dim = feature_dim
-        self.hidden_size = hidden_size
-        self.num_layers  = num_layers
-
-        # 特征重要性权重
-        self.feature_importance = nn.Parameter(torch.ones(feature_dim), requires_grad=True)
+        super().__init__()
+        self.feature_importance = nn.Parameter(torch.ones(feature_dim))
         
-        # CNN特征提取
         self.cnn_block = CNNBlock(feature_dim, hidden_size, dropout)
-
-        # 优化后的Transformer模块
+        
+        # 使用所有传入参数
         self.transformer_block = Transformer(
             d_model=2*hidden_size,
             nhead=8,
-            num_encoder_layers=num_layers,  # 使用传入的num_layers
-            num_decoder_layers=num_layers,  # 使用传入的num_layers
-            dropout=dropout  # 添加dropout参数
+            num_encoder_layers=num_layers,
+            num_decoder_layers=num_layers,
+            dropout=dropout
         )
-        # 注意力机制
-        self.attention = Attention(input_dim=2*hidden_size)
-
-        # 全连接层
+        
+        self.attention = Attention(input_dim=2*hidden_size, dropout=dropout)  # 传递dropout
+        
         self.fc = nn.Sequential(
-            nn.Linear(2 * hidden_size, 128),
-            nn.GELU(),  # 使用GELU激活函数
+            nn.Linear(2*hidden_size, 128),
+            nn.GELU(),
             nn.Dropout(dropout),
             nn.Linear(128, 1)
         )
-
-        # 残差连接
+        
         self.residual = nn.Sequential(
-            nn.Linear(feature_dim, 2 * hidden_size),
+            nn.Linear(feature_dim, 2*hidden_size),
             nn.GELU()
         )
-
-        # Dropout
+        
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
-        # 特征加权
         x = x * self.feature_importance.unsqueeze(0).unsqueeze(0)
-        
-        # 残差连接
         residual = self.residual(x[:, -1, :])
         
-        # CNN特征提取
         cnn_out = self.cnn_block(x)
-        
-        # Transformer处理
         transformer_out = self.transformer_block(cnn_out, cnn_out)
+        transformer_out += residual.unsqueeze(1)
         
-        # 添加残差连接
-        transformer_out = transformer_out + residual.unsqueeze(1)
-        
-        # 注意力机制
         attn_out = self.attention(transformer_out)
-        
-        # 最终预测
-        out = self.fc(attn_out)
-        return out.squeeze(-1)
+        return self.fc(attn_out).squeeze(-1)
 
 
 # =====================================================================
@@ -448,7 +421,7 @@ def evaluate(model, dataloader, criterion, device='cuda'):
 # =====================================================================
 #   6. 训练工具: 同时记录训练集、验证集指标
 # =====================================================================
-def train_model(model, train_loader, val_loader, model_name='Model', learning_rate=1e-4, weight_decay=1e-2):
+def train_model(model, train_loader, val_loader, model_name='Model', learning_rate=1e-4, weight_decay=1e-2, num_epochs=num_epochs):
     """
     每个 epoch:
       1) evaluate(model, train_loader, ...)
@@ -466,13 +439,10 @@ def train_model(model, train_loader, val_loader, model_name='Model', learning_ra
     total_steps  = num_epochs * len(train_loader)
     warmup_steps = int(0.1 * total_steps)
 
-    def lr_lambda(current_step):
-        if current_step < warmup_steps:
-            return float(current_step) / float(max(1, warmup_steps))
-        else:
-            return max(0.0, 1 - (current_step - warmup_steps) / (total_steps - warmup_steps))
-
-    scheduler = LambdaLR(optimizer, lr_lambda)
+    scheduler = LambdaLR(optimizer, lambda step: 
+        min(step/warmup_steps, 1.0) if step < warmup_steps else 
+        max(0.0, 1 - (step - warmup_steps)/(total_steps - warmup_steps))
+    )
     best_val_loss = float('inf')
     counter = 0
     global_step = 0
@@ -792,7 +762,7 @@ def main(use_log_transform=True, min_egrid_threshold=1.0):
     val_timestamps   = timestamps_all[train_size : train_size + val_size]
     test_timestamps  = timestamps_all[train_size + val_size:]
 
-    # -- 可选：对目标做对数变换
+    # -- 对目标做对数变换
     if use_log_transform:
         y_train_raw = np.log1p(y_train_raw)
         y_val_raw   = np.log1p(y_val_raw)
@@ -827,12 +797,29 @@ def main(use_log_transform=True, min_egrid_threshold=1.0):
 
     # -- 构建模型
     feature_dim = X_train_seq.shape[-1]
-    modelA = EModel_FeatureWeight(feature_dim).to(device)
-    modelB = EModel_CNN_Transformer(feature_dim).to(device)
+    modelA = EModel_FeatureWeight(
+        feature_dim=feature_dim,
+        lstm_hidden_size=lstm_hidden_size,  # 使用全局参数
+        lstm_num_layers=lstm_num_layers,    # 使用全局参数
+        lstm_dropout=0.2
+    ).to(device)
+    
+    modelB = EModel_CNN_Transformer(
+        feature_dim=feature_dim,
+        hidden_size=128,
+        num_layers=2,          # 显式传递参数
+        dropout=0.1            # 显式传递参数
+    ).to(device)
 
     # -- 训练 EModel_FeatureWeight
     print("\n========== Train EModel_FeatureWeight ==========")
-    histA = train_model(modelA, train_loader, val_loader, model_name='EModel_FeatureWeight')
+    histA = train_model(
+        modelA, train_loader, val_loader,
+        model_name='EModel_FeatureWeight',
+        learning_rate=learning_rate,
+        weight_decay=weight_decay,
+        num_epochs=num_epochs  # 使用全局参数
+    )
 
     # -- 训练 EModel_CNN_Transformer
     print("\n========== Train EModel_CNN_Transformer ==========")
@@ -881,6 +868,28 @@ def main(use_log_transform=True, min_egrid_threshold=1.0):
     print("\n========== [Test in Real Domain] ==========")
     print(f"[EModel_FeatureWeight] => RMSE(real): {test_rmseA_real:.2f}")
     print(f"[EModel_CNN_Transformer] => RMSE(real): {test_rmseB_real:.2f}")
+
+    # 数据集统计信息输出（使用test_size参数）
+    total_samples = len(data_df)
+    print(f"\n[Data Statistics] Total samples: {total_samples}")
+    print(f"Train size: {train_size} ({train_size/total_samples:.1%})")
+    print(f"Validation size: {val_size} ({val_size/total_samples:.1%})") 
+    print(f"Test size: {test_size} ({test_size/total_samples:.1%})")
+
+    # 时间序列分析可视化（使用train/val timestamps）
+    def plot_dataset_distribution(timestamps, title):
+        plt.figure(figsize=(10,4))
+        plt.hist(pd.to_datetime(timestamps), bins=50, color='skyblue', edgecolor='black')
+        plt.title(f'Time Distribution - {title}')
+        plt.xlabel('Timestamp')
+        plt.ylabel('Count')
+        plt.grid(axis='y')
+        plt.tight_layout()
+        plt.show()
+
+    plot_dataset_distribution(train_timestamps, 'Training Set')
+    plot_dataset_distribution(val_timestamps, 'Validation Set')
+    plot_dataset_distribution(test_timestamps, 'Test Set')
 
     # -- 可视化(以modelA为例)
     plot_test_predictions_over_time(test_timestamps[window_size:], labelsA_real, predsA_real)

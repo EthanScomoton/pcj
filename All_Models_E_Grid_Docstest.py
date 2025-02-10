@@ -156,43 +156,43 @@ class PositionalEncoding(nn.Module):
 class Transformer(nn.Module):
     def __init__(self, d_model, nhead=8, num_encoder_layers=2, num_decoder_layers=2, dropout=0.1):
         super().__init__()
-        self.rotary_emb = RotaryEmbedding(dim=d_model//2)
+        # self.rotary_emb = RotaryEmbedding(dim=d_model//2)
         
         # Encoder
         encoder_layer = nn.TransformerEncoderLayer(
-            d_model=d_model,
-            nhead=nhead,
-            dim_feedforward=4*d_model,
-            dropout=dropout,  # 使用传入的dropout
-            batch_first=True,
-            activation='gelu'
+            d_model = d_model,
+            nhead = nhead,
+            dim_feedforward = 4 * d_model,
+            dropout = dropout,
+            batch_first = True,
+            activation = 'gelu'
         )
         self.transformer_encoder = nn.TransformerEncoder(
             encoder_layer, 
-            num_layers=num_encoder_layers,  # 使用传入的层数
-            norm=RMSNorm(d_model)
+            num_layers = num_encoder_layers,
+            norm = RMSNorm(d_model)
         )
 
         # Decoder
         decoder_layer = nn.TransformerDecoderLayer(
-            d_model=d_model,
-            nhead=nhead,
-            dim_feedforward=4*d_model,
-            dropout=dropout,  # 使用传入的dropout
-            batch_first=True,
-            activation='gelu'
+            d_model = d_model,
+            nhead = nhead,
+            dim_feedforward = 4 * d_model,
+            dropout = dropout,
+            batch_first = True,
+            activation = 'gelu'
         )
         self.transformer_decoder = nn.TransformerDecoder(
             decoder_layer,
-            num_layers=num_decoder_layers,  # 使用传入的层数
-            norm=RMSNorm(d_model)
+            num_layers = num_decoder_layers,
+            norm = RMSNorm(d_model)
         )
 
     def forward(self, src, tgt):
-        src = self.rotary_emb(src)
-        tgt = self.rotary_emb(tgt)
+        # 直接传递，不使用 rotary embedding
         memory = self.transformer_encoder(src)
         return self.transformer_decoder(tgt, memory)
+
 
 
 class CNNBlock(nn.Module):

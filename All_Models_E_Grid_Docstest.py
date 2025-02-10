@@ -254,40 +254,32 @@ class EModel_FeatureWeight(nn.Module):
         # 特征重要性权重
         self.feature_importance = nn.Parameter(torch.ones(feature_dim), requires_grad=True)
         
-        # 改进的LSTM模块
+        # 改进的 LSTM 模块（双向 LSTM）
         self.lstm = nn.LSTM(
-            input_size=feature_dim,
-            hidden_size=lstm_hidden_size,
-            num_layers=lstm_num_layers,
-            batch_first=True,
-            bidirectional=True,
-            dropout=lstm_dropout if lstm_num_layers > 1 else 0
+            input_size = feature_dim,
+            hidden_size = lstm_hidden_size,
+            num_layers = lstm_num_layers,
+            batch_first = True,
+            bidirectional = True,
+            dropout = lstm_dropout if lstm_num_layers > 1 else 0
         )
         
-        # LSTM权重初始化
+        # LSTM 权重初始化
         self._init_lstm_weights()
         
-        # Transformer模块
-        self.transformer_block = Transformer(
-            d_model=2*lstm_hidden_size, 
-            nhead=4, 
-            num_encoder_layers=2, 
-            num_decoder_layers=2
-        )
+        # 注意力模块，直接对 LSTM 输出进行 Attention 处理
+        self.attention = Attention(input_dim = 2 * lstm_hidden_size)
         
-        # Attention模块
-        self.attention = Attention(input_dim=2*lstm_hidden_size)
-        
-        # 全连接层
+        # 全连接层，用于最终预测
         self.fc = nn.Sequential(
-            nn.Linear(2*lstm_hidden_size, 128),
+            nn.Linear(2 * lstm_hidden_size, 128),
             nn.ReLU(),
             nn.Dropout(0.1),
             nn.Linear(128, 1)
         )
 
     def _init_lstm_weights(self):
-        """按照min-LSTM论文的方法初始化LSTM权重"""
+        """按照 min-LSTM 论文的方法初始化 LSTM 权重"""
         for name, param in self.lstm.named_parameters():
             if 'weight_ih' in name:
                 nn.init.xavier_uniform_(param.data)
@@ -295,26 +287,24 @@ class EModel_FeatureWeight(nn.Module):
                 nn.init.orthogonal_(param.data)
             elif 'bias' in name:
                 param.data.fill_(0)
-                # 设置遗忘门偏置为1
+                # 设置遗忘门偏置为 1
                 n = param.size(0)
-                param.data[(n//4):(n//2)].fill_(1.0)
+                param.data[(n // 4):(n // 2)].fill_(1.0)
 
     def forward(self, x):
         # 特征加权
         x = x * self.feature_importance.unsqueeze(0).unsqueeze(0)
         
-        # LSTM处理
+        # LSTM 处理
         lstm_out, _ = self.lstm(x)
         
-        # Transformer处理
-        transformer_out = self.transformer_block(lstm_out, lstm_out)
+        # 直接使用 LSTM 输出进行 Attention 处理（移除了 Transformer 部分）
+        attn_out = self.attention(lstm_out)
         
-        # Attention处理
-        attn_out = self.attention(transformer_out)
-        
-        # 最终预测
+        # 最终全连接层输出预测
         out = self.fc(attn_out)
         return out.squeeze(-1)
+
 
 
 class EModel_CNN_Transformer(nn.Module):

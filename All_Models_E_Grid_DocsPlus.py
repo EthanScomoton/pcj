@@ -9,6 +9,10 @@ import seaborn as sns
 import matplotlib.colors as mcolors
 import matplotlib as mpl
 
+from functools import partial
+from torch import nn, einsum
+from einops import rearrange, repeat
+from local_attention import LocalAttention
 from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader, TensorDataset
 from sklearn.preprocessing import LabelEncoder, StandardScaler
@@ -152,46 +156,174 @@ class PositionalEncoding(nn.Module):
         pos_enc = self.pe[step_offset: step_offset + seq_len, 0, :]
         return x + pos_enc.unsqueeze(0)
 
+# 辅助函数
+def exists(val):
+    return val is not None
 
-class Transformer(nn.Module):
-    def __init__(self, d_model, nhead=8, num_encoder_layers=2, num_decoder_layers=2, dropout=0.1):
+def default(val, d):
+    return val if exists(val) else d
+
+# 旋转位置编码 (RoPE)
+class RotaryEmbedding(nn.Module):
+    def __init__(self, dim, max_seq_len=512):
         super().__init__()
-        # self.rotary_emb = RotaryEmbedding(dim=d_model//2)
+        inv_freq = 1.0 / (10000 ** (torch.arange(0, dim, 2).float() / dim))
+        t = torch.arange(max_seq_len, dtype=inv_freq.dtype)
+        freqs = torch.einsum('i , j -> i j', t, inv_freq)
+        self.register_buffer('sin', freqs.sin(), persistent=False)
+        self.register_buffer('cos', freqs.cos(), persistent=False)
+
+    def forward(self, x, seq_dim=-2):
+        seq_len = x.shape[seq_dim]
+        sin = self.sin[:seq_len]
+        cos = self.cos[:seq_len]
+        return cos, sin
+
+def rotate_half(x):
+    x = rearrange(x, '... (d r) -> ... d r', r=2)
+    x1, x2 = x.unbind(dim=-1)
+    x = torch.stack((-x2, x1), dim=-1)
+    return rearrange(x, '... d r -> ... (d r)')
+
+def apply_rotary_pos_emb(q, k, cos, sin):
+    q, k = map(lambda t: (t * cos) + (rotate_half(t) * sin), (q, k))
+    return q, k
+
+# 动态稀疏注意力机制
+class SparseAttention(nn.Module):
+    def __init__(self, dim, heads=8, sparse_topk=32):
+        super().__init__()
+        self.heads = heads
+        self.scale = dim ** -0.5
+        self.sparse_topk = sparse_topk
         
-        # Encoder
-        encoder_layer = nn.TransformerEncoderLayer(
-            d_model = d_model,
-            nhead = nhead,
-            dim_feedforward = 4 * d_model,
-            dropout = dropout,
-            batch_first = True,
-            activation = 'gelu'
-        )
-        self.transformer_encoder = nn.TransformerEncoder(
-            encoder_layer, 
-            num_layers = num_encoder_layers,
-            norm = RMSNorm(d_model)
-        )
+        self.to_qkv = nn.Linear(dim, dim * 3, bias=False)
+        self.to_out = nn.Linear(dim, dim)
 
-        # Decoder
-        decoder_layer = nn.TransformerDecoderLayer(
-            d_model = d_model,
-            nhead = nhead,
-            dim_feedforward = 4 * d_model,
-            dropout = dropout,
-            batch_first = True,
-            activation = 'gelu'
-        )
-        self.transformer_decoder = nn.TransformerDecoder(
-            decoder_layer,
-            num_layers = num_decoder_layers,
-            norm = RMSNorm(d_model)
-        )
+    def forward(self, x):
+        b, n, _, h = *x.shape, self.heads
+        qkv = self.to_qkv(x).chunk(3, dim=-1)
+        q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h=h), qkv)
+        
+        # 动态稀疏化
+        scores = einsum('b h i d, b h j d -> b h i j', q, k) * self.scale
+        topk = max(self.sparse_topk, int(n * 0.1))  # 至少保留10%的连接
+        
+        # 保留topk连接
+        topk_scores, topk_indices = scores.topk(topk, dim=-1)
+        mask = torch.zeros_like(scores).scatter_(-1, topk_indices, 1.0)
+        sparse_scores = torch.where(mask.bool(), scores, torch.full_like(scores, -torch.inf))
+        
+        attn = sparse_scores.softmax(dim=-1)
+        out = einsum('b h i j, b h j d -> b h i d', attn, v)
+        out = rearrange(out, 'b h n d -> b n (h d)')
+        return self.to_out(out)
 
-    def forward(self, src, tgt):
-        # 直接传递，不使用 rotary embedding
-        memory = self.transformer_encoder(src)
-        return self.transformer_decoder(tgt, memory)
+# Talking-Heads 注意力
+class TalkingHeadsAttention(nn.Module):
+    def __init__(self, dim, heads=8, dim_head=64, dropout=0.):
+        super().__init__()
+        inner_dim = dim_head * heads
+        self.heads = heads
+        self.scale = dim_head ** -0.5
+
+        self.to_qkv = nn.Linear(dim, inner_dim * 3, bias=False)
+        self.proj_attn = nn.Conv2d(heads, heads, 1, bias=False)
+        self.dropout = nn.Dropout(dropout)
+        self.to_out = nn.Linear(inner_dim, dim)
+
+    def forward(self, x, rotary_emb=None):
+        b, n, _, h = *x.shape, self.heads
+        qkv = self.to_qkv(x).chunk(3, dim=-1)
+        q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h=h), qkv)
+
+        if exists(rotary_emb):
+            cos, sin = rotary_emb
+            q, k = apply_rotary_pos_emb(q, k, cos, sin)
+
+        dots = einsum('b h i d, b h j d -> b h i j', q, k) * self.scale
+        attn = dots.softmax(dim=-1)
+        
+        # Talking-Heads投影
+        attn = self.proj_attn(attn)
+        attn = self.dropout(attn)
+
+        out = einsum('b h i j, b h j d -> b h i d', attn, v)
+        out = rearrange(out, 'b h n d -> b n (h d)')
+        return self.to_out(out)
+
+# 持久化记忆机制
+class MemoryLayer(nn.Module):
+    def __init__(self, dim, num_memories=32):
+        super().__init__()
+        self.memories = nn.Parameter(torch.randn(num_memories, dim))
+        self.mem_proj = nn.Linear(dim, dim * 2)
+        self.to_mem_gates = nn.Linear(dim, 2)
+
+    def forward(self, x, prev_memories=None):
+        b, n, d = x.shape
+        mem = self.memories.expand(b, -1, -1)
+        
+        if exists(prev_memories):
+            mem = torch.cat((prev_memories, mem), dim=1)
+        
+        mem_out = self.mem_proj(mem)
+        mem_out = rearrange(mem_out, 'b n (d r) -> b n d r', r=2)
+        gate = self.to_mem_gates(x).sigmoid()
+        return mem_out * gate[..., None]
+    
+# 改进的GLU前馈网络
+class GEGLU(nn.Module):
+    def forward(self, x):
+        x, gate = x.chunk(2, dim=-1)
+        return x * F.gelu(gate)
+
+def FeedForward(dim, mult=4, dropout=0.):
+    inner_dim = int(dim * mult * 2 / 3)
+    return nn.Sequential(
+        nn.LayerNorm(dim),
+        nn.Linear(dim, inner_dim * 2),
+        GEGLU(),
+        nn.Dropout(dropout),
+        nn.Linear(inner_dim, dim)
+    )
+    
+class Transformer(nn.Module):
+    def __init__(self, dim, depth=4, heads=8, dim_head=64, 
+                local_window=64, num_memories=32, sparse_topk=32):
+        super().__init__()
+        self.layers = nn.ModuleList([])
+        self.rotary_emb = RotaryEmbedding(dim_head)
+        
+        for _ in range(depth):
+            self.layers.append(nn.ModuleList([
+                TalkingHeadsAttention(dim, heads=heads, dim_head=dim_head),
+                SparseAttention(dim, heads=heads, sparse_topk=sparse_topk),
+                MemoryLayer(dim, num_memories=num_memories),
+                nn.LayerNorm(dim),
+                FeedForward(dim)
+            ]))
+
+    def forward(self, x):
+        memories = None
+        cos, sin = self.rotary_emb(x)
+        
+        for attn, sparse_attn, memory, norm, ff in self.layers:
+            # 残差连接
+            x = attn(norm(x), (cos, sin)) + x
+            
+            # 稀疏注意力
+            x = sparse_attn(x) + x
+            
+            # 记忆机制
+            new_mem = memory(x, memories)
+            x = torch.cat((x, new_mem), dim=1)
+            memories = new_mem
+            
+            # 前馈网络
+            x = ff(x) + x
+            
+        return x
 
 
 

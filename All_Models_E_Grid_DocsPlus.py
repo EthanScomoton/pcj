@@ -167,6 +167,7 @@ def default(val, d):
 class RotaryEmbedding(nn.Module):
     def __init__(self, dim, max_seq_len=512):
         super().__init__()
+        assert dim % 2 == 0, "维度必须是偶数"
         inv_freq = 1.0 / (10000 ** (torch.arange(0, dim, 2).float() / dim))
         t = torch.arange(max_seq_len, dtype=inv_freq.dtype)
         freqs = torch.einsum('i , j -> i j', t, inv_freq)
@@ -303,7 +304,7 @@ class EnhancedTransformer(nn.Module):
         """
         super().__init__()
         self.layers = nn.ModuleList([])
-        self.rotary_emb = RotaryEmbedding(dim_head)
+        self.rotary_emb = RotaryEmbedding(dim=dim_head//2)
         
         for _ in range(depth):
             self.layers.append(nn.ModuleList([
@@ -317,7 +318,7 @@ class EnhancedTransformer(nn.Module):
     def forward(self, x):
         memories = None
         # 计算旋转位置编码
-        cos, sin = self.rotary_emb(x)
+        cos, sin = self.rotary_emb(x, seq_dim=1) 
         
         for attn, sparse_attn, memory, norm, ff in self.layers:
             # 残差连接（Talking-Heads Attention）

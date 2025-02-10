@@ -165,30 +165,40 @@ def default(val, d):
 
 # 旋转位置编码 (RoPE)
 class RotaryEmbedding(nn.Module):
-    def __init__(self, dim, max_seq_len=512):
+    def __init__(self, dim_head, max_seq_len=512):
         super().__init__()
-        assert dim % 2 == 0, "维度必须是偶数"
-        inv_freq = 1.0 / (10000 ** (torch.arange(0, dim, 2).float() / dim))
+        assert dim_head % 4 == 0, "dim_head必须能被4整除"
+        half_dim = dim_head // 2  # 实际旋转维度是头维度的一半
+        inv_freq = 1.0 / (10000 ** (torch.arange(0, half_dim, 2).float() / half_dim))
         t = torch.arange(max_seq_len, dtype=inv_freq.dtype)
         freqs = torch.einsum('i , j -> i j', t, inv_freq)
         self.register_buffer('sin', freqs.sin(), persistent=False)
         self.register_buffer('cos', freqs.cos(), persistent=False)
 
-    def forward(self, x, seq_dim=-2):
-        seq_len = x.shape[seq_dim]
+    def forward(self, x):
+        seq_len = x.shape[1]  # 输入形状应为(batch, seq_len, dim)
         sin = self.sin[:seq_len]
         cos = self.cos[:seq_len]
         return cos, sin
 
+# 修改点2：调整旋转应用函数
 def rotate_half(x):
-    x = rearrange(x, '... (d r) -> ... d r', r=2)
-    x1, x2 = x.unbind(dim=-1)
-    x = torch.stack((-x2, x1), dim=-1)
-    return rearrange(x, '... d r -> ... (d r)')
+    x1, x2 = x.chunk(2, dim=-1)
+    return torch.cat((-x2, x1), dim=-1)
 
 def apply_rotary_pos_emb(q, k, cos, sin):
-    q, k = map(lambda t: (t * cos) + (rotate_half(t) * sin), (q, k))
-    return q, k
+    """
+    参数:
+        q: [batch, heads, seq_len, dim_head]
+        k: [batch, heads, seq_len, dim_head]
+        cos/sin: [seq_len, dim_head//2]
+    """
+    cos = rearrange(cos, 'n d -> n 1 d')  # 添加head维度
+    sin = rearrange(sin, 'n d -> n 1 d')
+    
+    q_rot = q * cos + rotate_half(q) * sin
+    k_rot = k * cos + rotate_half(k) * sin
+    return q_rot, k_rot
 
 # 动态稀疏注意力机制
 class SparseAttention(nn.Module):
@@ -304,7 +314,7 @@ class EnhancedTransformer(nn.Module):
         """
         super().__init__()
         self.layers = nn.ModuleList([])
-        self.rotary_emb = RotaryEmbedding(dim=dim_head//2)
+        self.rotary_emb = RotaryEmbedding(dim_head=dim_head)  # 直接传入dim_head
         
         for _ in range(depth):
             self.layers.append(nn.ModuleList([
@@ -317,8 +327,7 @@ class EnhancedTransformer(nn.Module):
 
     def forward(self, x):
         memories = None
-        # 计算旋转位置编码
-        cos, sin = self.rotary_emb(x, seq_dim=1) 
+        cos, sin = self.rotary_emb(x)
         
         for attn, sparse_attn, memory, norm, ff in self.layers:
             # 残差连接（Talking-Heads Attention）
@@ -463,7 +472,7 @@ class EModel_CNN_Transformer(nn.Module):
             dim = 2 * hidden_size,     # 输入 transformer 的维度
             depth = num_layers,        # 将 num_layers 用作 transformer 的层数
             heads = 8,
-            dim_head = hidden_size,    # 可根据需要调整 dim_head
+            dim_head = 64,    # 可根据需要调整 dim_head
             local_window = 64,
             num_memories = 32,
             sparse_topk = 32

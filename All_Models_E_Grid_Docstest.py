@@ -156,8 +156,8 @@ class PositionalEncoding(nn.Module):
 class Transformer(nn.Module):
     def __init__(self, d_model, nhead=8, num_encoder_layers=2, num_decoder_layers=2, dropout=0.1):
         super().__init__()
-        # self.rotary_emb = RotaryEmbedding(dim=d_model//2)
-        
+        self.rotary_emb = RotaryEmbedding(dim=d_model//2)
+    
         # Encoder
         encoder_layer = nn.TransformerEncoderLayer(
             d_model = d_model,

@@ -288,9 +288,19 @@ def FeedForward(dim, mult=4, dropout=0.):
         nn.Linear(inner_dim, dim)
     )
     
-class Transformer(nn.Module):
+class EnhancedTransformer(nn.Module):
     def __init__(self, dim, depth=4, heads=8, dim_head=64, 
-                local_window=64, num_memories=32, sparse_topk=32):
+                 local_window=64, num_memories=32, sparse_topk=32):
+        """
+        参数:
+          dim: transformer内部输入维度（例如CNN提取后的2 * hidden_size）
+          depth: Transformer层数
+          heads: 注意力头数量
+          dim_head: 每个头的维度
+          local_window: 局部注意力窗口大小（可用于扩展 local attention 实现）
+          num_memories: 每层持久化记忆单元数量
+          sparse_topk: 动态稀疏注意力中保留 topk 数量
+        """
         super().__init__()
         self.layers = nn.ModuleList([])
         self.rotary_emb = RotaryEmbedding(dim_head)
@@ -306,21 +316,22 @@ class Transformer(nn.Module):
 
     def forward(self, x):
         memories = None
+        # 计算旋转位置编码
         cos, sin = self.rotary_emb(x)
         
         for attn, sparse_attn, memory, norm, ff in self.layers:
-            # 残差连接
+            # 残差连接（Talking-Heads Attention）
             x = attn(norm(x), (cos, sin)) + x
             
-            # 稀疏注意力
+            # 动态稀疏注意力
             x = sparse_attn(x) + x
             
-            # 记忆机制
+            # 持久化记忆机制
             new_mem = memory(x, memories)
             x = torch.cat((x, new_mem), dim=1)
             memories = new_mem
             
-            # 前馈网络
+            # 前馈网络（含 GEGLU）
             x = ff(x) + x
             
         return x
@@ -446,17 +457,18 @@ class EModel_CNN_Transformer(nn.Module):
         
         self.cnn_block = CNNBlock(feature_dim, hidden_size, dropout)
         
-        # 使用所有传入参数
-        self.transformer_block = Transformer(
-            d_model=2*hidden_size,
-            nhead=8,
-            num_encoder_layers=num_layers,
-            num_decoder_layers=num_layers,
-            dropout=dropout
+        # 使用改进后的 EnhancedTransformer 替换原来的 Transformer 调用
+        self.transformer_block = EnhancedTransformer(
+            dim = 2 * hidden_size,     # 输入 transformer 的维度
+            depth = num_layers,        # 将 num_layers 用作 transformer 的层数
+            heads = 8,
+            dim_head = hidden_size,    # 可根据需要调整 dim_head
+            local_window = 64,
+            num_memories = 32,
+            sparse_topk = 32
         )
         
-        self.attention = Attention(input_dim=2*hidden_size, dropout=dropout)  # 传递dropout
-        
+        self.attention = Attention(input_dim=2*hidden_size, dropout=dropout)
         self.fc = nn.Sequential(
             nn.Linear(2*hidden_size, 128),
             nn.GELU(),
@@ -472,11 +484,15 @@ class EModel_CNN_Transformer(nn.Module):
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
+        # 特征加权
         x = x * self.feature_importance.unsqueeze(0).unsqueeze(0)
+        # 计算残差
         residual = self.residual(x[:, -1, :])
         
+        # CNN 提取特征
         cnn_out = self.cnn_block(x)
-        transformer_out = self.transformer_block(cnn_out, cnn_out)
+        # Transformer 层处理
+        transformer_out = self.transformer_block(cnn_out)
         transformer_out += residual.unsqueeze(1)
         
         attn_out = self.attention(transformer_out)

@@ -298,25 +298,25 @@ class EModel_FeatureWeight(nn.Module):
         # 动态特征加权：计算特征门权重
         gate = self.feature_gate(x.mean(dim=1))  # [batch_size, feature_dim]
         x = x * gate.unsqueeze(1)                # [batch_size, seq_len, feature_dim]
-        
+
         # LSTM处理，输出形状: [batch_size, seq_len, 2*lstm_hidden_size]
         lstm_out, _ = self.lstm(x)
-        
+
         # Temporal attention：对每个时间步加权求和，输出 [batch_size, 2*lstm_hidden_size]
         temporal = self.temporal_attn(lstm_out)
-        
+
         # Feature attention：对特征维度进行加权
         feature_raw = self.feature_attn(lstm_out.transpose(1,2))  # 输出形状: [batch_size, window_size]
-        feature = self.feature_proj(feature_raw)  # 投影后形状为 [batch_size, 2*lstm_hidden_size]
-        
+        feature = self.feature_proj(feature_raw)                  # 得到 [batch_size, 2*lstm_hidden_size]
+
         # 拼接两个分支 [batch_size, 4*lstm_hidden_size]
         combined = torch.cat([temporal, feature], dim=1)
         mu, logvar = torch.chunk(self.fc(combined), 2, dim=1)
-        
-        # 得到最终预测结果，shape 为 [batch_size, 1]
+
+        # 得到最终预测结果，形状为 [batch_size, 1]
         output = mu + 0.1 * torch.randn_like(mu) * torch.exp(0.5 * logvar)
-        
-        # 修改输出形状为 [batch_size] 与目标标签保持一致
+    
+        # 压缩输出维度，使输出形状变为 [batch_size]
         return output.squeeze(-1)
 
 

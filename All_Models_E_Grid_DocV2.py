@@ -248,43 +248,54 @@ class Attention(nn.Module):
 
 
 class EModel_FeatureWeight(nn.Module):
-    def __init__(self, feature_dim, lstm_hidden_size=128, lstm_num_layers=2, lstm_dropout=0.2):
+    def __init__(self, feature_dim, lstm_hidden_size=128, lstm_num_layers=2, lstm_dropout=0.2, window_size=20):
+        """
+        参数说明：
+          feature_dim: 输入特征数量
+          lstm_hidden_size: LSTM单向隐藏层大小，因此双向输出为 2*lstm_hidden_size
+          lstm_num_layers: LSTM层数
+          lstm_dropout: LSTM内置dropout（多层时应用）
+          window_size: 序列长度，同时也用于特征注意力分支的输入维度
+        """
         super(EModel_FeatureWeight, self).__init__()
         self.feature_dim = feature_dim
         
-        # === 新增特征门控模块 ===
+        # 动态特征门控模块
         self.feature_gate = nn.Sequential(
             nn.Linear(feature_dim, feature_dim),
             nn.Sigmoid()
         )
         
-        # === 改进的LSTM模块 ===
+        # 双向LSTM模块
         self.lstm = nn.LSTM(
-            input_size = feature_dim,
-            hidden_size = lstm_hidden_size,
-            num_layers = lstm_num_layers,
-            batch_first = True,
-            bidirectional = True,
-            dropout = lstm_dropout if lstm_num_layers > 1 else 0
+            input_size=feature_dim,
+            hidden_size=lstm_hidden_size,
+            num_layers=lstm_num_layers,
+            batch_first=True,
+            bidirectional=True,
+            dropout=lstm_dropout if lstm_num_layers > 1 else 0
         )
         
-        # === 新增注意力模块 ===
-        self.temporal_attn = Attention(input_dim = 2 * lstm_hidden_size)
-        self.feature_attn = Attention(input_dim = 2 * lstm_hidden_size)
+        # 注意力模块：
+        # Temporal attention：对时序维度聚合，输入维度 = 2*lstm_hidden_size
+        self.temporal_attn = Attention(input_dim=2*lstm_hidden_size)
+        # Feature attention：聚合特征维度，输入为 lstm_out.transpose(1,2) 的最后一维为 window_size
+        self.feature_attn = Attention(input_dim=window_size)
+        # 对 feature attention 得到的 [batch, window_size] 进行线性投影到 2*lstm_hidden_size
+        self.feature_proj = nn.Linear(window_size, 2 * lstm_hidden_size)
         
-        # === 修正全连接层 ===
+        # 后续全连接层：输入为两个分支拼接后, 总维度 = 2*lstm_hidden_size + 2*lstm_hidden_size = 4*lstm_hidden_size
         self.fc = nn.Sequential(
             nn.Linear(4 * lstm_hidden_size, 128),
             nn.SiLU(),
             nn.Dropout(0.2),
             nn.Linear(128, 2)  # 输出均值和方差
         )
-
-        # === 保持原有的权重初始化 ===
+        
         self._init_lstm_weights()
 
     def _init_lstm_weights(self):
-        """按照 min-LSTM 论文的方法初始化 LSTM 权重"""
+        """按照min-LSTM论文的方法初始化LSTM权重"""
         for name, param in self.lstm.named_parameters():
             if 'weight_ih' in name:
                 nn.init.xavier_uniform_(param.data)
@@ -296,21 +307,30 @@ class EModel_FeatureWeight(nn.Module):
                 param.data[(n // 4):(n // 2)].fill_(1.0)
 
     def forward(self, x):
-        # 动态特征加权
+        """
+        输入 x: [batch_size, seq_len, feature_dim]，其中seq_len = window_size
+        """
+        # 动态特征加权：计算特征门权重
         gate = self.feature_gate(x.mean(dim=1))  # [batch_size, feature_dim]
-        x = x * gate.unsqueeze(1)  # [batch_size, seq_len, feature_dim]
+        x = x * gate.unsqueeze(1)                # [batch_size, seq_len, feature_dim]
         
-        # LSTM处理
-        lstm_out, _ = self.lstm(x)  # [batch_size, seq_len, 2*hidden_size]
+        # LSTM处理，输出形状: [batch_size, seq_len, 2*lstm_hidden_size]
+        lstm_out, _ = self.lstm(x)
         
-        # 双重注意力
-        temporal = self.temporal_attn(lstm_out)  # [batch_size, 2*hidden_size]
-        feature = self.feature_attn(lstm_out.transpose(1,2))  # [batch_size, 2*hidden_size]
+        # Temporal attention：对每个时间步加权求和，输出 [batch_size, 2*lstm_hidden_size]
+        temporal = self.temporal_attn(lstm_out)
         
-        # 概率预测
-        combined = torch.cat([temporal, feature], dim=1)  # [batch_size, 4*hidden_size]
+        # Feature attention：对特征沿线聚合
+        # 首先，转换维度，使得输入变为 [batch_size, 2*lstm_hidden_size, window_size]
+        # 在这里，我们在特征维度上（即最后一维window_size）使用Attention模块（input_dim=window_size）
+        feature_raw = self.feature_attn(lstm_out.transpose(1,2))  # 输出形状: [batch_size, window_size]
+        # 投影至与 temporal_attention 相同的维度： [batch_size, 2*lstm_hidden_size]
+        feature = self.feature_proj(feature_raw)
+        
+        # 拼接两个分支 [batch_size, 4*lstm_hidden_size]
+        combined = torch.cat([temporal, feature], dim=1)
         mu, logvar = torch.chunk(self.fc(combined), 2, dim=1)
-        return mu + 0.1*torch.randn_like(mu)*torch.exp(0.5*logvar)
+        return mu + 0.1 * torch.randn_like(mu) * torch.exp(0.5 * logvar)
 
 class EModel_CNN_Transformer(nn.Module):
     def __init__(self, feature_dim, hidden_size=128, num_layers=2, dropout=0.1):
@@ -802,14 +822,16 @@ def main(use_log_transform=True, min_egrid_threshold=1.0):
         feature_dim=feature_dim,
         lstm_hidden_size=lstm_hidden_size,  # 使用全局参数
         lstm_num_layers=lstm_num_layers,    # 使用全局参数
-        lstm_dropout=0.2
+        lstm_dropout=0.2,
+        window_size=window_size
     ).to(device)
     
     modelB = EModel_CNN_Transformer(
         feature_dim=feature_dim,
         hidden_size=128,
         num_layers=2,          # 显式传递参数
-        dropout=0.1            # 显式传递参数
+        dropout=0.1,            # 显式传递参数
+        window_size=window_size
     ).to(device)
 
     # -- 训练 EModel_FeatureWeight

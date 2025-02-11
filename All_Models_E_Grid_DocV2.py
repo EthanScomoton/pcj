@@ -252,10 +252,13 @@ class EModel_FeatureWeight(nn.Module):
         super(EModel_FeatureWeight, self).__init__()
         self.feature_dim = feature_dim
         
-        # 特征重要性权重
-        self.feature_importance = nn.Parameter(torch.ones(feature_dim), requires_grad=True)
+        # === 新增特征门控模块 ===
+        self.feature_gate = nn.Sequential(
+            nn.Linear(feature_dim, feature_dim),
+            nn.Sigmoid()
+        )
         
-        # 改进的 LSTM 模块（双向 LSTM）
+        # === 改进的LSTM模块 ===
         self.lstm = nn.LSTM(
             input_size = feature_dim,
             hidden_size = lstm_hidden_size,
@@ -265,19 +268,20 @@ class EModel_FeatureWeight(nn.Module):
             dropout = lstm_dropout if lstm_num_layers > 1 else 0
         )
         
-        # LSTM 权重初始化
-        self._init_lstm_weights()
+        # === 新增注意力模块 ===
+        self.temporal_attn = Attention(input_dim = 2 * lstm_hidden_size)
+        self.feature_attn = Attention(input_dim = 2 * lstm_hidden_size)
         
-        # 注意力模块，直接对 LSTM 输出进行 Attention 处理
-        self.attention = Attention(input_dim = 2 * lstm_hidden_size)
-        
-        # 全连接层，用于最终预测
+        # === 修正全连接层 ===
         self.fc = nn.Sequential(
-            nn.Linear(4*lstm_hidden_size, 128),
+            nn.Linear(4 * lstm_hidden_size, 128),
             nn.SiLU(),
             nn.Dropout(0.2),
             nn.Linear(128, 2)  # 输出均值和方差
         )
+
+        # === 保持原有的权重初始化 ===
+        self._init_lstm_weights()
 
     def _init_lstm_weights(self):
         """按照 min-LSTM 论文的方法初始化 LSTM 权重"""
@@ -288,26 +292,25 @@ class EModel_FeatureWeight(nn.Module):
                 nn.init.orthogonal_(param.data)
             elif 'bias' in name:
                 param.data.fill_(0)
-                # 设置遗忘门偏置为 1
                 n = param.size(0)
                 param.data[(n // 4):(n // 2)].fill_(1.0)
 
     def forward(self, x):
         # 动态特征加权
-        gate = self.feature_gate(x.mean(dim=1))
-        x = x * gate.unsqueeze(1)
+        gate = self.feature_gate(x.mean(dim=1))  # [batch_size, feature_dim]
+        x = x * gate.unsqueeze(1)  # [batch_size, seq_len, feature_dim]
         
-        lstm_out, _ = self.lstm(x)
+        # LSTM处理
+        lstm_out, _ = self.lstm(x)  # [batch_size, seq_len, 2*hidden_size]
         
         # 双重注意力
-        temporal = self.temporal_attn(lstm_out)
-        feature = self.feature_attn(lstm_out.transpose(1,2))
+        temporal = self.temporal_attn(lstm_out)  # [batch_size, 2*hidden_size]
+        feature = self.feature_attn(lstm_out.transpose(1,2))  # [batch_size, 2*hidden_size]
         
         # 概率预测
-        mu, logvar = torch.chunk(self.fc(torch.cat([temporal, feature], dim=1)), 2, dim=1)
+        combined = torch.cat([temporal, feature], dim=1)  # [batch_size, 4*hidden_size]
+        mu, logvar = torch.chunk(self.fc(combined), 2, dim=1)
         return mu + 0.1*torch.randn_like(mu)*torch.exp(0.5*logvar)
-
-
 
 class EModel_CNN_Transformer(nn.Module):
     def __init__(self, feature_dim, hidden_size=128, num_layers=2, dropout=0.1):

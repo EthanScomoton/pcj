@@ -17,7 +17,6 @@ from torch.nn.utils import clip_grad_norm_
 from x_transformers import RMSNorm
 from lion_pytorch import Lion
 from rotary_embedding_torch import RotaryEmbedding
-from scipy import fft
 
 # ---------------------------
 # 全局字体及样式设置
@@ -33,11 +32,11 @@ mpl.rcParams.update({
 # ---------------------------
 # 0. 全局超参数
 # ---------------------------
-learning_rate = 3e-4
+learning_rate = 1e-3
 num_epochs    = 150
 batch_size    = 128
-weight_decay  = 1e-3
-patience      = 15
+weight_decay  = 1e-6
+patience      = 8
 num_workers   = 0
 window_size   = 20
 lstm_hidden_size = 128  # LSTM隐藏层参数
@@ -78,7 +77,7 @@ def feature_engineering(data_df):
     - 分类特征 LabelEncoder
     - 不做数值标准化（避免数据泄露）
     """
-    span = 24 * 7  # 改为周周期平滑
+    span = 10
     data_df['E_grid'] = data_df['E_grid'].ewm(span=span, adjust=False).mean()
 
     data_df['dayofweek'] = data_df['timestamp'].dt.dayofweek
@@ -248,54 +247,39 @@ class Attention(nn.Module):
 
 
 class EModel_FeatureWeight(nn.Module):
-    def __init__(self, feature_dim, lstm_hidden_size=128, lstm_num_layers=2, lstm_dropout=0.2, window_size=20):
-        """
-        参数说明：
-          feature_dim: 输入特征数量
-          lstm_hidden_size: LSTM单向隐藏层大小，因此双向输出为 2*lstm_hidden_size
-          lstm_num_layers: LSTM层数
-          lstm_dropout: LSTM内置dropout（多层时应用）
-          window_size: 序列长度，同时也用于特征注意力分支的输入维度
-        """
+    def __init__(self, feature_dim, lstm_hidden_size=128, lstm_num_layers=2, lstm_dropout=0.2):
         super(EModel_FeatureWeight, self).__init__()
         self.feature_dim = feature_dim
         
-        # 动态特征门控模块
-        self.feature_gate = nn.Sequential(
-            nn.Linear(feature_dim, feature_dim),
-            nn.Sigmoid()
-        )
+        # 特征重要性权重
+        self.feature_importance = nn.Parameter(torch.ones(feature_dim), requires_grad=True)
         
-        # 双向LSTM模块
+        # 改进的 LSTM 模块（双向 LSTM）
         self.lstm = nn.LSTM(
-            input_size=feature_dim,
-            hidden_size=lstm_hidden_size,
-            num_layers=lstm_num_layers,
-            batch_first=True,
-            bidirectional=True,
-            dropout=lstm_dropout if lstm_num_layers > 1 else 0
+            input_size = feature_dim,
+            hidden_size = lstm_hidden_size,
+            num_layers = lstm_num_layers,
+            batch_first = True,
+            bidirectional = True,
+            dropout = lstm_dropout if lstm_num_layers > 1 else 0
         )
         
-        # 注意力模块：
-        # Temporal attention：对时序维度聚合，输入维度 = 2*lstm_hidden_size
-        self.temporal_attn = Attention(input_dim=2*lstm_hidden_size)
-        # Feature attention：聚合特征维度，输入为 lstm_out.transpose(1,2) 的最后一维为 window_size
-        self.feature_attn = Attention(input_dim=window_size)
-        # 对 feature attention 得到的 [batch, window_size] 进行线性投影到 2*lstm_hidden_size
-        self.feature_proj = nn.Linear(window_size, 2 * lstm_hidden_size)
-        
-        # 后续全连接层：输入为两个分支拼接后, 总维度 = 2*lstm_hidden_size + 2*lstm_hidden_size = 4*lstm_hidden_size
-        self.fc = nn.Sequential(
-            nn.Linear(4 * lstm_hidden_size, 128),
-            nn.SiLU(),
-            nn.Dropout(0.2),
-            nn.Linear(128, 2)  # 输出均值和方差
-        )
-        
+        # LSTM 权重初始化
         self._init_lstm_weights()
+        
+        # 注意力模块，直接对 LSTM 输出进行 Attention 处理
+        self.attention = Attention(input_dim = 2 * lstm_hidden_size)
+        
+        # 全连接层，用于最终预测
+        self.fc = nn.Sequential(
+            nn.Linear(2 * lstm_hidden_size, 128),
+            nn.ReLU(),
+            nn.Dropout(0.1),
+            nn.Linear(128, 1)
+        )
 
     def _init_lstm_weights(self):
-        """按照min-LSTM论文的方法初始化LSTM权重"""
+        """按照 min-LSTM 论文的方法初始化 LSTM 权重"""
         for name, param in self.lstm.named_parameters():
             if 'weight_ih' in name:
                 nn.init.xavier_uniform_(param.data)
@@ -303,34 +287,25 @@ class EModel_FeatureWeight(nn.Module):
                 nn.init.orthogonal_(param.data)
             elif 'bias' in name:
                 param.data.fill_(0)
+                # 设置遗忘门偏置为 1
                 n = param.size(0)
                 param.data[(n // 4):(n // 2)].fill_(1.0)
 
     def forward(self, x):
-        """
-        输入 x: [batch_size, seq_len, feature_dim]，其中seq_len = window_size
-        """
-        # 动态特征加权：计算特征门权重
-        gate = self.feature_gate(x.mean(dim=1))  # [batch_size, feature_dim]
-        x = x * gate.unsqueeze(1)                # [batch_size, seq_len, feature_dim]
+        # 特征加权
+        x = x * self.feature_importance.unsqueeze(0).unsqueeze(0)
         
-        # LSTM处理，输出形状: [batch_size, seq_len, 2*lstm_hidden_size]
+        # LSTM 处理
         lstm_out, _ = self.lstm(x)
         
-        # Temporal attention：对每个时间步加权求和，输出 [batch_size, 2*lstm_hidden_size]
-        temporal = self.temporal_attn(lstm_out)
+        # 直接使用 LSTM 输出进行 Attention 处理（移除了 Transformer 部分）
+        attn_out = self.attention(lstm_out)
         
-        # Feature attention：对特征沿线聚合
-        # 首先，转换维度，使得输入变为 [batch_size, 2*lstm_hidden_size, window_size]
-        # 在这里，我们在特征维度上（即最后一维window_size）使用Attention模块（input_dim=window_size）
-        feature_raw = self.feature_attn(lstm_out.transpose(1,2))  # 输出形状: [batch_size, window_size]
-        # 投影至与 temporal_attention 相同的维度： [batch_size, 2*lstm_hidden_size]
-        feature = self.feature_proj(feature_raw)
-        
-        # 拼接两个分支 [batch_size, 4*lstm_hidden_size]
-        combined = torch.cat([temporal, feature], dim=1)
-        mu, logvar = torch.chunk(self.fc(combined), 2, dim=1)
-        return mu + 0.1 * torch.randn_like(mu) * torch.exp(0.5 * logvar)
+        # 最终全连接层输出预测
+        out = self.fc(attn_out)
+        return out.squeeze(-1)
+
+
 
 class EModel_CNN_Transformer(nn.Module):
     def __init__(self, feature_dim, hidden_size=128, num_layers=2, dropout=0.1):
@@ -454,13 +429,10 @@ def train_model(model, train_loader, val_loader, model_name='Model', learning_ra
     total_steps  = num_epochs * len(train_loader)
     warmup_steps = int(0.1 * total_steps)
 
-    scheduler = torch.optim.lr_scheduler.OneCycleLR(
-        optimizer,
-        max_lr=learning_rate,
-        total_steps=total_steps,
-        pct_start=0.3
+    scheduler = LambdaLR(optimizer, lambda step: 
+        min(step/warmup_steps, 1.0) if step < warmup_steps else 
+        max(0.0, 1 - (step - warmup_steps)/(total_steps - warmup_steps))
     )
-    
     best_val_loss = float('inf')
     counter = 0
     global_step = 0
@@ -493,7 +465,7 @@ def train_model(model, train_loader, val_loader, model_name='Model', learning_ra
             loss  = criterion(preds, batch_labels)
 
             loss.backward()
-            clip_grad_norm_(model.parameters(), max_norm=1.0)
+            clip_grad_norm_(model.parameters(), max_norm=5.0)
             optimizer.step()
             scheduler.step()
 
@@ -744,10 +716,6 @@ def main(use_log_transform=True, min_egrid_threshold=1.0):
     feature_cols_to_plot = [c for c in feature_cols_to_plot if c in data_df.columns]
     plot_correlation_heatmap(data_df, feature_cols_to_plot, title="Heat map (including E_grid=0)")
 
-    plt.plot(np.abs(fft.fft(data_df['E_grid'].values))[:500])
-    plt.title('Frequency Domain Analysis')
-    plt.show()
-
     # -- 过滤掉 E_grid=0 的行
     data_df = data_df[data_df['E_grid'] != 0].copy()
     data_df.reset_index(drop=True, inplace=True)
@@ -822,7 +790,7 @@ def main(use_log_transform=True, min_egrid_threshold=1.0):
         feature_dim=feature_dim,
         lstm_hidden_size=lstm_hidden_size,  # 使用全局参数
         lstm_num_layers=lstm_num_layers,    # 使用全局参数
-        lstm_dropout=0.1
+        lstm_dropout=0.2
     ).to(device)
     
     modelB = EModel_CNN_Transformer(
@@ -931,5 +899,3 @@ def main(use_log_transform=True, min_egrid_threshold=1.0):
 
 if __name__ == "__main__":
     main(use_log_transform=True, min_egrid_threshold=1.0)
-
-    

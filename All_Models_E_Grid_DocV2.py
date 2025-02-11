@@ -17,6 +17,7 @@ from torch.nn.utils import clip_grad_norm_
 from x_transformers import RMSNorm
 from lion_pytorch import Lion
 from rotary_embedding_torch import RotaryEmbedding
+from scipy import fft
 
 # ---------------------------
 # 全局字体及样式设置
@@ -32,11 +33,11 @@ mpl.rcParams.update({
 # ---------------------------
 # 0. 全局超参数
 # ---------------------------
-learning_rate = 1e-3
+learning_rate = 3e-4
 num_epochs    = 150
 batch_size    = 128
-weight_decay  = 1e-6
-patience      = 8
+weight_decay  = 1e-3
+patience      = 15
 num_workers   = 0
 window_size   = 20
 lstm_hidden_size = 128  # LSTM隐藏层参数
@@ -77,7 +78,7 @@ def feature_engineering(data_df):
     - 分类特征 LabelEncoder
     - 不做数值标准化（避免数据泄露）
     """
-    span = 10
+    span = 24 * 7  # 改为周周期平滑
     data_df['E_grid'] = data_df['E_grid'].ewm(span=span, adjust=False).mean()
 
     data_df['dayofweek'] = data_df['timestamp'].dt.dayofweek
@@ -272,10 +273,10 @@ class EModel_FeatureWeight(nn.Module):
         
         # 全连接层，用于最终预测
         self.fc = nn.Sequential(
-            nn.Linear(2 * lstm_hidden_size, 128),
-            nn.ReLU(),
-            nn.Dropout(0.1),
-            nn.Linear(128, 1)
+            nn.Linear(4*lstm_hidden_size, 128),
+            nn.SiLU(),
+            nn.Dropout(0.2),
+            nn.Linear(128, 2)  # 输出均值和方差
         )
 
     def _init_lstm_weights(self):
@@ -292,18 +293,19 @@ class EModel_FeatureWeight(nn.Module):
                 param.data[(n // 4):(n // 2)].fill_(1.0)
 
     def forward(self, x):
-        # 特征加权
-        x = x * self.feature_importance.unsqueeze(0).unsqueeze(0)
+        # 动态特征加权
+        gate = self.feature_gate(x.mean(dim=1))
+        x = x * gate.unsqueeze(1)
         
-        # LSTM 处理
         lstm_out, _ = self.lstm(x)
         
-        # 直接使用 LSTM 输出进行 Attention 处理（移除了 Transformer 部分）
-        attn_out = self.attention(lstm_out)
+        # 双重注意力
+        temporal = self.temporal_attn(lstm_out)
+        feature = self.feature_attn(lstm_out.transpose(1,2))
         
-        # 最终全连接层输出预测
-        out = self.fc(attn_out)
-        return out.squeeze(-1)
+        # 概率预测
+        mu, logvar = torch.chunk(self.fc(torch.cat([temporal, feature], dim=1)), 2, dim=1)
+        return mu + 0.1*torch.randn_like(mu)*torch.exp(0.5*logvar)
 
 
 
@@ -429,10 +431,13 @@ def train_model(model, train_loader, val_loader, model_name='Model', learning_ra
     total_steps  = num_epochs * len(train_loader)
     warmup_steps = int(0.1 * total_steps)
 
-    scheduler = LambdaLR(optimizer, lambda step: 
-        min(step/warmup_steps, 1.0) if step < warmup_steps else 
-        max(0.0, 1 - (step - warmup_steps)/(total_steps - warmup_steps))
+    scheduler = torch.optim.lr_scheduler.OneCycleLR(
+        optimizer,
+        max_lr=learning_rate,
+        total_steps=total_steps,
+        pct_start=0.3
     )
+    
     best_val_loss = float('inf')
     counter = 0
     global_step = 0
@@ -465,7 +470,7 @@ def train_model(model, train_loader, val_loader, model_name='Model', learning_ra
             loss  = criterion(preds, batch_labels)
 
             loss.backward()
-            clip_grad_norm_(model.parameters(), max_norm=5.0)
+            clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
             scheduler.step()
 
@@ -715,6 +720,10 @@ def main(use_log_transform=True, min_egrid_threshold=1.0):
     ]
     feature_cols_to_plot = [c for c in feature_cols_to_plot if c in data_df.columns]
     plot_correlation_heatmap(data_df, feature_cols_to_plot, title="Heat map (including E_grid=0)")
+
+    plt.plot(np.abs(fft.fft(data_df['E_grid'].values))[:500])
+    plt.title('Frequency Domain Analysis')
+    plt.show()
 
     # -- 过滤掉 E_grid=0 的行
     data_df = data_df[data_df['E_grid'] != 0].copy()

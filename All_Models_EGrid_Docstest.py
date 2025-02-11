@@ -579,70 +579,63 @@ def train_model(model, train_loader, val_loader, model_name='Model', learning_ra
 
     return result
 
-def plot_test_metrics_comparison(histA, histB, model1_name="EModel_FeatureWeight", model2_name="EModel_CNN_Transformer"):
+def plot_test_metrics(hist, model_name):
     """
-    绘制比较测试集指标变化曲线，包括 RMSE, MAPE, R^2, SMAPE, MAE。
-    histA、histB 为训练过程中记录的测试集指标字典。
+    绘制单个模型的测试集指标变化曲线，包括 RMSE, MAPE, R², SMAPE 和 MAE。
     
-    说明：
-    当模型使用早停且训练的 epoch 数不一致时，本函数将取较小的 epoch 数进行对比。
+    参数:
+      hist: dict, 训练过程中记录该模型的测试集各项指标历史数据，包含键 "test_rmse", "test_mape", "test_r2", "test_smape", "test_mae"。
+      model_name: str, 模型名称，用于图例和标题显示。
     """
-    # 取两组历史数据中较小的 epoch 个数
-    min_epochs = min(len(histA["test_rmse"]), len(histB["test_rmse"]))
-    epochs = range(1, min_epochs + 1)
+    epochs = range(1, len(hist["test_rmse"]) + 1)
     plt.figure(figsize=(15, 10))
     
-    # Test RMSE
+    # 绘制 Test RMSE 曲线
     plt.subplot(3, 2, 1)
-    plt.plot(epochs, histA["test_rmse"][:min_epochs], 'r-o', label=f'{model1_name} RMSE', markersize=4)
-    plt.plot(epochs, histB["test_rmse"][:min_epochs], 'b-o', label=f'{model2_name} RMSE', markersize=4)
+    plt.plot(epochs, hist["test_rmse"], 'r-o', label=f'{model_name} RMSE', markersize=4)
     plt.xlabel('Epoch')
     plt.ylabel('RMSE')
     plt.title('Test RMSE')
     plt.legend()
     plt.grid(True)
     
-    # Test MAPE
+    # 绘制 Test MAPE 曲线
     plt.subplot(3, 2, 2)
-    plt.plot(epochs, histA["test_mape"][:min_epochs], 'r-o', label=f'{model1_name} MAPE', markersize=4)
-    plt.plot(epochs, histB["test_mape"][:min_epochs], 'b-o', label=f'{model2_name} MAPE', markersize=4)
+    plt.plot(epochs, hist["test_mape"], 'b-o', label=f'{model_name} MAPE', markersize=4)
     plt.xlabel('Epoch')
     plt.ylabel('MAPE (%)')
     plt.title('Test MAPE')
     plt.legend()
     plt.grid(True)
     
-    # Test R^2
+    # 绘制 Test R² 曲线
     plt.subplot(3, 2, 3)
-    plt.plot(epochs, histA["test_r2"][:min_epochs], 'r-o', label=f'{model1_name} R^2', markersize=4)
-    plt.plot(epochs, histB["test_r2"][:min_epochs], 'b-o', label=f'{model2_name} R^2', markersize=4)
+    plt.plot(epochs, hist["test_r2"], 'g-o', label=f'{model_name} R²', markersize=4)
     plt.xlabel('Epoch')
-    plt.ylabel('R^2')
-    plt.title('Test R^2')
+    plt.ylabel('R²')
+    plt.title('Test R²')
     plt.legend()
     plt.grid(True)
     
-    # Test SMAPE
+    # 绘制 Test SMAPE 曲线
     plt.subplot(3, 2, 4)
-    plt.plot(epochs, histA["test_smape"][:min_epochs], 'r-o', label=f'{model1_name} SMAPE', markersize=4)
-    plt.plot(epochs, histB["test_smape"][:min_epochs], 'b-o', label=f'{model2_name} SMAPE', markersize=4)
+    plt.plot(epochs, hist["test_smape"], 'c-o', label=f'{model_name} SMAPE', markersize=4)
     plt.xlabel('Epoch')
     plt.ylabel('SMAPE (%)')
     plt.title('Test SMAPE')
     plt.legend()
     plt.grid(True)
     
-    # Test MAE
+    # 绘制 Test MAE 曲线
     plt.subplot(3, 2, 5)
-    plt.plot(epochs, histA["test_mae"][:min_epochs], 'r-o', label=f'{model1_name} MAE', markersize=4)
-    plt.plot(epochs, histB["test_mae"][:min_epochs], 'b-o', label=f'{model2_name} MAE', markersize=4)
+    plt.plot(epochs, hist["test_mae"], 'm-o', label=f'{model_name} MAE', markersize=4)
     plt.xlabel('Epoch')
     plt.ylabel('MAE')
     plt.title('Test MAE')
     plt.legend()
     plt.grid(True)
     
-    plt.suptitle(f"Test Metrics Comparison: {model1_name} vs {model2_name}", fontsize=18)
+    plt.suptitle(f"Test Metrics for {model_name}", fontsize=18)
     plt.tight_layout(rect=[0, 0, 1, 0.95])
     plt.show()
 
@@ -933,8 +926,9 @@ def main(use_log_transform=True, min_egrid_threshold=1.0):
         test_loader=test_loader  # 新增测试集评估
     )
 
-    # -- 绘制测试集指标变化曲线对比
-    plot_test_metrics_comparison(histA, histB, model1_name='EModel_FeatureWeight', model2_name='EModel_CNN_Transformer')
+    # 在训练完两个模型后分别进行绘图
+    plot_test_metrics(histA, "EModel_FeatureWeight")
+    plot_test_metrics(histB, "EModel_CNN_Transformer")
 
     # -- 加载最优权重
     best_modelA = EModel_FeatureWeight(feature_dim).to(device)

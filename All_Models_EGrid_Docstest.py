@@ -583,14 +583,19 @@ def plot_test_metrics_comparison(histA, histB, model1_name="EModel_FeatureWeight
     """
     绘制比较测试集指标变化曲线，包括 RMSE, MAPE, R^2, SMAPE, MAE。
     histA、histB 为训练过程中记录的测试集指标字典。
+    
+    说明：
+    当模型使用早停且训练的 epoch 数不一致时，本函数将取较小的 epoch 数进行对比。
     """
-    epochs = range(1, len(histA["test_rmse"]) + 1)
+    # 取两组历史数据中较小的 epoch 个数
+    min_epochs = min(len(histA["test_rmse"]), len(histB["test_rmse"]))
+    epochs = range(1, min_epochs + 1)
     plt.figure(figsize=(15, 10))
     
     # Test RMSE
     plt.subplot(3, 2, 1)
-    plt.plot(epochs, histA["test_rmse"], 'r-o', label=f'{model1_name} RMSE', markersize=4)
-    plt.plot(epochs, histB["test_rmse"], 'b-o', label=f'{model2_name} RMSE', markersize=4)
+    plt.plot(epochs, histA["test_rmse"][:min_epochs], 'r-o', label=f'{model1_name} RMSE', markersize=4)
+    plt.plot(epochs, histB["test_rmse"][:min_epochs], 'b-o', label=f'{model2_name} RMSE', markersize=4)
     plt.xlabel('Epoch')
     plt.ylabel('RMSE')
     plt.title('Test RMSE')
@@ -599,8 +604,8 @@ def plot_test_metrics_comparison(histA, histB, model1_name="EModel_FeatureWeight
     
     # Test MAPE
     plt.subplot(3, 2, 2)
-    plt.plot(epochs, histA["test_mape"], 'r-o', label=f'{model1_name} MAPE', markersize=4)
-    plt.plot(epochs, histB["test_mape"], 'b-o', label=f'{model2_name} MAPE', markersize=4)
+    plt.plot(epochs, histA["test_mape"][:min_epochs], 'r-o', label=f'{model1_name} MAPE', markersize=4)
+    plt.plot(epochs, histB["test_mape"][:min_epochs], 'b-o', label=f'{model2_name} MAPE', markersize=4)
     plt.xlabel('Epoch')
     plt.ylabel('MAPE (%)')
     plt.title('Test MAPE')
@@ -609,8 +614,8 @@ def plot_test_metrics_comparison(histA, histB, model1_name="EModel_FeatureWeight
     
     # Test R^2
     plt.subplot(3, 2, 3)
-    plt.plot(epochs, histA["test_r2"], 'r-o', label=f'{model1_name} R^2', markersize=4)
-    plt.plot(epochs, histB["test_r2"], 'b-o', label=f'{model2_name} R^2', markersize=4)
+    plt.plot(epochs, histA["test_r2"][:min_epochs], 'r-o', label=f'{model1_name} R^2', markersize=4)
+    plt.plot(epochs, histB["test_r2"][:min_epochs], 'b-o', label=f'{model2_name} R^2', markersize=4)
     plt.xlabel('Epoch')
     plt.ylabel('R^2')
     plt.title('Test R^2')
@@ -619,8 +624,8 @@ def plot_test_metrics_comparison(histA, histB, model1_name="EModel_FeatureWeight
     
     # Test SMAPE
     plt.subplot(3, 2, 4)
-    plt.plot(epochs, histA["test_smape"], 'r-o', label=f'{model1_name} SMAPE', markersize=4)
-    plt.plot(epochs, histB["test_smape"], 'b-o', label=f'{model2_name} SMAPE', markersize=4)
+    plt.plot(epochs, histA["test_smape"][:min_epochs], 'r-o', label=f'{model1_name} SMAPE', markersize=4)
+    plt.plot(epochs, histB["test_smape"][:min_epochs], 'b-o', label=f'{model2_name} SMAPE', markersize=4)
     plt.xlabel('Epoch')
     plt.ylabel('SMAPE (%)')
     plt.title('Test SMAPE')
@@ -629,8 +634,8 @@ def plot_test_metrics_comparison(histA, histB, model1_name="EModel_FeatureWeight
     
     # Test MAE
     plt.subplot(3, 2, 5)
-    plt.plot(epochs, histA["test_mae"], 'r-o', label=f'{model1_name} MAE', markersize=4)
-    plt.plot(epochs, histB["test_mae"], 'b-o', label=f'{model2_name} MAE', markersize=4)
+    plt.plot(epochs, histA["test_mae"][:min_epochs], 'r-o', label=f'{model1_name} MAE', markersize=4)
+    plt.plot(epochs, histB["test_mae"][:min_epochs], 'b-o', label=f'{model2_name} MAE', markersize=4)
     plt.xlabel('Epoch')
     plt.ylabel('MAE')
     plt.title('Test MAE')

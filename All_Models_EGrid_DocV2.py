@@ -829,8 +829,8 @@ def plot_segmented_predictions(timestamps, y_actual, y_pred, segments, model_nam
         axes = [axes]
     
     for ax, (seg_label, (m_start, m_end)) in zip(axes, segments.items()):
-        # 按月份过滤：默认使用 dt.month (假设数据为单年数据)
-        idx = (times.dt.month >= m_start) & (times.dt.month <= m_end)
+        # 按月份过滤：直接使用 .month 属性（无需 .dt）
+        idx = (times.month >= m_start) & (times.month <= m_end)  # 移除 .dt
         if np.sum(idx) == 0:
             ax.text(0.5, 0.5, f"No data in {seg_label}",
                     horizontalalignment='center', verticalalignment='center')
@@ -1035,7 +1035,7 @@ def main(use_log_transform=True, min_egrid_threshold=1.0):
     # ===== 删除原有基于测试集的预测对比图 =====
     # (已删除原有 plot_test_predictions_over_time 与 plot_predictions_comparison 调用)
 
-    # ===== 新增：在全部数据集上利用已训练好的模型绘制分段预测对比图 =====
+    # ===== 在全部数据集上利用已训练好的模型绘制分段预测对比图 =====
     print("\n========== Plot segmented predictions on the entire dataset ==========")
     # 使用整个数据集（未划分 train/val/test）构造序列数据
     X_all_raw = data_df[feature_cols].values

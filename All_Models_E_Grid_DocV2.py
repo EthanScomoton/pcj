@@ -822,16 +822,14 @@ def main(use_log_transform=True, min_egrid_threshold=1.0):
         feature_dim=feature_dim,
         lstm_hidden_size=lstm_hidden_size,  # 使用全局参数
         lstm_num_layers=lstm_num_layers,    # 使用全局参数
-        lstm_dropout=0.2,
-        window_size=window_size
+        lstm_dropout=0.1
     ).to(device)
     
     modelB = EModel_CNN_Transformer(
         feature_dim=feature_dim,
         hidden_size=128,
         num_layers=2,          # 显式传递参数
-        dropout=0.1,            # 显式传递参数
-        window_size=window_size
+        dropout=0.1            # 显式传递参数
     ).to(device)
 
     # -- 训练 EModel_FeatureWeight

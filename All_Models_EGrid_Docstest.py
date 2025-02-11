@@ -888,7 +888,6 @@ def main(use_log_transform=True, min_egrid_threshold=1.0):
     test_loader  = DataLoader(test_dataset,  batch_size=batch_size, shuffle=False, num_workers=num_workers)
 
     # -- 构建模型
-    # -- 构建模型
     feature_dim = X_train_seq.shape[-1]
     modelA = EModel_FeatureWeight(
         feature_dim=feature_dim,

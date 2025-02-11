@@ -407,83 +407,24 @@ def evaluate(model, dataloader, criterion, device='cuda'):
 
     return val_loss, rmse_std, mape_std, r2_std, smape_val, mae_val, preds_arr, labels_arr
 
-def evaluate_real(model, dataloader, criterion, scaler_y, use_log_transform=True, device='cuda'):
-    """
-    在原始数据域上评估模型指标：
-      - 先用模型预测，得到标准化且经过对数变换后的输出
-      - 通过 scaler_y 进行逆变换，再根据 use_log_transform 进行指数逆变换
-      - 最后计算 RMSE、MAPE、R²、SMAPE 与 MAE
-
-    参数:
-      model: 要评估的模型
-      dataloader: 测试或验证数据的 DataLoader
-      criterion: 损失函数 (此处只用于遍历数据，无需计算loss)
-      scaler_y: 在对目标值(StandardScaler)时所用的标准化器
-      use_log_transform: 是否对目标进行逆对数变换（在训练时使用了 np.log1p）
-      device: 运行设备
-
-    返回:
-      rmse, mape, r2, smape, mae, preds_real, labels_real
-    """
-    model.eval()
-    preds_list, labels_list = [], []
-    with torch.no_grad():
-        for batch_inputs, batch_labels in dataloader:
-            batch_inputs = batch_inputs.to(device)
-            batch_labels = batch_labels.to(device)
-            outputs = model(batch_inputs)
-            preds_list.append(outputs.cpu().numpy())
-            labels_list.append(batch_labels.cpu().numpy())
-    preds_arr = np.concatenate(preds_list, axis=0)
-    labels_arr = np.concatenate(labels_list, axis=0)
-
-    # 逆标准化
-    preds_real_std = scaler_y.inverse_transform(preds_arr.reshape(-1,1)).ravel()
-    labels_real_std = scaler_y.inverse_transform(labels_arr.reshape(-1,1)).ravel()
-
-    # 逆 log1p 转换
-    if use_log_transform:
-        preds_real = np.expm1(preds_real_std)
-        labels_real = np.expm1(labels_real_std)
-    else:
-        preds_real = preds_real_std
-        labels_real = labels_real_std
-
-    # 计算评价指标
-    rmse = np.sqrt(mean_squared_error(labels_real, preds_real))
-    mae = np.mean(np.abs(labels_real - preds_real))
-    
-    # 防止除零，设置一个小常数 epsilon
-    epsilon = 1e-4
-    mape = np.mean(np.abs((labels_real - preds_real) / np.maximum(np.abs(labels_real), epsilon))) * 100.0
-
-    ss_res = np.sum((labels_real - preds_real)**2)
-    ss_tot = np.sum((labels_real - np.mean(labels_real))**2)
-    r2 = 1 - ss_res/ss_tot if ss_tot != 0 else 0.0
-
-    numerator = np.abs(labels_real - preds_real)
-    denominator = np.abs(labels_real) + np.abs(preds_real)
-    nonzero_mask_smape = (denominator != 0)
-    smape = 100.0 * 2.0 * np.mean(numerator[nonzero_mask_smape] / denominator[nonzero_mask_smape])
-    
-    return rmse, mape, r2, smape, mae, preds_real, labels_real
 
 # =====================================================================
 #   6. 训练工具: 同时记录训练集、验证集指标
 # =====================================================================
-def train_model(model, train_loader, val_loader, model_name='Model', learning_rate=1e-4, weight_decay=1e-2, num_epochs=num_epochs):
+def train_model(model, train_loader, val_loader, model_name='Model', learning_rate=1e-4, weight_decay=1e-2, num_epochs=num_epochs, test_loader=None):
     """
     每个 epoch:
       1) evaluate(model, train_loader, ...)
       2) evaluate(model, val_loader, ...)
       3) 记录训练与验证各项指标
-      4) early stopping
+      4) 如果传入 test_loader，则同时记录测试集指标
+      5) early stopping
     """
     criterion = nn.MSELoss()
     optimizer = Lion(
         model.parameters(),
-        lr = learning_rate,  # 保持原有学习率
-        weight_decay = weight_decay  # 保持原有权重衰减
+        lr=learning_rate,          # 保持原有学习率
+        weight_decay=weight_decay  # 保持原有权重衰减
     )
 
     total_steps  = num_epochs * len(train_loader)
@@ -498,19 +439,27 @@ def train_model(model, train_loader, val_loader, model_name='Model', learning_ra
     global_step = 0
 
     # 历史记录
-    train_loss_history = []
-    train_rmse_history = []
-    train_mape_history = []
-    train_r2_history   = []
-    train_smape_history= []
-    train_mae_history  = []
+    train_loss_history  = []
+    train_rmse_history  = []
+    train_mape_history  = []
+    train_r2_history    = []
+    train_smape_history = []
+    train_mae_history   = []
 
-    val_loss_history   = []
-    val_rmse_history   = []
-    val_mape_history   = []
-    val_r2_history     = []
-    val_smape_history  = []
-    val_mae_history    = []
+    val_loss_history    = []
+    val_rmse_history    = []
+    val_mape_history    = []
+    val_r2_history      = []
+    val_smape_history   = []
+    val_mae_history     = []
+
+    # 如果传入 test_loader，则初始化测试集历史记录
+    test_loss_history   = []
+    test_rmse_history   = []
+    test_mape_history   = []
+    test_r2_history     = []
+    test_smape_history  = []
+    test_mae_history    = []
 
     for epoch in range(num_epochs):
         # === 训练阶段 ===
@@ -541,6 +490,12 @@ def train_model(model, train_loader, val_loader, model_name='Model', learning_ra
         # === 计算 val set 上的各指标 ===
         val_loss_eval, val_rmse_eval, val_mape_eval, val_r2_eval, val_smape_eval, val_mae_eval, _, _ = evaluate(model, val_loader, criterion)
 
+        # 若传入 test_loader，则计算测试集指标
+        if test_loader is not None:
+            test_loss_eval, test_rmse_eval, test_mape_eval, test_r2_eval, test_smape_eval, test_mae_eval, _, _ = evaluate(model, test_loader, criterion)
+        else:
+            test_loss_eval = test_rmse_eval = test_mape_eval = test_r2_eval = test_smape_eval = test_mae_eval = None
+
         # === 保存各类指标到历史数组 ===
         train_loss_history.append(train_loss_eval)
         train_rmse_history.append(train_rmse_eval)
@@ -556,6 +511,14 @@ def train_model(model, train_loader, val_loader, model_name='Model', learning_ra
         val_smape_history.append(val_smape_eval)
         val_mae_history.append(val_mae_eval)
 
+        if test_loader is not None:
+            test_loss_history.append(test_loss_eval)
+            test_rmse_history.append(test_rmse_eval)
+            test_mape_history.append(test_mape_eval)
+            test_r2_history.append(test_r2_eval)
+            test_smape_history.append(test_smape_eval)
+            test_mae_history.append(test_mae_eval)
+
         # === 打印日志 ===
         print(f"[{model_name}] Epoch {epoch+1}/{num_epochs}, "
               f"TrainLoss: {train_loss_epoch:.4f}, "
@@ -565,6 +528,15 @@ def train_model(model, train_loader, val_loader, model_name='Model', learning_ra
               f"ValR^2: {val_r2_eval:.4f}, "
               f"ValSMAPE(%): {val_smape_eval:.2f}, "
               f"ValMAE(std): {val_mae_eval:.4f}")
+
+        if test_loader is not None:
+            print(f"[{model_name}] Epoch {epoch+1}/{num_epochs}, "
+                  f"TestLoss: {test_loss_eval:.4f}, "
+                  f"TestRMSE: {test_rmse_eval:.4f}, "
+                  f"TestMAPE: {test_mape_eval:.2f}, "
+                  f"TestR^2: {test_r2_eval:.4f}, "
+                  f"TestSMAPE: {test_smape_eval:.2f}, "
+                  f"TestMAE: {test_mae_eval:.4f}")
 
         # === Early Stopping ===
         if val_loss_eval < best_val_loss:
@@ -579,7 +551,7 @@ def train_model(model, train_loader, val_loader, model_name='Model', learning_ra
                 break
 
     # 整合返回
-    return {
+    result = {
         "train_loss":  train_loss_history,
         "train_rmse":  train_rmse_history,
         "train_mape":  train_mape_history,
@@ -595,6 +567,77 @@ def train_model(model, train_loader, val_loader, model_name='Model', learning_ra
         "val_mae":     val_mae_history
     }
 
+    if test_loader is not None:
+        result.update({
+            "test_loss":  test_loss_history,
+            "test_rmse":  test_rmse_history,
+            "test_mape":  test_mape_history,
+            "test_r2":    test_r2_history,
+            "test_smape": test_smape_history,
+            "test_mae":   test_mae_history
+        })
+
+    return result
+
+def plot_test_metrics(hist, model_name):
+    """
+    绘制单个模型的测试集指标变化曲线，包括 RMSE, MAPE, R², SMAPE 和 MAE。
+    
+    参数:
+      hist: dict, 训练过程中记录该模型的测试集各项指标历史数据，包含键 "test_rmse", "test_mape", "test_r2", "test_smape", "test_mae"。
+      model_name: str, 模型名称，用于图例和标题显示。
+    """
+    epochs = range(1, len(hist["test_rmse"]) + 1)
+    plt.figure(figsize=(15, 10))
+    
+    # 绘制 Test RMSE 曲线
+    plt.subplot(3, 2, 1)
+    plt.plot(epochs, hist["test_rmse"], 'r-o', label=f'{model_name} RMSE', markersize=4)
+    plt.xlabel('Epoch')
+    plt.ylabel('RMSE')
+    plt.title('Test RMSE')
+    plt.legend()
+    plt.grid(True)
+    
+    # 绘制 Test MAPE 曲线
+    plt.subplot(3, 2, 2)
+    plt.plot(epochs, hist["test_mape"], 'b-o', label=f'{model_name} MAPE', markersize=4)
+    plt.xlabel('Epoch')
+    plt.ylabel('MAPE (%)')
+    plt.title('Test MAPE')
+    plt.legend()
+    plt.grid(True)
+    
+    # 绘制 Test R² 曲线
+    plt.subplot(3, 2, 3)
+    plt.plot(epochs, hist["test_r2"], 'g-o', label=f'{model_name} R²', markersize=4)
+    plt.xlabel('Epoch')
+    plt.ylabel('R²')
+    plt.title('Test R²')
+    plt.legend()
+    plt.grid(True)
+    
+    # 绘制 Test SMAPE 曲线
+    plt.subplot(3, 2, 4)
+    plt.plot(epochs, hist["test_smape"], 'c-o', label=f'{model_name} SMAPE', markersize=4)
+    plt.xlabel('Epoch')
+    plt.ylabel('SMAPE (%)')
+    plt.title('Test SMAPE')
+    plt.legend()
+    plt.grid(True)
+    
+    # 绘制 Test MAE 曲线
+    plt.subplot(3, 2, 5)
+    plt.plot(epochs, hist["test_mae"], 'm-o', label=f'{model_name} MAE', markersize=4)
+    plt.xlabel('Epoch')
+    plt.ylabel('MAE')
+    plt.title('Test MAE')
+    plt.legend()
+    plt.grid(True)
+    
+    plt.suptitle(f"Test Metrics for {model_name}", fontsize=18)
+    plt.tight_layout(rect=[0, 0, 1, 0.95])
+    plt.show()
 
 # =====================================================================
 #   7. 可视化与辅助函数
@@ -848,16 +891,16 @@ def main(use_log_transform=True, min_egrid_threshold=1.0):
     feature_dim = X_train_seq.shape[-1]
     modelA = EModel_FeatureWeight(
         feature_dim=feature_dim,
-        lstm_hidden_size=lstm_hidden_size,  # 使用全局参数
-        lstm_num_layers=lstm_num_layers,    # 使用全局参数
+        lstm_hidden_size=lstm_hidden_size,
+        lstm_num_layers=lstm_num_layers,
         lstm_dropout=0.2
     ).to(device)
     
     modelB = EModel_CNN_Transformer(
         feature_dim=feature_dim,
         hidden_size=128,
-        num_layers=2,          # 显式传递参数
-        dropout=0.1            # 显式传递参数
+        num_layers=2,
+        dropout=0.1
     ).to(device)
 
     # -- 训练 EModel_FeatureWeight
@@ -867,12 +910,23 @@ def main(use_log_transform=True, min_egrid_threshold=1.0):
         model_name='EModel_FeatureWeight',
         learning_rate=learning_rate,
         weight_decay=weight_decay,
-        num_epochs=num_epochs  # 使用全局参数
+        num_epochs=num_epochs,
+        test_loader=test_loader
     )
 
     # -- 训练 EModel_CNN_Transformer
     print("\n========== Train EModel_CNN_Transformer ==========")
-    histB = train_model(modelB, train_loader, val_loader, model_name='EModel_CNN_Transformer')
+    histB = train_model(
+        modelB, train_loader, val_loader,
+        model_name='EModel_CNN_Transformer',
+        learning_rate=learning_rate,
+        weight_decay=weight_decay,
+        num_epochs=num_epochs,
+        test_loader=test_loader
+    )
+
+    plot_test_metrics(histA, "EModel_FeatureWeight")
+    plot_test_metrics(histB, "EModel_CNN_Transformer")
 
     # -- 加载最优权重
     best_modelA = EModel_FeatureWeight(feature_dim).to(device)
@@ -891,24 +945,8 @@ def main(use_log_transform=True, min_egrid_threshold=1.0):
           f"SMAPE: {test_smapeA_std:.2f}, MAE: {test_maeA_std:.4f}")
     print(f"[EModel_CNN_Transformer] RMSE: {test_rmseB_std:.4f}, MAPE: {test_mapeB_std:.2f}, R^2: {test_r2B_std:.4f}, "
           f"SMAPE: {test_smapeB_std:.2f}, MAE: {test_maeB_std:.4f}")
-    
-    # 在加载最优权重并计算模型在标准化域下的指标后
-    # 使用新的函数在真实域上评估：
-    rmse_real, mape_real, r2_real, smape_real, mae_real, preds_real, labels_real = evaluate_real(best_modelA, test_loader, criterion_test, scaler_y, use_log_transform=use_log_transform
-                                                                                                 )
-    print("\n[在真实域上评估 EModel_FeatureWeight 模型]:")
-    print(f"RMSE(real): {rmse_real:.2f}, MAPE(real): {mape_real:.2f}%, R^2(real): {r2_real:.4f}, "
-          f"SMAPE(real): {smape_real:.2f}%, MAE(real): {mae_real:.2f}")
-    
-    plot_predictions_comparison(
-        y_actual_real=labels_real,
-        y_pred_model1_real=preds_real,
-        y_pred_model2_real=preds_real,  #这里只展示一个模型的预测
-        model1_name='EModel_FeatureWeight',
-        model2_name='EModel_FeatureWeight'
-    )
 
-    # -- 反标准化 + (可选)反log
+    # -- 反标准化 + (可选)反log (测试集数据的反变换，可用于指标打印)
     predsA_real_std = scaler_y.inverse_transform(predsA_std.reshape(-1,1)).ravel()
     predsB_real_std = scaler_y.inverse_transform(predsB_std.reshape(-1,1)).ravel()
     labelsA_real_std = scaler_y.inverse_transform(labelsA_std.reshape(-1,1)).ravel()
@@ -956,12 +994,58 @@ def main(use_log_transform=True, min_egrid_threshold=1.0):
     plot_dataset_distribution(val_timestamps, 'Validation Set')
     plot_dataset_distribution(test_timestamps, 'Test Set')
 
-    # -- 可视化(以modelA为例)
-    plot_test_predictions_over_time(test_timestamps[window_size:], labelsA_real, predsA_real)
+    # ===== 删除原有基于测试集的可视化 =====
+    # (已删除)
+    # plot_test_predictions_over_time(test_timestamps[window_size:], labelsA_real, predsA_real)
+    # plot_predictions_comparison(
+    #     y_actual_real      = labelsA_real,
+    #     y_pred_model1_real = predsA_real,
+    #     y_pred_model2_real = predsB_real,
+    #     model1_name='EModel_FeatureWeight',
+    #     model2_name='EModel_CNN_Transformer'
+    # )
+
+    # ===== 新增：在全部数据集上利用已训练好的模型绘制预测对比图 =====
+    print("\n========== Plot predictions on the entire dataset ==========")
+    # 使用整个数据集（未划分 train/val/test）构造序列数据
+    X_all_raw = data_df[feature_cols].values
+    y_all_raw = data_df[target_col].values
+    timestamps_all = data_df['timestamp'].values
+
+    X_all = scaler_X.transform(X_all_raw)
+    if use_log_transform:
+        y_all_log = np.log1p(y_all_raw)
+    else:
+        y_all_log = y_all_raw
+    y_all_scaled = scaler_y.transform(y_all_log.reshape(-1, 1)).ravel()
+
+    X_all_seq, y_all_seq = create_sequences(X_all, y_all_scaled, window_size)
+    timestamps_seq = timestamps_all[window_size:]
+
+    all_dataset = TensorDataset(torch.from_numpy(X_all_seq), torch.from_numpy(y_all_seq))
+    all_loader = DataLoader(all_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers)
+
+    # 使用 best_modelA 与 best_modelB 在全部数据集上进行预测
+    _, _, _, _, _, _, predsA_all_std, labels_all_std = evaluate(best_modelA, all_loader, nn.MSELoss(), device=device)
+    _, _, _, _, _, _, predsB_all_std, _ = evaluate(best_modelB, all_loader, nn.MSELoss(), device=device)
+
+    predsA_all_real_std = scaler_y.inverse_transform(predsA_all_std.reshape(-1,1)).ravel()
+    predsB_all_real_std = scaler_y.inverse_transform(predsB_all_std.reshape(-1,1)).ravel()
+    labels_all_real_std = scaler_y.inverse_transform(labels_all_std.reshape(-1,1)).ravel()
+
+    if use_log_transform:
+        predsA_all_real = np.expm1(predsA_all_real_std)
+        predsB_all_real = np.expm1(predsB_all_real_std)
+        labels_all_real = np.expm1(labels_all_real_std)
+    else:
+        predsA_all_real = predsA_all_real_std
+        predsB_all_real = predsB_all_real_std
+        labels_all_real = labels_all_real_std
+
     plot_predictions_comparison(
-        y_actual_real      = labelsA_real,
-        y_pred_model1_real = predsA_real,
-        y_pred_model2_real = predsB_real,
+        y_actual_real=labels_all_real,
+        y_pred_model1_real=predsA_all_real,
+        y_pred_model2_real=predsB_all_real,
         model1_name='EModel_FeatureWeight',
         model2_name='EModel_CNN_Transformer'
     )

@@ -407,6 +407,66 @@ def evaluate(model, dataloader, criterion, device='cuda'):
 
     return val_loss, rmse_std, mape_std, r2_std, smape_val, mae_val, preds_arr, labels_arr
 
+def evaluate_real(model, dataloader, criterion, scaler_y, use_log_transform=True, device='cuda'):
+    """
+    在原始数据域上评估模型指标：
+      - 先用模型预测，得到标准化且经过对数变换后的输出
+      - 通过 scaler_y 进行逆变换，再根据 use_log_transform 进行指数逆变换
+      - 最后计算 RMSE、MAPE、R²、SMAPE 与 MAE
+
+    参数:
+      model: 要评估的模型
+      dataloader: 测试或验证数据的 DataLoader
+      criterion: 损失函数 (此处只用于遍历数据，无需计算loss)
+      scaler_y: 在对目标值(StandardScaler)时所用的标准化器
+      use_log_transform: 是否对目标进行逆对数变换（在训练时使用了 np.log1p）
+      device: 运行设备
+
+    返回:
+      rmse, mape, r2, smape, mae, preds_real, labels_real
+    """
+    model.eval()
+    preds_list, labels_list = [], []
+    with torch.no_grad():
+        for batch_inputs, batch_labels in dataloader:
+            batch_inputs = batch_inputs.to(device)
+            batch_labels = batch_labels.to(device)
+            outputs = model(batch_inputs)
+            preds_list.append(outputs.cpu().numpy())
+            labels_list.append(batch_labels.cpu().numpy())
+    preds_arr = np.concatenate(preds_list, axis=0)
+    labels_arr = np.concatenate(labels_list, axis=0)
+
+    # 逆标准化
+    preds_real_std = scaler_y.inverse_transform(preds_arr.reshape(-1,1)).ravel()
+    labels_real_std = scaler_y.inverse_transform(labels_arr.reshape(-1,1)).ravel()
+
+    # 逆 log1p 转换
+    if use_log_transform:
+        preds_real = np.expm1(preds_real_std)
+        labels_real = np.expm1(labels_real_std)
+    else:
+        preds_real = preds_real_std
+        labels_real = labels_real_std
+
+    # 计算评价指标
+    rmse = np.sqrt(mean_squared_error(labels_real, preds_real))
+    mae = np.mean(np.abs(labels_real - preds_real))
+    
+    # 防止除零，设置一个小常数 epsilon
+    epsilon = 1e-4
+    mape = np.mean(np.abs((labels_real - preds_real) / np.maximum(np.abs(labels_real), epsilon))) * 100.0
+
+    ss_res = np.sum((labels_real - preds_real)**2)
+    ss_tot = np.sum((labels_real - np.mean(labels_real))**2)
+    r2 = 1 - ss_res/ss_tot if ss_tot != 0 else 0.0
+
+    numerator = np.abs(labels_real - preds_real)
+    denominator = np.abs(labels_real) + np.abs(preds_real)
+    nonzero_mask_smape = (denominator != 0)
+    smape = 100.0 * 2.0 * np.mean(numerator[nonzero_mask_smape] / denominator[nonzero_mask_smape])
+    
+    return rmse, mape, r2, smape, mae, preds_real, labels_real
 
 # =====================================================================
 #   6. 训练工具: 同时记录训练集、验证集指标
@@ -831,6 +891,22 @@ def main(use_log_transform=True, min_egrid_threshold=1.0):
           f"SMAPE: {test_smapeA_std:.2f}, MAE: {test_maeA_std:.4f}")
     print(f"[EModel_CNN_Transformer] RMSE: {test_rmseB_std:.4f}, MAPE: {test_mapeB_std:.2f}, R^2: {test_r2B_std:.4f}, "
           f"SMAPE: {test_smapeB_std:.2f}, MAE: {test_maeB_std:.4f}")
+    
+    # 在加载最优权重并计算模型在标准化域下的指标后
+    # 使用新的函数在真实域上评估：
+    rmse_real, mape_real, r2_real, smape_real, mae_real, preds_real, labels_real = evaluate_real(best_modelA, test_loader, criterion_test, scaler_y, use_log_transform=use_log_transform
+                                                                                                 )
+    print("\n[在真实域上评估 EModel_FeatureWeight 模型]:")
+    print(f"RMSE(real): {rmse_real:.2f}, MAPE(real): {mape_real:.2f}%, R^2(real): {r2_real:.4f}, "
+          f"SMAPE(real): {smape_real:.2f}%, MAE(real): {mae_real:.2f}")
+    
+    plot_predictions_comparison(
+        y_actual_real=labels_real,
+        y_pred_model1_real=preds_real,
+        y_pred_model2_real=preds_real,  #这里只展示一个模型的预测
+        model1_name='EModel_FeatureWeight',
+        model2_name='EModel_FeatureWeight'
+    )
 
     # -- 反标准化 + (可选)反log
     predsA_real_std = scaler_y.inverse_transform(predsA_std.reshape(-1,1)).ravel()

@@ -32,10 +32,10 @@ mpl.rcParams.update({
 # ---------------------------
 # 0. 全局超参数
 # ---------------------------
-learning_rate = 1e-3
+learning_rate = 1e-4
 num_epochs    = 150
 batch_size    = 128
-weight_decay  = 1e-6
+weight_decay  = 3e-4
 patience      = 8
 num_workers   = 0
 window_size   = 20
@@ -807,6 +807,45 @@ def plot_training_curves_allmetrics(hist_dict, model_name='Model'):
 # =====================================================================
 #   8. 主函数
 # =====================================================================
+def plot_segmented_predictions(timestamps, y_actual, y_pred, segments, model_name):
+    """
+    将预测结果图分成三个部分，每部分包含四个月的数据，
+    并将一个模型的三张图放在一页展示。
+    
+    参数:
+      timestamps: 一维数组, 时间戳（必须是能转为 pandas datetime 的格式）。
+      y_actual: 实际值数组。
+      y_pred: 模型预测值数组。
+      segments: dict, 分段名称与月份区间映射，例如 {"Jan-Apr": (1,4), "May-Aug": (5,8), "Sep-Dec": (9,12)}。
+      model_name: str, 模型名称，用于图标题显示。
+    """
+    # 转换为 pandas datetime格式
+    times = pd.to_datetime(timestamps)
+    
+    # 创建包含三个子图的画布
+    fig, axes = plt.subplots(1, len(segments), figsize=(18, 6))
+    # 如果只有一个子图（边界情况）则将axes转换为list
+    if len(segments) == 1:
+        axes = [axes]
+    
+    for ax, (seg_label, (m_start, m_end)) in zip(axes, segments.items()):
+        # 按月份过滤：默认使用 dt.month (假设数据为单年数据)
+        idx = (times.dt.month >= m_start) & (times.dt.month <= m_end)
+        if np.sum(idx) == 0:
+            ax.text(0.5, 0.5, f"No data in {seg_label}",
+                    horizontalalignment='center', verticalalignment='center')
+        else:
+            ax.plot(times[idx], y_actual[idx], 'red', label='Actual', linewidth=1)
+            ax.plot(times[idx], y_pred[idx], 'blue', label='Predicted', linestyle='--', linewidth=1)
+            ax.set_xlabel("Timestamp")
+            ax.set_ylabel("Value")
+            ax.set_title(f"{model_name} Predictions ({seg_label})")
+            ax.legend()
+            ax.grid(True)
+    plt.tight_layout()
+    plt.show()
+
+
 def main(use_log_transform=True, min_egrid_threshold=1.0):
     print("[Info] 1) Loading raw data...")
     data_df = load_data()
@@ -946,7 +985,7 @@ def main(use_log_transform=True, min_egrid_threshold=1.0):
     print(f"[EModel_CNN_Transformer] RMSE: {test_rmseB_std:.4f}, MAPE: {test_mapeB_std:.2f}, R^2: {test_r2B_std:.4f}, "
           f"SMAPE: {test_smapeB_std:.2f}, MAE: {test_maeB_std:.4f}")
 
-    # -- 反标准化 + (可选)反log (测试集数据的反变换，可用于指标打印)
+    # -- 反标准化 + (可选)反 log (测试集数据反变换，用于指标打印)
     predsA_real_std = scaler_y.inverse_transform(predsA_std.reshape(-1,1)).ravel()
     predsB_real_std = scaler_y.inverse_transform(predsB_std.reshape(-1,1)).ravel()
     labelsA_real_std = scaler_y.inverse_transform(labelsA_std.reshape(-1,1)).ravel()
@@ -963,7 +1002,7 @@ def main(use_log_transform=True, min_egrid_threshold=1.0):
         labelsA_real = labelsA_real_std
         labelsB_real = labelsB_real_std
 
-    # -- 在原域上计算RMSE
+    # -- 在原域上计算 RMSE
     from sklearn.metrics import mean_squared_error
     test_rmseA_real = np.sqrt(mean_squared_error(labelsA_real, predsA_real))
     test_rmseB_real = np.sqrt(mean_squared_error(labelsB_real, predsB_real))
@@ -972,20 +1011,19 @@ def main(use_log_transform=True, min_egrid_threshold=1.0):
     print(f"[EModel_FeatureWeight] => RMSE(real): {test_rmseA_real:.2f}")
     print(f"[EModel_CNN_Transformer] => RMSE(real): {test_rmseB_real:.2f}")
 
-    # 数据集统计信息输出（使用test_size参数）
+    # 数据集统计信息输出
     total_samples = len(data_df)
     print(f"\n[Data Statistics] Total samples: {total_samples}")
     print(f"Train size: {train_size} ({train_size/total_samples:.1%})")
     print(f"Validation size: {val_size} ({val_size/total_samples:.1%})") 
     print(f"Test size: {test_size} ({test_size/total_samples:.1%})")
 
-    # 时间序列分析可视化（使用train/val timestamps）
     def plot_dataset_distribution(timestamps, title):
         plt.figure(figsize=(10,4))
         plt.hist(pd.to_datetime(timestamps), bins=50, color='skyblue', edgecolor='black')
-        plt.title(f'Time Distribution - {title}')
-        plt.xlabel('Timestamp')
-        plt.ylabel('Count')
+        plt.title(f"Time Distribution - {title}")
+        plt.xlabel("Timestamp")
+        plt.ylabel("Count")
         plt.grid(axis='y')
         plt.tight_layout()
         plt.show()
@@ -994,19 +1032,11 @@ def main(use_log_transform=True, min_egrid_threshold=1.0):
     plot_dataset_distribution(val_timestamps, 'Validation Set')
     plot_dataset_distribution(test_timestamps, 'Test Set')
 
-    # ===== 删除原有基于测试集的可视化 =====
-    # (已删除)
-    # plot_test_predictions_over_time(test_timestamps[window_size:], labelsA_real, predsA_real)
-    # plot_predictions_comparison(
-    #     y_actual_real      = labelsA_real,
-    #     y_pred_model1_real = predsA_real,
-    #     y_pred_model2_real = predsB_real,
-    #     model1_name='EModel_FeatureWeight',
-    #     model2_name='EModel_CNN_Transformer'
-    # )
+    # ===== 删除原有基于测试集的预测对比图 =====
+    # (已删除原有 plot_test_predictions_over_time 与 plot_predictions_comparison 调用)
 
-    # ===== 新增：在全部数据集上利用已训练好的模型绘制预测对比图 =====
-    print("\n========== Plot predictions on the entire dataset ==========")
+    # ===== 新增：在全部数据集上利用已训练好的模型绘制分段预测对比图 =====
+    print("\n========== Plot segmented predictions on the entire dataset ==========")
     # 使用整个数据集（未划分 train/val/test）构造序列数据
     X_all_raw = data_df[feature_cols].values
     y_all_raw = data_df[target_col].values
@@ -1042,13 +1072,10 @@ def main(use_log_transform=True, min_egrid_threshold=1.0):
         predsB_all_real = predsB_all_real_std
         labels_all_real = labels_all_real_std
 
-    plot_predictions_comparison(
-        y_actual_real=labels_all_real,
-        y_pred_model1_real=predsA_all_real,
-        y_pred_model2_real=predsB_all_real,
-        model1_name='EModel_FeatureWeight',
-        model2_name='EModel_CNN_Transformer'
-    )
+    # 调用新函数，按三段（每段4个月）绘制预测对比图，每个模型一页展示三个子图
+    segments = {"Jan-Apr": (1, 4), "May-Aug": (5, 8), "Sep-Dec": (9, 12)}
+    plot_segmented_predictions(timestamps_seq, labels_all_real, predsA_all_real, segments, model_name="EModel_FeatureWeight")
+    plot_segmented_predictions(timestamps_seq, labels_all_real, predsB_all_real, segments, model_name="EModel_CNN_Transformer")
 
     # -- 绘制训练曲线(包括 Loss / RMSE / MAPE / R^2 / SMAPE / MAE)
     plot_training_curves_allmetrics(histA, model_name='EModel_FeatureWeight')

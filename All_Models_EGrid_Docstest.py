@@ -812,7 +812,13 @@ def main(use_log_transform=True, min_egrid_threshold=1.0):
 
     # -- 训练 EModel_CNN_Transformer
     print("\n========== Train EModel_CNN_Transformer ==========")
-    histB = train_model(modelB, train_loader, val_loader, model_name='EModel_CNN_Transformer')
+    histB = train_model(
+        modelB, train_loader, val_loader,
+        model_name='EModel_CNN_Transformer',
+        learning_rate=learning_rate,
+        weight_decay=weight_decay,
+        num_epochs=num_epochs
+    )
 
     # -- 加载最优权重
     best_modelA = EModel_FeatureWeight(feature_dim).to(device)

@@ -292,20 +292,32 @@ class EModel_FeatureWeight(nn.Module):
                 param.data[(n // 4):(n // 2)].fill_(1.0)
 
     def forward(self, x):
-        # 特征加权
-        x = x * self.feature_importance.unsqueeze(0).unsqueeze(0)
-        
-        # LSTM 处理
+        """
+        输入 x: [batch_size, seq_len, feature_dim]，其中seq_len = window_size
+        """
+        # 动态特征加权：计算特征门权重
+        gate = self.feature_gate(x.mean(dim=1))  # [batch_size, feature_dim]
+        x = x * gate.unsqueeze(1)                # [batch_size, seq_len, feature_dim]
+
+        # LSTM处理，输出形状: [batch_size, seq_len, 2*lstm_hidden_size]
         lstm_out, _ = self.lstm(x)
-        
-        # 直接使用 LSTM 输出进行 Attention 处理（移除了 Transformer 部分）
-        attn_out = self.attention(lstm_out)
-        
-        # 最终全连接层输出预测
-        out = self.fc(attn_out)
-        return out.squeeze(-1)
 
+        # Temporal attention：对每个时间步加权求和，输出 [batch_size, 2*lstm_hidden_size]
+        temporal = self.temporal_attn(lstm_out)
 
+        # Feature attention：对特征维度进行加权
+        feature_raw = self.feature_attn(lstm_out.transpose(1,2))  # 输出形状: [batch_size, window_size]
+        feature = self.feature_proj(feature_raw)                  # 得到 [batch_size, 2*lstm_hidden_size]
+
+        # 拼接两个分支 [batch_size, 4*lstm_hidden_size]
+        combined = torch.cat([temporal, feature], dim=1)
+        mu, logvar = torch.chunk(self.fc(combined), 2, dim=1)
+
+        # 得到最终预测结果，形状为 [batch_size, 1]
+        output = mu + 0.1 * torch.randn_like(mu) * torch.exp(0.5 * logvar)
+    
+        # 压缩输出维度，使输出形状变为 [batch_size]
+        return output.squeeze(-1)
 
 class EModel_CNN_Transformer(nn.Module):
     def __init__(self, feature_dim, hidden_size=128, num_layers=2, dropout=0.1):

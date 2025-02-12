@@ -262,12 +262,12 @@ class EModel_FeatureWeight(nn.Module):
         
         # 新增特征注意力层
         self.feature_attn = nn.Sequential(
-            nn.Linear(2 * lstm_hidden_size, 1),
+            nn.Linear(window_size, 1),  # 输入维度改为window_size
             nn.Sigmoid()
         )
         
         # 新增特征投影层
-        self.feature_proj = nn.Linear(window_size, 2 * lstm_hidden_size)
+        self.feature_proj = nn.Linear(2 * lstm_hidden_size, 2 * lstm_hidden_size)
         
         # 特征重要性权重
         self.feature_importance = nn.Parameter(torch.ones(feature_dim), requires_grad=True)
@@ -321,11 +321,21 @@ class EModel_FeatureWeight(nn.Module):
         temporal = self.temporal_attn(lstm_out)
 
         # Feature attention：对特征维度进行加权
-        feature_raw = self.feature_attn(lstm_out.transpose(1,2))  # 输出形状: [batch_size, window_size]
-        feature = self.feature_proj(feature_raw)                  # 得到 [batch_size, 2*lstm_hidden_size]
+        feature_raw = self.feature_attn(lstm_out.transpose(1,2))  # [batch_size, 2*hidden, seq_len] => [batch_size, 2*hidden, 1]
+        feature_raw = feature_raw.squeeze(-1)  # [batch_size, 2*hidden]
+        feature = self.feature_proj(feature_raw)  # [batch_size, 2*hidden]
 
         # 拼接两个分支 [batch_size, 4*lstm_hidden_size]
         combined = torch.cat([temporal, feature], dim=1)
+        
+        # 修正最终全连接层
+        self.fc = nn.Sequential(
+            nn.Linear(4 * lstm_hidden_size, 128),  # 输入维度调整为4*hidden
+            nn.ReLU(),
+            nn.Dropout(0.1),
+            nn.Linear(128, 1)
+        )
+        
         mu, logvar = torch.chunk(self.fc(combined), 2, dim=1)
 
         # 得到最终预测结果，形状为 [batch_size, 1]

@@ -411,20 +411,19 @@ def evaluate(model, dataloader, criterion, device='cuda'):
 # =====================================================================
 #   6. 训练工具: 同时记录训练集、验证集指标
 # =====================================================================
-def train_model(model, train_loader, val_loader, model_name='Model', learning_rate=1e-4, weight_decay=1e-2, num_epochs=num_epochs, test_loader=None):
+def train_model(model, train_loader, val_loader, model_name='Model', learning_rate=1e-4, weight_decay=1e-2, num_epochs=num_epochs):
     """
     每个 epoch:
       1) evaluate(model, train_loader, ...)
       2) evaluate(model, val_loader, ...)
       3) 记录训练与验证各项指标
-      4) 如果传入 test_loader，则同时记录测试集指标
-      5) early stopping
+      4) early stopping
     """
     criterion = nn.MSELoss()
     optimizer = Lion(
         model.parameters(),
-        lr=learning_rate,          # 保持原有学习率
-        weight_decay=weight_decay  # 保持原有权重衰减
+        lr = learning_rate,  # 保持原有学习率
+        weight_decay = weight_decay  # 保持原有权重衰减
     )
 
     total_steps  = num_epochs * len(train_loader)
@@ -439,27 +438,19 @@ def train_model(model, train_loader, val_loader, model_name='Model', learning_ra
     global_step = 0
 
     # 历史记录
-    train_loss_history  = []
-    train_rmse_history  = []
-    train_mape_history  = []
-    train_r2_history    = []
-    train_smape_history = []
-    train_mae_history   = []
+    train_loss_history = []
+    train_rmse_history = []
+    train_mape_history = []
+    train_r2_history   = []
+    train_smape_history= []
+    train_mae_history  = []
 
-    val_loss_history    = []
-    val_rmse_history    = []
-    val_mape_history    = []
-    val_r2_history      = []
-    val_smape_history   = []
-    val_mae_history     = []
-
-    # 如果传入 test_loader，则初始化测试集历史记录
-    test_loss_history   = []
-    test_rmse_history   = []
-    test_mape_history   = []
-    test_r2_history     = []
-    test_smape_history  = []
-    test_mae_history    = []
+    val_loss_history   = []
+    val_rmse_history   = []
+    val_mape_history   = []
+    val_r2_history     = []
+    val_smape_history  = []
+    val_mae_history    = []
 
     for epoch in range(num_epochs):
         # === 训练阶段 ===
@@ -490,12 +481,6 @@ def train_model(model, train_loader, val_loader, model_name='Model', learning_ra
         # === 计算 val set 上的各指标 ===
         val_loss_eval, val_rmse_eval, val_mape_eval, val_r2_eval, val_smape_eval, val_mae_eval, _, _ = evaluate(model, val_loader, criterion)
 
-        # 若传入 test_loader，则计算测试集指标
-        if test_loader is not None:
-            test_loss_eval, test_rmse_eval, test_mape_eval, test_r2_eval, test_smape_eval, test_mae_eval, _, _ = evaluate(model, test_loader, criterion)
-        else:
-            test_loss_eval = test_rmse_eval = test_mape_eval = test_r2_eval = test_smape_eval = test_mae_eval = None
-
         # === 保存各类指标到历史数组 ===
         train_loss_history.append(train_loss_eval)
         train_rmse_history.append(train_rmse_eval)
@@ -511,14 +496,6 @@ def train_model(model, train_loader, val_loader, model_name='Model', learning_ra
         val_smape_history.append(val_smape_eval)
         val_mae_history.append(val_mae_eval)
 
-        if test_loader is not None:
-            test_loss_history.append(test_loss_eval)
-            test_rmse_history.append(test_rmse_eval)
-            test_mape_history.append(test_mape_eval)
-            test_r2_history.append(test_r2_eval)
-            test_smape_history.append(test_smape_eval)
-            test_mae_history.append(test_mae_eval)
-
         # === 打印日志 ===
         print(f"[{model_name}] Epoch {epoch+1}/{num_epochs}, "
               f"TrainLoss: {train_loss_epoch:.4f}, "
@@ -528,15 +505,6 @@ def train_model(model, train_loader, val_loader, model_name='Model', learning_ra
               f"ValR^2: {val_r2_eval:.4f}, "
               f"ValSMAPE(%): {val_smape_eval:.2f}, "
               f"ValMAE(std): {val_mae_eval:.4f}")
-
-        if test_loader is not None:
-            print(f"[{model_name}] Epoch {epoch+1}/{num_epochs}, "
-                  f"TestLoss: {test_loss_eval:.4f}, "
-                  f"TestRMSE: {test_rmse_eval:.4f}, "
-                  f"TestMAPE: {test_mape_eval:.2f}, "
-                  f"TestR^2: {test_r2_eval:.4f}, "
-                  f"TestSMAPE: {test_smape_eval:.2f}, "
-                  f"TestMAE: {test_mae_eval:.4f}")
 
         # === Early Stopping ===
         if val_loss_eval < best_val_loss:
@@ -551,7 +519,7 @@ def train_model(model, train_loader, val_loader, model_name='Model', learning_ra
                 break
 
     # 整合返回
-    result = {
+    return {
         "train_loss":  train_loss_history,
         "train_rmse":  train_rmse_history,
         "train_mape":  train_mape_history,
@@ -567,77 +535,6 @@ def train_model(model, train_loader, val_loader, model_name='Model', learning_ra
         "val_mae":     val_mae_history
     }
 
-    if test_loader is not None:
-        result.update({
-            "test_loss":  test_loss_history,
-            "test_rmse":  test_rmse_history,
-            "test_mape":  test_mape_history,
-            "test_r2":    test_r2_history,
-            "test_smape": test_smape_history,
-            "test_mae":   test_mae_history
-        })
-
-    return result
-
-def plot_test_metrics(hist, model_name):
-    """
-    绘制单个模型的测试集指标变化曲线，包括 RMSE, MAPE, R², SMAPE 和 MAE。
-    
-    参数:
-      hist: dict, 训练过程中记录该模型的测试集各项指标历史数据，包含键 "test_rmse", "test_mape", "test_r2", "test_smape", "test_mae"。
-      model_name: str, 模型名称，用于图例和标题显示。
-    """
-    epochs = range(1, len(hist["test_rmse"]) + 1)
-    plt.figure(figsize=(15, 10))
-    
-    # 绘制 Test RMSE 曲线
-    plt.subplot(3, 2, 1)
-    plt.plot(epochs, hist["test_rmse"], 'r-o', label=f'{model_name} RMSE', markersize=4)
-    plt.xlabel('Epoch')
-    plt.ylabel('RMSE')
-    plt.title('Test RMSE')
-    plt.legend()
-    plt.grid(True)
-    
-    # 绘制 Test MAPE 曲线
-    plt.subplot(3, 2, 2)
-    plt.plot(epochs, hist["test_mape"], 'b-o', label=f'{model_name} MAPE', markersize=4)
-    plt.xlabel('Epoch')
-    plt.ylabel('MAPE (%)')
-    plt.title('Test MAPE')
-    plt.legend()
-    plt.grid(True)
-    
-    # 绘制 Test R² 曲线
-    plt.subplot(3, 2, 3)
-    plt.plot(epochs, hist["test_r2"], 'g-o', label=f'{model_name} R²', markersize=4)
-    plt.xlabel('Epoch')
-    plt.ylabel('R²')
-    plt.title('Test R²')
-    plt.legend()
-    plt.grid(True)
-    
-    # 绘制 Test SMAPE 曲线
-    plt.subplot(3, 2, 4)
-    plt.plot(epochs, hist["test_smape"], 'c-o', label=f'{model_name} SMAPE', markersize=4)
-    plt.xlabel('Epoch')
-    plt.ylabel('SMAPE (%)')
-    plt.title('Test SMAPE')
-    plt.legend()
-    plt.grid(True)
-    
-    # 绘制 Test MAE 曲线
-    plt.subplot(3, 2, 5)
-    plt.plot(epochs, hist["test_mae"], 'm-o', label=f'{model_name} MAE', markersize=4)
-    plt.xlabel('Epoch')
-    plt.ylabel('MAE')
-    plt.title('Test MAE')
-    plt.legend()
-    plt.grid(True)
-    
-    plt.suptitle(f"Test Metrics for {model_name}", fontsize=18)
-    plt.tight_layout(rect=[0, 0, 1, 0.95])
-    plt.show()
 
 # =====================================================================
 #   7. 可视化与辅助函数
@@ -910,24 +807,12 @@ def main(use_log_transform=True, min_egrid_threshold=1.0):
         model_name='EModel_FeatureWeight',
         learning_rate=learning_rate,
         weight_decay=weight_decay,
-        num_epochs=num_epochs,  # 使用全局参数
-        test_loader=test_loader  # 新增测试集评估
+        num_epochs=num_epochs  # 使用全局参数
     )
 
     # -- 训练 EModel_CNN_Transformer
     print("\n========== Train EModel_CNN_Transformer ==========")
-    histB = train_model(
-        modelB, train_loader, val_loader,
-        model_name='EModel_CNN_Transformer',
-        learning_rate=learning_rate,
-        weight_decay=weight_decay,
-        num_epochs=num_epochs,
-        test_loader=test_loader  # 新增测试集评估
-    )
-
-    # 在训练完两个模型后分别进行绘图
-    plot_test_metrics(histA, "EModel_FeatureWeight")
-    plot_test_metrics(histB, "EModel_CNN_Transformer")
+    histB = train_model(modelB, train_loader, val_loader, model_name='EModel_CNN_Transformer')
 
     # -- 加载最优权重
     best_modelA = EModel_FeatureWeight(feature_dim).to(device)

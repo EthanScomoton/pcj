@@ -290,10 +290,10 @@ class EModel_FeatureWeight(nn.Module):
         
         # 全连接层，用于最终预测
         self.fc = nn.Sequential(
-            nn.Linear(2 * lstm_hidden_size, 128),
+            nn.Linear(4 * lstm_hidden_size, 128),
             nn.ReLU(),
             nn.Dropout(0.1),
-            nn.Linear(128, 1)
+            nn.Linear(128, 2)
         )
 
     def _init_lstm_weights(self):
@@ -327,21 +327,13 @@ class EModel_FeatureWeight(nn.Module):
 
         # 拼接两个分支 [batch_size, 4*lstm_hidden_size]
         combined = torch.cat([temporal, feature], dim=1)
+        output = self.fc(combined)
+        mu, logvar = torch.chunk(output, 2, dim=1)
         
-        # 修正最终全连接层
-        self.fc = nn.Sequential(
-            nn.Linear(4 * lstm_hidden_size, 128),  # 输入维度调整为4*hidden
-            nn.ReLU(),
-            nn.Dropout(0.1),
-            nn.Linear(128, 1)
-        )
+        # 确保随机噪声生成在相同设备上
+        noise = 0.1 * torch.randn_like(mu, device=x.device) * torch.exp(0.5 * logvar)
+        output = mu + noise
         
-        mu, logvar = torch.chunk(self.fc(combined), 2, dim=1)
-
-        # 得到最终预测结果，形状为 [batch_size, 1]
-        output = mu + 0.1 * torch.randn_like(mu) * torch.exp(0.5 * logvar)
-    
-        # 压缩输出维度，使输出形状变为 [batch_size]
         return output.squeeze(-1)
 
 class EModel_CNN_Transformer(nn.Module):

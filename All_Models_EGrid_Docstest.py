@@ -247,46 +247,61 @@ class Attention(nn.Module):
 
 
 class EModel_FeatureWeight(nn.Module):
-    def __init__(self, feature_dim, lstm_hidden_size=128, lstm_num_layers=2, lstm_dropout=0.2):
+    def __init__(self, 
+                 feature_dim, 
+                 lstm_hidden_size=128, 
+                 lstm_num_layers=2, 
+                 lstm_dropout=0.2,
+                 use_local_attn=False,         # 新增参数：是否使用局部注意力
+                 local_attn_window_size=5      # 局部注意力窗口大小，可根据需要调整
+                ):
         super(EModel_FeatureWeight, self).__init__()
         self.feature_dim = feature_dim
         
-        # 新增特征门控机制
+        # 特征门控机制：通过全连接层与 Sigmoid 激活计算每个特征的权重
         self.feature_gate = nn.Sequential(
             nn.Linear(feature_dim, feature_dim),
             nn.Sigmoid()
         )
         
-        # 新增时间注意力层
-        self.temporal_attn = Attention(input_dim=2 * lstm_hidden_size)
+        # Temporal attention：根据参数选用局部注意力或全局（MLP）注意力
+        if use_local_attn:
+            # 从 local_attention 包中导入 LocalAttention 模块（需预先安装相应依赖）
+            from local_attention.local_attention import LocalAttention
+            self.temporal_attn = LocalAttention(
+                dim=2 * lstm_hidden_size,
+                local_window_size=local_attn_window_size,
+                causal=False  # 这里设为 False，表示非自回归模式；可以根据任务需要调整
+            )
+        else:
+            self.temporal_attn = Attention(input_dim=2 * lstm_hidden_size)
         
-        # 新增特征注意力层
+        # 新增特征注意力层，对 LSTM 输出在特征维度上加权；
         self.feature_attn = nn.Sequential(
-            nn.Linear(window_size, 1),  # 输入维度改为window_size
+            nn.Linear(window_size, 1),  # 输入维度为全局窗口大小（序列长度）
             nn.Sigmoid()
         )
-        
-        # 新增特征投影层
+        # 特征投影层，将特征注意力后的结果映射到 2*lstm_hidden_size 维空间
         self.feature_proj = nn.Linear(2 * lstm_hidden_size, 2 * lstm_hidden_size)
         
-        # 特征重要性权重
+        # 特征重要性权重（可学习参数），用于对输入特征进行全局加权
         self.feature_importance = nn.Parameter(torch.ones(feature_dim), requires_grad=True)
         
-        # 改进的 LSTM 模块（双向 LSTM）
+        # 改进的 LSTM 模块（双向 LSTM），用于捕捉时序信息
         self.lstm = nn.LSTM(
-            input_size = feature_dim,
-            hidden_size = lstm_hidden_size,
-            num_layers = lstm_num_layers,
-            batch_first = True,
-            bidirectional = True,
-            dropout = lstm_dropout if lstm_num_layers > 1 else 0
+            input_size=feature_dim,
+            hidden_size=lstm_hidden_size,
+            num_layers=lstm_num_layers,
+            batch_first=True,
+            bidirectional=True,
+            dropout=lstm_dropout if lstm_num_layers > 1 else 0
         )
         
-        # LSTM 权重初始化
+        # 按照 min-LSTM 论文的方法初始化 LSTM 权重
         self._init_lstm_weights()
         
-        # 注意力模块，直接对 LSTM 输出进行 Attention 处理
-        self.attention = Attention(input_dim = 2 * lstm_hidden_size)
+        # 注意力模块，直接对 LSTM 输出进行全局注意力加权汇聚
+        self.attention = Attention(input_dim=2 * lstm_hidden_size)
         
         # 全连接层，用于最终预测
         self.fc = nn.Sequential(
@@ -310,27 +325,27 @@ class EModel_FeatureWeight(nn.Module):
                 param.data[(n // 4):(n // 2)].fill_(1.0)
 
     def forward(self, x):
-        # 动态特征加权：计算特征门权重
+        # 动态特征加权：根据输入在时间步上的平均值计算特征门权重，然后对原始输入加权
         gate = self.feature_gate(x.mean(dim=1))  # [batch_size, feature_dim]
         x = x * gate.unsqueeze(1)                # [batch_size, seq_len, feature_dim]
 
-        # LSTM处理，输出形状: [batch_size, seq_len, 2*lstm_hidden_size]
+        # LSTM处理：得到双向 LSTM 输出，形状为 [batch_size, seq_len, 2 * lstm_hidden_size]
         lstm_out, _ = self.lstm(x)
 
-        # Temporal attention：对每个时间步加权求和，输出 [batch_size, 2*lstm_hidden_size]
-        temporal = self.temporal_attn(lstm_out)
+        # Temporal attention：对每个时间步加权求和，利用局部或全局注意力模块
+        temporal = self.temporal_attn(lstm_out)  # 预期输出形状 [batch_size, 2 * lstm_hidden_size]
+        
+        # Feature attention：对特征维度进行加权汇聚
+        feature_raw = self.feature_attn(lstm_out.transpose(1, 2))  # [batch_size, 2*lstm_hidden_size, seq_len] -> [batch_size, 2*lstm_hidden_size, 1]
+        feature_raw = feature_raw.squeeze(-1)  # [batch_size, 2*lstm_hidden_size]
+        feature = self.feature_proj(feature_raw)  # [batch_size, 2*lstm_hidden_size]
 
-        # Feature attention：对特征维度进行加权
-        feature_raw = self.feature_attn(lstm_out.transpose(1,2))  # [batch_size, 2*hidden, seq_len] => [batch_size, 2*hidden, 1]
-        feature_raw = feature_raw.squeeze(-1)  # [batch_size, 2*hidden]
-        feature = self.feature_proj(feature_raw)  # [batch_size, 2*hidden]
-
-        # 拼接两个分支 [batch_size, 4*lstm_hidden_size]
+        # 拼接两个分支：[temporal 汇聚的结果, feature attention 汇聚的结果]，合并后维度为 [batch_size, 4 * lstm_hidden_size]
         combined = torch.cat([temporal, feature], dim=1)
         output = self.fc(combined)
         mu, logvar = torch.chunk(output, 2, dim=1)
         
-        # 确保随机噪声生成在相同设备上
+        # 使用 reparameterization trick（重参数化技巧）生成随机噪声，并保证噪声与输入在同一设备上
         noise = 0.1 * torch.randn_like(mu, device=x.device) * torch.exp(0.5 * logvar)
         output = mu + noise
         

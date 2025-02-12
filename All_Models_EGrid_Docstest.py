@@ -235,7 +235,7 @@ class CNNBlock(nn.Module):
     def __init__(self, feature_dim, hidden_size, dropout = 0.1):
         super(CNNBlock, self).__init__()
         self.conv1 = nn.Conv1d(feature_dim, hidden_size, kernel_size = 3, padding = 1)
-        self.conv2 = nn.Conv1d(hidden_size, hidden_size, kernel_size = 5, padding = 2)
+        self.conv2 = nn.Conv1d(hidden_size, hidden_size, kernel_size = 3, padding = 1)
         self.conv3 = nn.Conv1d(hidden_size, 2 * hidden_size, kernel_size = 7, padding = 3)
 
         self.bn1 = nn.BatchNorm1d(hidden_size)

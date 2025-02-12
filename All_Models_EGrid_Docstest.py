@@ -168,34 +168,58 @@ class PositionalEncoding(nn.Module):
         return x + pos_enc.unsqueeze(0)
 
 class Transformer(nn.Module):
-    def __init__(self, d_model, nhead=12, num_encoder_layers=3, num_decoder_layers=3, dropout=0.1):
+    """
+    [Transformer Module]
+    - Contains encoder and decoder structures.
+    Parameters:
+      d_model: Model dimension
+      nhead: Number of attention heads
+      num_encoder_layers: Number of encoder layers
+      num_decoder_layers: Number of decoder layers
+      dropout: Dropout probability
+    """
+    def __init__(self, d_model, nhead = 12, num_encoder_layers = 3, num_decoder_layers = 3, dropout = 0.1):
         super().__init__()
-        # 新增初始化参数
-        self.dropout = nn.Dropout(dropout)
-        self.encoder_norm = RMSNorm(d_model)
-        self.decoder_norm = RMSNorm(d_model)
+        self.rotary_emb = RotaryEmbedding(dim = d_model // 2)  # Rotary positional embedding (not used in forward)
         
-        # 修改为多头注意力
-        self.encoder_attn = nn.MultiheadAttention(
-            embed_dim=d_model,
-            num_heads=nhead,
-            dropout=dropout,
-            batch_first=True
+        # Define encoder layer
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model          = d_model,
+            nhead            = nhead,
+            dim_feedforward  = 4 * d_model,
+            dropout          = dropout,
+            batch_first      = True,
+            activation       = 'gelu'
         )
-        
-        # 新增前馈网络
-        self.ffn = nn.Sequential(
-            nn.Linear(d_model, 4*d_model),
-            nn.GELU(),
-            nn.Dropout(dropout),
-            nn.Linear(4*d_model, d_model)
+        self.transformer_encoder = nn.TransformerEncoder(
+            encoder_layer, 
+            num_layers = num_encoder_layers,
+            norm       = RMSNorm(d_model)         # Use RMSNorm for normalization
+        )
+
+        # Define decoder layer
+        decoder_layer = nn.TransformerDecoderLayer(
+            d_model          = d_model,
+            nhead            = nhead,
+            dim_feedforward  = 4 * d_model,
+            dropout          = dropout,
+            batch_first      = True,
+            activation       = 'gelu'
+        )
+        self.transformer_decoder = nn.TransformerDecoder(
+            decoder_layer,
+            num_layers = num_decoder_layers,
+            norm       = RMSNorm(d_model)
         )
 
     def forward(self, src, tgt):
-        # 添加残差连接和层归一化
-        src = self.encoder_norm(src + self._encoder_attn(src))
-        src = self.encoder_norm(src + self.ffn(src))
-
+        """
+        Parameters:
+          src: Source input tensor
+          tgt: Target input tensor
+        Returns:
+          Output of the Transformer decoder
+        """
         memory = self.transformer_encoder(src)  # Encoder output (memory)
         return self.transformer_decoder(tgt, memory)
 
@@ -447,7 +471,7 @@ class EModel_CNN_Transformer(nn.Module):
         """
         channel_weights = self.channel_attn(x.mean(dim=1))
         x = x * channel_weights.unsqueeze(1)
-        
+
         # Apply learnable feature importance weights
         x = x * self.feature_importance.unsqueeze(0).unsqueeze(0)
         residual = self.residual(x[:, -1, :])

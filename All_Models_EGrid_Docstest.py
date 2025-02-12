@@ -32,11 +32,11 @@ mpl.rcParams.update({
 # ---------------------------
 # 0. 全局超参数
 # ---------------------------
-learning_rate = 1e-3
+learning_rate = 1e-4
 num_epochs    = 150
 batch_size    = 128
-weight_decay  = 1e-6
-patience      = 8
+weight_decay  = 1e-5
+patience      = 12
 num_workers   = 0
 window_size   = 20
 lstm_hidden_size = 128  # LSTM隐藏层参数
@@ -154,7 +154,7 @@ class PositionalEncoding(nn.Module):
 
 
 class Transformer(nn.Module):
-    def __init__(self, d_model, nhead=8, num_encoder_layers=2, num_decoder_layers=2, dropout=0.1):
+    def __init__(self, d_model, nhead=12, num_encoder_layers=3, num_decoder_layers=3, dropout=0.1):
         super().__init__()
         self.rotary_emb = RotaryEmbedding(dim=d_model//2)
     
@@ -196,7 +196,7 @@ class Transformer(nn.Module):
 
 
 class CNNBlock(nn.Module):
-    def __init__(self, feature_dim, hidden_size, dropout=0.2):
+    def __init__(self, feature_dim, hidden_size, dropout=0.1):
         super(CNNBlock, self).__init__()
         self.conv1 = nn.Conv1d(feature_dim, hidden_size, kernel_size=3, padding=1)
         self.conv2 = nn.Conv1d(hidden_size, hidden_size, kernel_size=5, padding=2)

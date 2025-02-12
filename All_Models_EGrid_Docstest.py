@@ -235,7 +235,7 @@ class CNNBlock(nn.Module):
     def __init__(self, feature_dim, hidden_size, dropout = 0.1):
         super(CNNBlock, self).__init__()
         self.conv1 = nn.Conv1d(feature_dim, hidden_size, kernel_size = 3, padding = 1)
-        self.conv2 = nn.Conv1d(hidden_size, hidden_size, kernel_size = 3, padding = 1)
+        self.conv2 = nn.Conv1d(hidden_size, hidden_size, kernel_size = 5, padding = 2)
         self.conv3 = nn.Conv1d(hidden_size, 2 * hidden_size, kernel_size = 7, padding = 3)
 
         self.bn1 = nn.BatchNorm1d(hidden_size)
@@ -434,10 +434,6 @@ class EModel_CNN_Transformer(nn.Module):
         self.feature_importance = nn.Parameter(torch.ones(feature_dim))
         
         self.cnn_block = CNNBlock(feature_dim, hidden_size, dropout)
-        self.channel_attn = nn.Sequential(
-            nn.Linear(feature_dim, feature_dim),
-            nn.Sigmoid()
-        )
         
         self.transformer_block = Transformer(
             d_model            = 2 * hidden_size,
@@ -469,9 +465,6 @@ class EModel_CNN_Transformer(nn.Module):
         Returns:
           Predicted value with shape [batch_size]
         """
-        channel_weights = self.channel_attn(x.mean(dim=1))
-        x = x * channel_weights.unsqueeze(1)
-
         # Apply learnable feature importance weights
         x = x * self.feature_importance.unsqueeze(0).unsqueeze(0)
         residual = self.residual(x[:, -1, :])

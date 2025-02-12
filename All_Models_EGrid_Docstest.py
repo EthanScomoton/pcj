@@ -251,6 +251,24 @@ class EModel_FeatureWeight(nn.Module):
         super(EModel_FeatureWeight, self).__init__()
         self.feature_dim = feature_dim
         
+        # 新增特征门控机制
+        self.feature_gate = nn.Sequential(
+            nn.Linear(feature_dim, feature_dim),
+            nn.Sigmoid()
+        )
+        
+        # 新增时间注意力层
+        self.temporal_attn = Attention(input_dim=2 * lstm_hidden_size)
+        
+        # 新增特征注意力层
+        self.feature_attn = nn.Sequential(
+            nn.Linear(2 * lstm_hidden_size, 1),
+            nn.Sigmoid()
+        )
+        
+        # 新增特征投影层
+        self.feature_proj = nn.Linear(window_size, 2 * lstm_hidden_size)
+        
         # 特征重要性权重
         self.feature_importance = nn.Parameter(torch.ones(feature_dim), requires_grad=True)
         
@@ -292,9 +310,6 @@ class EModel_FeatureWeight(nn.Module):
                 param.data[(n // 4):(n // 2)].fill_(1.0)
 
     def forward(self, x):
-        """
-        输入 x: [batch_size, seq_len, feature_dim]，其中seq_len = window_size
-        """
         # 动态特征加权：计算特征门权重
         gate = self.feature_gate(x.mean(dim=1))  # [batch_size, feature_dim]
         x = x * gate.unsqueeze(1)                # [batch_size, seq_len, feature_dim]

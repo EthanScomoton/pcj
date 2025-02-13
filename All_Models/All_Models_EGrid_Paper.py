@@ -990,13 +990,12 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     ).to(device)
     
     modelB = EModel_FeatureWeight2(
-        feature_dim = feature_dim,
-        cnn_hidden = 128,
-        lstm_hidden_size = lstm_hidden_size,
-        lstm_num_layers = 2,
-        dropout = 0.1
+        feature_dim       = feature_dim,
+        lstm_hidden_size  = lstm_hidden_size, 
+        lstm_num_layers   = lstm_num_layers,
+        lstm_dropout      = 0.2
     ).to(device)
-
+    
     # Train Model: EModel_FeatureWeight
     print("\n========== Training Model: A ==========")
     histA = train_model(

@@ -166,63 +166,7 @@ class PositionalEncoding(nn.Module):
         seq_len = x.size(1)  # Sequence length
         pos_enc = self.pe[step_offset : step_offset + seq_len, 0, :]  # Get corresponding positional encoding
         return x + pos_enc.unsqueeze(0)
-
-class Transformer(nn.Module):
-    """
-    [Transformer Module]
-    - Contains encoder and decoder structures.
-    Parameters:
-      d_model: Model dimension
-      nhead: Number of attention heads
-      num_encoder_layers: Number of encoder layers
-      num_decoder_layers: Number of decoder layers
-      dropout: Dropout probability
-    """
-    def __init__(self, d_model, nhead = 12, num_encoder_layers = 3, num_decoder_layers = 3, dropout = 0.1):
-        super().__init__()
-        self.rotary_emb = RotaryEmbedding(dim = d_model // 2)  # Rotary positional embedding (not used in forward)
-        
-        # Define encoder layer
-        encoder_layer = nn.TransformerEncoderLayer(
-            d_model          = d_model,
-            nhead            = nhead,
-            dim_feedforward  = 4 * d_model,
-            dropout          = dropout,
-            batch_first      = True,
-            activation       = 'gelu'
-        )
-        self.transformer_encoder = nn.TransformerEncoder(
-            encoder_layer, 
-            num_layers = num_encoder_layers,
-            norm       = RMSNorm(d_model)         # Use RMSNorm for normalization
-        )
-
-        # Define decoder layer
-        decoder_layer = nn.TransformerDecoderLayer(
-            d_model          = d_model,
-            nhead            = nhead,
-            dim_feedforward  = 4 * d_model,
-            dropout          = dropout,
-            batch_first      = True,
-            activation       = 'gelu'
-        )
-        self.transformer_decoder = nn.TransformerDecoder(
-            decoder_layer,
-            num_layers = num_decoder_layers,
-            norm       = RMSNorm(d_model)
-        )
-
-    def forward(self, src, tgt):
-        """
-        Parameters:
-          src: Source input tensor
-          tgt: Target input tensor
-        Returns:
-          Output of the Transformer decoder
-        """
-        memory = self.transformer_encoder(src)  # Encoder output (memory)
-        return self.transformer_decoder(tgt, memory)
-
+    
 class CNNBlock(nn.Module):
     """
     [CNN Module]
@@ -420,62 +364,83 @@ class EModel_FeatureWeight(nn.Module):
         
         return output.squeeze(-1)
 
-class EModel_CNN_Transformer(nn.Module):
+class EModel_CNN_BiLSTM(nn.Module):
     """
-    [Model 2: CNN and Transformer based Model]
+    [New Model: CNN + BiLSTM + Attention]
     Parameters:
-      - feature_dim: Input feature dimension
-      - hidden_size: Hidden size for CNN
-      - num_layers: Number of Transformer layers
-      - dropout: Dropout probability
+      feature_dim: 输入特征维度
+      cnn_hidden: CNN隐藏层维度
+      lstm_hidden: LSTM隐藏层维度
+      lstm_layers: LSTM层数
+      dropout: 丢弃率
     """
-    def __init__(self, feature_dim, hidden_size = 128, num_layers = 2, dropout = 0.1):
+    def __init__(self, feature_dim, cnn_hidden=64, lstm_hidden=128, lstm_layers=2, dropout=0.2):
         super().__init__()
-        self.feature_importance = nn.Parameter(torch.ones(feature_dim))
         
-        self.cnn_block = CNNBlock(feature_dim, hidden_size, dropout)
-        
-        self.transformer_block = Transformer(
-            d_model            = 2 * hidden_size,
-            nhead              = 8,
-            num_encoder_layers = num_layers,
-            num_decoder_layers = num_layers,
-            dropout            = dropout
+        # 1. CNN特征提取模块（使用现有CNNBlock）
+        self.cnn_block = CNNBlock(
+            feature_dim=feature_dim,
+            hidden_size=cnn_hidden,
+            dropout=dropout
         )
         
-        self.attention = Attention(input_dim = 2 * hidden_size, dropout = dropout)
+        # 2. 双向LSTM模块
+        self.bilstm = nn.LSTM(
+            input_size=2*cnn_hidden,  # CNNBlock输出维度为2*hidden_size
+            hidden_size=lstm_hidden,
+            num_layers=lstm_layers,
+            bidirectional=True,       # 关键：启用双向
+            batch_first=True,
+            dropout=dropout if lstm_layers > 1 else 0
+        )
+        
+        # 3. 注意力机制（继承自EModel_FeatureWeight的设计）
+        self.temporal_attn = Attention(
+            input_dim=2*lstm_hidden*2,  # 双向LSTM输出维度是2倍hidden_size
+            dropout=dropout
+        )
+        
+        # 4. 特征门控（类似EModel_FeatureWeight的权重设计）
+        self.feature_gate = nn.Sequential(
+            nn.Linear(2*lstm_hidden*2, 2*lstm_hidden*2),
+            nn.Sigmoid()
+        )
+        
+        # 5. 最终预测层
         self.fc = nn.Sequential(
-            nn.Linear(2 * hidden_size, 128),
-            nn.GELU(),
+            nn.Linear(2*lstm_hidden*2, 128),
+            nn.ReLU(),
             nn.Dropout(dropout),
             nn.Linear(128, 1)
         )
-        
-        self.residual = nn.Sequential(
-            nn.Linear(feature_dim, 2 * hidden_size),
-            nn.GELU()
-        )
-        
-        self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
         """
-        Parameters:
-          x: Input tensor with shape [batch_size, seq_len, feature_dim]
-        Returns:
-          Predicted value with shape [batch_size]
+        前向传播流程：
+        输入维度：[batch_size, seq_len, feature_dim]
+        输出维度：[batch_size]
         """
-        # Apply learnable feature importance weights
-        x = x * self.feature_importance.unsqueeze(0).unsqueeze(0)
-        residual = self.residual(x[:, -1, :])
+        # 维度调整适应CNNBlock
+        x = x.transpose(1, 2)  # [B, D, T]
         
-        cnn_out = self.cnn_block(x)
-        transformer_out = self.transformer_block(cnn_out, cnn_out)
-        transformer_out += residual.unsqueeze(1)
+        # 1. CNN特征提取
+        cnn_out = self.cnn_block(x)  # [B, 2*cnn_hidden, T]
         
-        attn_out = self.attention(transformer_out)
-        return self.fc(attn_out).squeeze(-1)
-
+        # 维度恢复
+        cnn_out = cnn_out.transpose(1, 2)  # [B, T, 2*cnn_hidden]
+        
+        # 2. 双向LSTM处理
+        lstm_out, _ = self.bilstm(cnn_out)  # [B, T, 2*lstm_hidden*2]
+        
+        # 3. 时间注意力聚合
+        attn_out = self.temporal_attn(lstm_out)  # [B, 2*lstm_hidden*2]
+        
+        # 4. 特征门控（动态权重调整）
+        gate = self.feature_gate(attn_out)
+        gated_features = attn_out * gate
+        
+        # 5. 最终预测
+        return self.fc(gated_features).squeeze(-1)
 
 # 5. Evaluation Module
 def evaluate(model, dataloader, criterion, device = 'cuda'):
@@ -980,7 +945,7 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
         lstm_dropout      = 0.2
     ).to(device)
     
-    modelB = EModel_CNN_Transformer(
+    modelB = EModel_CNN_BiLSTM(
         feature_dim = feature_dim,
         hidden_size = 128,
         num_layers  = 2,
@@ -999,13 +964,13 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
         num_epochs    = num_epochs
     )
 
-    # Train Model: EModel_CNN_Transformer
+    # Train Model: EModel_CNN_BiLSTM
     print("\n========== Training Model: B ==========")
     histB = train_model(
         model         = modelB,
         train_loader  = train_loader,
         val_loader    = val_loader,
-        model_name    = 'EModel_CNN_Transformer',
+        model_name    = 'EModel_CNN_BiLSTM',
         learning_rate = learning_rate,
         weight_decay  = weight_decay,
         num_epochs    = num_epochs
@@ -1015,8 +980,8 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     best_modelA = EModel_FeatureWeight(feature_dim).to(device)
     best_modelA.load_state_dict(torch.load('best_EModel_FeatureWeight.pth'))
 
-    best_modelB = EModel_CNN_Transformer(feature_dim).to(device)
-    best_modelB.load_state_dict(torch.load('best_EModel_CNN_Transformer.pth'))
+    best_modelB = EModel_CNN_BiLSTM(feature_dim).to(device)
+    best_modelB.load_state_dict(torch.load('best_EModel_CNN_BiLSTM.pth'))
 
     # Evaluate on test set (standardized domain)
     criterion_test = nn.SmoothL1Loss(beta = 1.0)
@@ -1025,7 +990,7 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
 
     print("\n========== [Test Set Evaluation (Standardized Domain)] ==========")
     print(f"[EModel_FeatureWeight]  RMSE: {test_rmseA_std:.4f}, MAPE: {test_mapeA_std:.2f}%, R²: {test_r2A_std:.4f}, SMAPE: {test_smapeA_std:.2f}%, MAE: {test_maeA_std:.4f}")
-    print(f"[EModel_CNN_Transformer] RMSE: {test_rmseB_std:.4f}, MAPE: {test_mapeB_std:.2f}%, R²: {test_r2B_std:.4f}, SMAPE: {test_smapeB_std:.2f}%, MAE: {test_maeB_std:.4f}")
+    print(f"[EModel_CNN_BiLSTM] RMSE: {test_rmseB_std:.4f}, MAPE: {test_mapeB_std:.2f}%, R²: {test_r2B_std:.4f}, SMAPE: {test_smapeB_std:.2f}%, MAE: {test_maeB_std:.4f}")
 
     # Inverse standardization and (optionally) inverse logarithmic transformation
     predsA_real_std = scaler_y.inverse_transform(predsA_std.reshape(-1, 1)).ravel()
@@ -1050,7 +1015,7 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
 
     print("\n========== [Test Set Evaluation (Original Domain)] ==========")
     print(f"[EModel_FeatureWeight] => RMSE (original): {test_rmseA_real:.2f}")
-    print(f"[EModel_CNN_Transformer] => RMSE (original): {test_rmseB_real:.2f}")
+    print(f"[EModel_CNN] => RMSE (original): {test_rmseB_real:.2f}")
 
     # Dataset statistics
     print(f"\n[Dataset Statistics] Total samples: {total_samples}")
@@ -1070,12 +1035,12 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
         y_pred_model1_real = predsA_real,
         y_pred_model2_real = predsB_real,
         model1_name        = 'EModel_FeatureWeight',
-        model2_name        = 'EModel_CNN_Transformer'
+        model2_name        = 'EModel_CNN'
     )
 
     # Plot training curves for various metrics
     plot_training_curves_allmetrics(histA, model_name = 'EModel_FeatureWeight')
-    plot_training_curves_allmetrics(histB, model_name = 'EModel_CNN_Transformer')
+    plot_training_curves_allmetrics(histB, model_name = 'EModel_CNN_BiLSTM')
 
     print("[Info] Processing complete!")
 

@@ -432,11 +432,10 @@ class EModel_CNN_BiLSTM(nn.Module):
         # Adjust shape for CNNBlock: expected [batch_size, feature_dim, seq_len]
         x = x.transpose(1, 2)
         
-        # 1. Apply CNN feature extraction
-        cnn_out = self.cnn_block(x)  # shape: [batch_size, 2 * cnn_hidden, seq_len]
-        cnn_out = cnn_out.transpose(1, 2)  # restore to [batch_size, seq_len, 2 * cnn_hidden]
+        # 1. Apply CNN feature extraction; CNNBlock internally handles transposition
+        cnn_out = self.cnn_block(x)  # shape: [batch_size, seq_len, 2 * cnn_hidden]
         
-        # 2. Process through BiLSTM
+        # 2. Process through BiLSTM (input shape remains [batch_size, seq_len, 2 * cnn_hidden])
         lstm_out, _ = self.lstm(cnn_out)  # shape: [batch_size, seq_len, 2 * lstm_hidden_size]
         
         # 3. Aggregate via Attention

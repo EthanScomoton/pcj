@@ -33,7 +33,7 @@ num_epochs        = 150    # Number of training epochs
 batch_size        = 128    # Batch size
 weight_decay      = 1e-5   # Weight decay
 patience          = 12     # Patience for early stopping
-num_workers       = 0      # Number of worker threads
+num_workers       = 1      # Number of worker threads
 window_size       = 20     # Sequence window size
 lstm_hidden_size  = 128    # LSTM hidden size
 lstm_num_layers   = 2      # Number of LSTM layers
@@ -364,39 +364,36 @@ class EModel_FeatureWeight(nn.Module):
         
         return output.squeeze(-1)
 
-class EModel_CNN_BiLSTM(nn.Module):
+class EModel_FeatureWeight2(nn.Module):
     """
-    [New Model: CNN + BiLSTM + Attention]
-    This model first extracts features using a CNN block, then applies a BiLSTM to capture temporal dependencies,
-    followed by an attention mechanism to aggregate key information, and finally uses dynamic feature gating for prediction.
-    
+    [Model 1: LSTM-based Model with Feature Weighting]
     Parameters:
-      feature_dim: int - Input feature dimensionality.
-      cnn_hidden: int - Number of hidden units in the CNN block.
-      lstm_hidden_size: int - Hidden size for the BiLSTM.
-      lstm_num_layers: int - Number of layers in the BiLSTM.
-      lstm_dropout: float - Dropout probability for the LSTM.
-      dropout: float - Dropout probability applied in the final prediction layers.
-      use_local_attn: bool - Flag to select local attention instead of global attention.
-      local_attn_window_size: int - Window size for local attention if used.
+      - feature_dim: Input feature dimension
+      - lstm_hidden_size: LSTM hidden size
+      - lstm_num_layers: Number of LSTM layers
+      - lstm_dropout: LSTM dropout probability
+      - use_local_attn: Whether to use local attention (default: False)
+      - local_attn_window_size: Window size for local attention (default: 5)
     """
-    def __init__(self, feature_dim, cnn_hidden=128, lstm_hidden_size=128, lstm_num_layers=2, lstm_dropout=0.2, dropout=0.1, use_local_attn=False, local_attn_window_size=5):
-        super().__init__()
-        # 1. CNN Feature Extraction Module (using existing CNNBlock)
-        self.cnn_block = CNNBlock(feature_dim, cnn_hidden, dropout)
+    def __init__(self, 
+                 feature_dim, 
+                 lstm_hidden_size = 128, 
+                 lstm_num_layers = 2, 
+                 lstm_dropout = 0.1,
+                 use_local_attn = False,
+                 local_attn_window_size = 5
+                ):
         
-        # 2. BiLSTM Module to capture temporal information
-        # Note: The input size to LSTM is 2 * cnn_hidden since CNNBlock outputs that many channels.
-        self.lstm = nn.LSTM(
-            input_size = 2 * cnn_hidden,
-            hidden_size = lstm_hidden_size,
-            num_layers = lstm_num_layers,
-            batch_first = True,
-            bidirectional = True,
-            dropout = lstm_dropout if lstm_num_layers > 1 else 0
+        super(EModel_FeatureWeight, self).__init__()
+        self.feature_dim = feature_dim
+        
+        # Feature gating mechanism: fully connected layer + Sigmoid to compute feature weights
+        self.feature_gate = nn.Sequential(
+            nn.Linear(feature_dim, feature_dim),
+            nn.Sigmoid()
         )
         
-        # 3. Temporal Attention Mechanism to aggregate BiLSTM outputs
+        # Temporal attention: choose between local or global (MLP) attention
         if use_local_attn:
             from local_attention.local_attention import LocalAttention
             self.temporal_attn = LocalAttention(
@@ -406,47 +403,87 @@ class EModel_CNN_BiLSTM(nn.Module):
             )
         else:
             self.temporal_attn = Attention(input_dim = 2 * lstm_hidden_size)
-            
-        # 4. Dynamic Feature Gating (applied on the attention aggregated vector)
-        self.feature_gate = nn.Sequential(
-            nn.Linear(2 * lstm_hidden_size, 2 * lstm_hidden_size),
+        
+        # Feature attention layer: aggregate LSTM output over feature dimensions
+        self.feature_attn = nn.Sequential(
+            nn.Linear(window_size, 1),
             nn.Sigmoid()
         )
+        # Feature projection layer to map the attended result to 2*lstm_hidden_size
+        self.feature_proj = nn.Linear(2 * lstm_hidden_size, 2 * lstm_hidden_size)
         
-        # 5. Final Prediction Layer
-        self.fc = nn.Sequential(
-            nn.Linear(2 * lstm_hidden_size, 128),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(128, 1)
+        # Learnable feature importance weights, initialized to 1
+        self.feature_importance = nn.Parameter(torch.ones(feature_dim), requires_grad = True)
+        
+        # Bidirectional LSTM module to capture temporal information
+        self.lstm = nn.LSTM(
+            input_size    = feature_dim,
+            hidden_size   = lstm_hidden_size,
+            num_layers    = lstm_num_layers,
+            batch_first   = True,
+            bidirectional = True,
+            dropout       = lstm_dropout if lstm_num_layers > 1 else 0
         )
+        
+        self._init_lstm_weights()
+        
+        # Global attention module to aggregate LSTM output
+        self.attention = Attention(input_dim = 2 * lstm_hidden_size)
+        
+        # Fully connected layer for final prediction
+        self.fc = nn.Sequential(
+            nn.Linear(4 * lstm_hidden_size, 128),
+            nn.ReLU(),
+            nn.Dropout(0.1),
+            nn.Linear(128, 2)  # Output dimension 2: mu and logvar
+        )
+
+    def _init_lstm_weights(self):
+        """
+        [LSTM Weight Initialization]
+        - Initialize weights according to the min-LSTM paper.
+        """
+        for name, param in self.lstm.named_parameters():
+            if 'weight_ih' in name:
+                nn.init.xavier_uniform_(param.data)
+            elif 'weight_hh' in name:
+                nn.init.orthogonal_(param.data)
+            elif 'bias' in name:
+                param.data.fill_(0)
+                n = param.size(0)
+                param.data[(n // 4):(n // 2)].fill_(1.0)  # Set forget gate bias to 1
 
     def forward(self, x):
         """
-        Forward pass:
-        Input:
-          x: Tensor of shape [batch_size, seq_len, feature_dim]
-        Output:
-          Tensor of shape [batch_size], the predicted value for each sample
+        Parameters:
+          x: Input tensor with shape [batch_size, seq_len, feature_dim]
+        Returns:
+          Predicted output with shape [batch_size]
         """
-        # Adjust shape for CNNBlock: expected [batch_size, feature_dim, seq_len]
-        x = x.transpose(1, 2)
+        # Dynamic feature weighting: compute gating and apply to input
+        gate = self.feature_gate(x.mean(dim = 1))
+        x = x * gate.unsqueeze(1)
+
+        # Process with LSTM to obtain bidirectional output
+        lstm_out, _ = self.lstm(x)
+
+        # Temporal attention: aggregate LSTM output
+        temporal = self.temporal_attn(lstm_out)
         
-        # 1. Apply CNN feature extraction; CNNBlock internally handles transposition
-        cnn_out = self.cnn_block(x)  # shape: [batch_size, seq_len, 2 * cnn_hidden]
+        # Feature attention: aggregate over feature dimensions
+        feature_raw = self.feature_attn(lstm_out.transpose(1, 2))
+        feature_raw = feature_raw.squeeze(-1)
+        feature = self.feature_proj(feature_raw)
+
+        # Concatenate the two branches: temporal and feature
+        combined = torch.cat([temporal, feature], dim = 1)
+        output = self.fc(combined)
+        mu, logvar = torch.chunk(output, 2, dim = 1)
         
-        # 2. Process through BiLSTM (input shape remains [batch_size, seq_len, 2 * cnn_hidden])
-        lstm_out, _ = self.lstm(cnn_out)  # shape: [batch_size, seq_len, 2 * lstm_hidden_size]
+        # Reparameterization trick: add noise scaled by exp(0.5*logvar)
+        noise = 0.1 * torch.randn_like(mu, device = x.device) * torch.exp(0.5 * logvar)
+        output = mu + noise
         
-        # 3. Aggregate via Attention
-        attn_out = self.temporal_attn(lstm_out)  # shape: [batch_size, 2 * lstm_hidden_size]
-        
-        # 4. Apply dynamic feature gating
-        gate = self.feature_gate(attn_out)      # shape: [batch_size, 2 * lstm_hidden_size]
-        gated_features = attn_out * gate
-        
-        # 5. Final prediction
-        output = self.fc(gated_features)          # shape: [batch_size, 1]
         return output.squeeze(-1)
 
 # 5. Evaluation Module
@@ -952,7 +989,7 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
         lstm_dropout      = 0.2
     ).to(device)
     
-    modelB = EModel_CNN_BiLSTM(
+    modelB = EModel_FeatureWeight2(
         feature_dim = feature_dim,
         cnn_hidden = 128,
         lstm_hidden_size = lstm_hidden_size,
@@ -972,13 +1009,13 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
         num_epochs    = num_epochs
     )
 
-    # Train Model: EModel_CNN_BiLSTM
+    # Train Model: EModel_FeatureWeight2
     print("\n========== Training Model: B ==========")
     histB = train_model(
         model         = modelB,
         train_loader  = train_loader,
         val_loader    = val_loader,
-        model_name    = 'EModel_CNN_BiLSTM',
+        model_name    = 'EModel_FeatureWeight2',
         learning_rate = learning_rate,
         weight_decay  = weight_decay,
         num_epochs    = num_epochs
@@ -988,8 +1025,8 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     best_modelA = EModel_FeatureWeight(feature_dim).to(device)
     best_modelA.load_state_dict(torch.load('best_EModel_FeatureWeight.pth'))
 
-    best_modelB = EModel_CNN_BiLSTM(feature_dim).to(device)
-    best_modelB.load_state_dict(torch.load('best_EModel_CNN_BiLSTM.pth'))
+    best_modelB = EModel_FeatureWeight2(feature_dim).to(device)
+    best_modelB.load_state_dict(torch.load('best_EModel_FeatureWeight2.pth'))
 
     # Evaluate on test set (standardized domain)
     criterion_test = nn.SmoothL1Loss(beta = 1.0)
@@ -998,7 +1035,7 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
 
     print("\n========== [Test Set Evaluation (Standardized Domain)] ==========")
     print(f"[EModel_FeatureWeight]  RMSE: {test_rmseA_std:.4f}, MAPE: {test_mapeA_std:.2f}%, R²: {test_r2A_std:.4f}, SMAPE: {test_smapeA_std:.2f}%, MAE: {test_maeA_std:.4f}")
-    print(f"[EModel_CNN_BiLSTM] RMSE: {test_rmseB_std:.4f}, MAPE: {test_mapeB_std:.2f}%, R²: {test_r2B_std:.4f}, SMAPE: {test_smapeB_std:.2f}%, MAE: {test_maeB_std:.4f}")
+    print(f"[EModel_FeatureWeight2] RMSE: {test_rmseB_std:.4f}, MAPE: {test_mapeB_std:.2f}%, R²: {test_r2B_std:.4f}, SMAPE: {test_smapeB_std:.2f}%, MAE: {test_maeB_std:.4f}")
 
     # Inverse standardization and (optionally) inverse logarithmic transformation
     predsA_real_std = scaler_y.inverse_transform(predsA_std.reshape(-1, 1)).ravel()
@@ -1048,7 +1085,7 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
 
     # Plot training curves for various metrics
     plot_training_curves_allmetrics(histA, model_name = 'EModel_FeatureWeight')
-    plot_training_curves_allmetrics(histB, model_name = 'EModel_CNN_BiLSTM')
+    plot_training_curves_allmetrics(histB, model_name = 'EModel_FeatureWeight2')
 
     print("[Info] Processing complete!")
 

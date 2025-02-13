@@ -543,7 +543,7 @@ def evaluate(model, dataloader, criterion, device = 'cuda'):
 
 
 # 6. Training Module
-def train_model(model, train_loader, val_loader, model_name = 'Model', learning_rate = 1e-4, weight_decay = 1e-2, num_epochs = num_epochs):
+def train_model(model, train_loader, val_loader, model_name = 'Model', learning_rate = learning_rate, weight_decay = weight_decay, num_epochs = num_epochs):
     """
     [Training Module]
     - Train the model on the training and validation sets while recording various metrics.

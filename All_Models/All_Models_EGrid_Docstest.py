@@ -58,7 +58,7 @@ def load_data():
     load_df['timestamp']      = pd.to_datetime(load_df['timestamp'])       # Convert timestamp to datetime
 
     data_df = pd.merge(renewable_df, load_df, on='timestamp', how='inner')  # Merge data using inner join
-    data_df.sort_values('timestamp', inplace=True)                        # Sort by timestamp
+    data_df.sort_values('timestamp', inplace=True)                         # Sort by timestamp
     data_df.reset_index(drop=True, inplace=True)                           # Reset index
     return data_df
 
@@ -71,7 +71,7 @@ def feature_engineering(data_df):
     - Encode categorical features using LabelEncoder
     - Returns: processed data, list of feature columns, target column name
     """
-    span = 10  # EWMA smoothing parameter
+    span = 8  # EWMA smoothing parameter
     data_df['E_grid'] = data_df['E_grid'].ewm(span = span, adjust = False).mean()  # Smooth E_grid
 
     # Construct time features

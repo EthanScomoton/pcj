@@ -367,48 +367,55 @@ class EModel_FeatureWeight(nn.Module):
 class EModel_CNN_BiLSTM(nn.Module):
     """
     [New Model: CNN + BiLSTM + Attention]
+    This model first extracts features using a CNN block, then applies a BiLSTM to capture temporal dependencies,
+    followed by an attention mechanism to aggregate key information, and finally uses dynamic feature gating for prediction.
+    
     Parameters:
-      feature_dim: 输入特征维度
-      cnn_hidden: CNN隐藏层维度
-      lstm_hidden: LSTM隐藏层维度
-      lstm_layers: LSTM层数
-      dropout: 丢弃率
+      feature_dim: int - Input feature dimensionality.
+      cnn_hidden: int - Number of hidden units in the CNN block.
+      lstm_hidden_size: int - Hidden size for the BiLSTM.
+      lstm_num_layers: int - Number of layers in the BiLSTM.
+      lstm_dropout: float - Dropout probability for the LSTM.
+      dropout: float - Dropout probability applied in the final prediction layers.
+      use_local_attn: bool - Flag to select local attention instead of global attention.
+      local_attn_window_size: int - Window size for local attention if used.
     """
-    def __init__(self, feature_dim, cnn_hidden=64, lstm_hidden=128, lstm_layers=2, dropout=0.2):
+    def __init__(self, feature_dim, cnn_hidden=128, lstm_hidden_size=128, lstm_num_layers=2, lstm_dropout=0.2, dropout=0.1, use_local_attn=False, local_attn_window_size=5):
         super().__init__()
+        # 1. CNN Feature Extraction Module (using existing CNNBlock)
+        self.cnn_block = CNNBlock(feature_dim, cnn_hidden, dropout)
         
-        # 1. CNN特征提取模块（使用现有CNNBlock）
-        self.cnn_block = CNNBlock(
-            feature_dim=feature_dim,
-            hidden_size=cnn_hidden,
-            dropout=dropout
+        # 2. BiLSTM Module to capture temporal information
+        # Note: The input size to LSTM is 2 * cnn_hidden since CNNBlock outputs that many channels.
+        self.lstm = nn.LSTM(
+            input_size = 2 * cnn_hidden,
+            hidden_size = lstm_hidden_size,
+            num_layers = lstm_num_layers,
+            batch_first = True,
+            bidirectional = True,
+            dropout = lstm_dropout if lstm_num_layers > 1 else 0
         )
         
-        # 2. 双向LSTM模块
-        self.bilstm = nn.LSTM(
-            input_size=2*cnn_hidden,  # CNNBlock输出维度为2*hidden_size
-            hidden_size=lstm_hidden,
-            num_layers=lstm_layers,
-            bidirectional=True,       # 关键：启用双向
-            batch_first=True,
-            dropout=dropout if lstm_layers > 1 else 0
-        )
-        
-        # 3. 注意力机制（继承自EModel_FeatureWeight的设计）
-        self.temporal_attn = Attention(
-            input_dim=2*lstm_hidden*2,  # 双向LSTM输出维度是2倍hidden_size
-            dropout=dropout
-        )
-        
-        # 4. 特征门控（类似EModel_FeatureWeight的权重设计）
+        # 3. Temporal Attention Mechanism to aggregate BiLSTM outputs
+        if use_local_attn:
+            from local_attention.local_attention import LocalAttention
+            self.temporal_attn = LocalAttention(
+                dim = 2 * lstm_hidden_size,
+                local_window_size = local_attn_window_size,
+                causal = False
+            )
+        else:
+            self.temporal_attn = Attention(input_dim = 2 * lstm_hidden_size)
+            
+        # 4. Dynamic Feature Gating (applied on the attention aggregated vector)
         self.feature_gate = nn.Sequential(
-            nn.Linear(2*lstm_hidden*2, 2*lstm_hidden*2),
+            nn.Linear(2 * lstm_hidden_size, 2 * lstm_hidden_size),
             nn.Sigmoid()
         )
         
-        # 5. 最终预测层
+        # 5. Final Prediction Layer
         self.fc = nn.Sequential(
-            nn.Linear(2*lstm_hidden*2, 128),
+            nn.Linear(2 * lstm_hidden_size, 128),
             nn.ReLU(),
             nn.Dropout(dropout),
             nn.Linear(128, 1)
@@ -416,31 +423,32 @@ class EModel_CNN_BiLSTM(nn.Module):
 
     def forward(self, x):
         """
-        前向传播流程：
-        输入维度：[batch_size, seq_len, feature_dim]
-        输出维度：[batch_size]
+        Forward pass:
+        Input:
+          x: Tensor of shape [batch_size, seq_len, feature_dim]
+        Output:
+          Tensor of shape [batch_size], the predicted value for each sample
         """
-        # 维度调整适应CNNBlock
-        x = x.transpose(1, 2)  # [B, D, T]
+        # Adjust shape for CNNBlock: expected [batch_size, feature_dim, seq_len]
+        x = x.transpose(1, 2)
         
-        # 1. CNN特征提取
-        cnn_out = self.cnn_block(x)  # [B, 2*cnn_hidden, T]
+        # 1. Apply CNN feature extraction
+        cnn_out = self.cnn_block(x)  # shape: [batch_size, 2 * cnn_hidden, seq_len]
+        cnn_out = cnn_out.transpose(1, 2)  # restore to [batch_size, seq_len, 2 * cnn_hidden]
         
-        # 维度恢复
-        cnn_out = cnn_out.transpose(1, 2)  # [B, T, 2*cnn_hidden]
+        # 2. Process through BiLSTM
+        lstm_out, _ = self.lstm(cnn_out)  # shape: [batch_size, seq_len, 2 * lstm_hidden_size]
         
-        # 2. 双向LSTM处理
-        lstm_out, _ = self.bilstm(cnn_out)  # [B, T, 2*lstm_hidden*2]
+        # 3. Aggregate via Attention
+        attn_out = self.temporal_attn(lstm_out)  # shape: [batch_size, 2 * lstm_hidden_size]
         
-        # 3. 时间注意力聚合
-        attn_out = self.temporal_attn(lstm_out)  # [B, 2*lstm_hidden*2]
-        
-        # 4. 特征门控（动态权重调整）
-        gate = self.feature_gate(attn_out)
+        # 4. Apply dynamic feature gating
+        gate = self.feature_gate(attn_out)      # shape: [batch_size, 2 * lstm_hidden_size]
         gated_features = attn_out * gate
         
-        # 5. 最终预测
-        return self.fc(gated_features).squeeze(-1)
+        # 5. Final prediction
+        output = self.fc(gated_features)          # shape: [batch_size, 1]
+        return output.squeeze(-1)
 
 # 5. Evaluation Module
 def evaluate(model, dataloader, criterion, device = 'cuda'):

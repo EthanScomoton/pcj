@@ -955,9 +955,10 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     
     modelB = EModel_CNN_BiLSTM(
         feature_dim = feature_dim,
-        hidden_size = 128,
-        num_layers  = 2,
-        dropout     = 0.1
+        cnn_hidden = 128,
+        lstm_hidden_size = lstm_hidden_size,
+        lstm_num_layers = 2,
+        dropout = 0.1
     ).to(device)
 
     # Train Model: EModel_FeatureWeight

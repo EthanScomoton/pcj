@@ -14,9 +14,7 @@ from torch.utils.data import DataLoader, TensorDataset
 from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.metrics import mean_squared_error
 from torch.nn.utils import clip_grad_norm_
-from x_transformers import RMSNorm
 from lion_pytorch import Lion
-from rotary_embedding_torch import RotaryEmbedding
  
 # Global style settings for plots
 mpl.rcParams.update({
@@ -34,7 +32,7 @@ num_epochs        = 150    # Number of training epochs
 batch_size        = 128    # Batch size
 weight_decay      = 1e-5   # Weight decay
 patience          = 12     # Patience for early stopping
-num_workers       = 1      # Number of worker threads
+num_workers       = 0      # Number of worker threads
 window_size       = 20     # Sequence window size
 lstm_hidden_size  = 128    # LSTM hidden size
 lstm_num_layers   = 2      # Number of LSTM layers

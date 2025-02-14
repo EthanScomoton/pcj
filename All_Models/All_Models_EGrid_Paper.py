@@ -19,11 +19,11 @@ from lion_pytorch import Lion
 # Global style settings for plots
 mpl.rcParams.update({
     'font.family': 'Times New Roman',
-    'font.size': 18,          # Global default font size
-    'axes.labelsize': 18,     # Axis label font size
-    'axes.titlesize': 20,     # Chart title font size
-    'xtick.labelsize': 16,    # x-axis tick label size
-    'ytick.labelsize': 16     # y-axis tick label size
+    'font.size': 22,          # Global default font size
+    'axes.labelsize': 22,     # Axis label font size
+    'axes.titlesize': 24,     # Chart title font size
+    'xtick.labelsize': 20,    # x-axis tick label size
+    'ytick.labelsize': 20     # y-axis tick label size
 })
 
 # Global hyperparameters

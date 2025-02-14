@@ -30,8 +30,8 @@ mpl.rcParams.update({
 learning_rate     = 1e-4   # Learning rate
 num_epochs        = 150    # Number of training epochs
 batch_size        = 128    # Batch size
-weight_decay      = 1e-5   # Weight decay
-patience          = 12     # Patience for early stopping
+weight_decay      = 3e-4   # Weight decay
+patience          = 10     # Patience for early stopping
 num_workers       = 0      # Number of worker threads
 window_size       = 20     # Sequence window size
 lstm_hidden_size  = 128    # LSTM hidden size
@@ -165,52 +165,6 @@ class PositionalEncoding(nn.Module):
         seq_len = x.size(1)  # Sequence length
         pos_enc = self.pe[step_offset : step_offset + seq_len, 0, :]  # Get corresponding positional encoding
         return x + pos_enc.unsqueeze(0)
-    
-class CNNBlock(nn.Module):
-    """
-    [CNN Module]
-    - Extract features through multiple convolutional layers.
-    Parameters:
-      feature_dim: Input feature dimension
-      hidden_size: Hidden layer size
-      dropout: Dropout probability
-    """
-    def __init__(self, feature_dim, hidden_size, dropout = 0.1):
-        super(CNNBlock, self).__init__()
-        self.conv1 = nn.Conv1d(feature_dim, hidden_size, kernel_size = 3, padding = 1)
-        self.conv2 = nn.Conv1d(hidden_size, hidden_size, kernel_size = 5, padding = 2)
-        self.conv3 = nn.Conv1d(hidden_size, 2 * hidden_size, kernel_size = 7, padding = 3)
-
-        self.bn1 = nn.BatchNorm1d(hidden_size)
-        self.bn2 = nn.BatchNorm1d(hidden_size)
-        self.bn3 = nn.BatchNorm1d(2 * hidden_size)
-
-        self.dropout = nn.Dropout(dropout)
-        self.relu    = nn.ReLU()
-
-    def forward(self, x):
-        """
-        Parameters:
-          x: Input tensor with shape [batch_size, seq_len, feature_dim]
-        Returns:
-          CNN feature output with shape [batch_size, seq_len, 2*hidden_size]
-        """
-        x = x.transpose(1, 2)  # Change shape to [batch_size, feature_dim, seq_len]
-        x = self.conv1(x)
-        x = self.bn1(x)
-        x = self.relu(x)
-
-        x = self.conv2(x)
-        x = self.bn2(x)
-        x = self.relu(x)
-
-        x = self.conv3(x)
-        x = self.bn3(x)
-        x = self.relu(x)
-
-        x = self.dropout(x)
-        x = x.transpose(1, 2)  # Restore shape to [batch_size, seq_len, 2*hidden_size]
-        return x
 
 class Attention(nn.Module):
     """
@@ -250,15 +204,15 @@ class EModel_FeatureWeight(nn.Module):
       - lstm_hidden_size: LSTM hidden size
       - lstm_num_layers: Number of LSTM layers
       - lstm_dropout: LSTM dropout probability
-      - use_local_attn: Whether to use local attention (default: False)
-      - local_attn_window_size: Window size for local attention (default: 5)
+      - use_local_attn: Whether to use local attention 
+      - local_attn_window_size: Window size for local attention
     """
     def __init__(self, 
                  feature_dim, 
                  lstm_hidden_size = 128, 
                  lstm_num_layers = 2, 
                  lstm_dropout = 0.2,
-                 use_local_attn = False,
+                 use_local_attn = True,
                  local_attn_window_size = 5
                 ):
         super(EModel_FeatureWeight, self).__init__()

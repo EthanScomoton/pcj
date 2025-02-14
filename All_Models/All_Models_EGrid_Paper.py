@@ -229,7 +229,7 @@ class EModel_FeatureWeight(nn.Module):
             from local_attention.local_attention import LocalAttention
             self.temporal_attn = LocalAttention(
                 dim = 2 * lstm_hidden_size,
-                local_window_size = local_attn_window_size,
+                window_size = local_attn_window_size,
                 causal = False
             )
         else:
@@ -351,7 +351,7 @@ class EModel_FeatureWeight2(nn.Module):
             from local_attention.local_attention import LocalAttention
             self.temporal_attn = LocalAttention(
                 dim = 2 * lstm_hidden_size,
-                local_window_size = local_attn_window_size,
+                window_size = local_attn_window_size,
                 causal = False
             )
         else:

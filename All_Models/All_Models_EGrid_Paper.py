@@ -217,6 +217,7 @@ class EModel_FeatureWeight(nn.Module):
                 ):
         super(EModel_FeatureWeight, self).__init__()
         self.feature_dim = feature_dim
+        self.use_local_attn = use_local_attn  # 保存该标识
         
         # Feature gating mechanism: fully connected layer + Sigmoid to compute feature weights
         self.feature_gate = nn.Sequential(
@@ -229,7 +230,7 @@ class EModel_FeatureWeight(nn.Module):
             from local_attention.local_attention import LocalAttention
             self.temporal_attn = LocalAttention(
                 dim = 2 * lstm_hidden_size,
-                window_size = local_attn_window_size,
+                window_size = local_attn_window_size,   # 使用正确的参数名
                 causal = False
             )
         else:
@@ -240,13 +241,13 @@ class EModel_FeatureWeight(nn.Module):
             nn.Linear(window_size, 1),
             nn.Sigmoid()
         )
-        # Feature projection layer to map the attended result to 2*lstm_hidden_size
+        # Feature projection layer
         self.feature_proj = nn.Linear(2 * lstm_hidden_size, 2 * lstm_hidden_size)
         
         # Learnable feature importance weights, initialized to 1
         self.feature_importance = nn.Parameter(torch.ones(feature_dim), requires_grad = True)
         
-        # Bidirectional LSTM module to capture temporal information
+        # Bidirectional LSTM
         self.lstm = nn.LSTM(
             input_size    = feature_dim,
             hidden_size   = lstm_hidden_size,
@@ -255,10 +256,9 @@ class EModel_FeatureWeight(nn.Module):
             bidirectional = True,
             dropout       = lstm_dropout if lstm_num_layers > 1 else 0
         )
-        
         self._init_lstm_weights()
         
-        # Global attention module to aggregate LSTM output
+        # Global attention module
         self.attention = Attention(input_dim = 2 * lstm_hidden_size)
         
         # Fully connected layer for final prediction
@@ -266,13 +266,12 @@ class EModel_FeatureWeight(nn.Module):
             nn.Linear(4 * lstm_hidden_size, 128),
             nn.ReLU(),
             nn.Dropout(0.1),
-            nn.Linear(128, 2)  # Output dimension 2: mu and logvar
+            nn.Linear(128, 2)  # 输出两个值: mu 和 logvar
         )
 
     def _init_lstm_weights(self):
         """
         [LSTM Weight Initialization]
-        - Initialize weights according to the min-LSTM paper.
         """
         for name, param in self.lstm.named_parameters():
             if 'weight_ih' in name:
@@ -291,27 +290,30 @@ class EModel_FeatureWeight(nn.Module):
         Returns:
           Predicted output with shape [batch_size]
         """
-        # Dynamic feature weighting: compute gating and apply to input
+        # Apply dynamic feature weighting
         gate = self.feature_gate(x.mean(dim = 1))
         x = x * gate.unsqueeze(1)
 
         # Process with LSTM to obtain bidirectional output
         lstm_out, _ = self.lstm(x)
-
-        # Temporal attention: aggregate LSTM output
-        temporal = self.temporal_attn(lstm_out)
         
-        # Feature attention: aggregate over feature dimensions
+        # Temporal attention: if using local attention, pass query, key, value all为 ltsm_out
+        if self.use_local_attn:
+            temporal = self.temporal_attn(lstm_out, lstm_out, lstm_out)
+        else:
+            temporal = self.temporal_attn(lstm_out)
+        
+        # Feature attention over the feature dimensions
         feature_raw = self.feature_attn(lstm_out.transpose(1, 2))
         feature_raw = feature_raw.squeeze(-1)
         feature = self.feature_proj(feature_raw)
 
-        # Concatenate the two branches: temporal and feature
+        # Concatenate the two branches
         combined = torch.cat([temporal, feature], dim = 1)
         output = self.fc(combined)
         mu, logvar = torch.chunk(output, 2, dim = 1)
         
-        # Reparameterization trick: add noise scaled by exp(0.5*logvar)
+        # Reparameterization trick with noise
         noise = 0.1 * torch.randn_like(mu, device = x.device) * torch.exp(0.5 * logvar)
         output = mu + noise
         
@@ -336,39 +338,39 @@ class EModel_FeatureWeight2(nn.Module):
                  use_local_attn = False,
                  local_attn_window_size = 5
                 ):
-        
         super(EModel_FeatureWeight2, self).__init__()
         self.feature_dim = feature_dim
-        
-        # Feature gating mechanism: fully connected layer + Sigmoid to compute feature weights
+        self.use_local_attn = use_local_attn  # 保存该标识
+
+        # Feature gating mechanism
         self.feature_gate = nn.Sequential(
             nn.Linear(feature_dim, feature_dim),
             nn.Sigmoid()
         )
         
-        # Temporal attention: choose between local or global (MLP) attention
+        # Temporal attention
         if use_local_attn:
             from local_attention.local_attention import LocalAttention
             self.temporal_attn = LocalAttention(
                 dim = 2 * lstm_hidden_size,
-                window_size = local_attn_window_size,
+                window_size = local_attn_window_size,  # 使用正确的参数名
                 causal = False
             )
         else:
             self.temporal_attn = Attention(input_dim = 2 * lstm_hidden_size)
         
-        # Feature attention layer: aggregate LSTM output over feature dimensions
+        # Feature attention layer
         self.feature_attn = nn.Sequential(
             nn.Linear(window_size, 1),
             nn.Sigmoid()
         )
-        # Feature projection layer to map the attended result to 2*lstm_hidden_size
+        # Feature projection layer
         self.feature_proj = nn.Linear(2 * lstm_hidden_size, 2 * lstm_hidden_size)
         
-        # Learnable feature importance weights, initialized to 1
+        # Learnable feature importance weights
         self.feature_importance = nn.Parameter(torch.ones(feature_dim), requires_grad = True)
         
-        # Bidirectional LSTM module to capture temporal information
+        # Bidirectional LSTM
         self.lstm = nn.LSTM(
             input_size    = feature_dim,
             hidden_size   = lstm_hidden_size,
@@ -377,10 +379,8 @@ class EModel_FeatureWeight2(nn.Module):
             bidirectional = True,
             dropout       = lstm_dropout if lstm_num_layers > 1 else 0
         )
-        
         self._init_lstm_weights()
         
-        # Global attention module to aggregate LSTM output
         self.attention = Attention(input_dim = 2 * lstm_hidden_size)
         
         # Fully connected layer for final prediction
@@ -388,13 +388,12 @@ class EModel_FeatureWeight2(nn.Module):
             nn.Linear(4 * lstm_hidden_size, 128),
             nn.ReLU(),
             nn.Dropout(0.1),
-            nn.Linear(128, 2)  # Output dimension 2: mu and logvar
+            nn.Linear(128, 2)  # 输出两个值
         )
 
     def _init_lstm_weights(self):
         """
         [LSTM Weight Initialization]
-        - Initialize weights according to the min-LSTM paper.
         """
         for name, param in self.lstm.named_parameters():
             if 'weight_ih' in name:
@@ -404,7 +403,7 @@ class EModel_FeatureWeight2(nn.Module):
             elif 'bias' in name:
                 param.data.fill_(0)
                 n = param.size(0)
-                param.data[(n // 4):(n // 2)].fill_(1.0)  # Set forget gate bias to 1
+                param.data[(n // 4):(n // 2)].fill_(1.0)
 
     def forward(self, x):
         """
@@ -413,27 +412,30 @@ class EModel_FeatureWeight2(nn.Module):
         Returns:
           Predicted output with shape [batch_size]
         """
-        # Dynamic feature weighting: compute gating and apply to input
+        # Dynamic feature weighting
         gate = self.feature_gate(x.mean(dim = 1))
         x = x * gate.unsqueeze(1)
 
-        # Process with LSTM to obtain bidirectional output
+        # Process with LSTM
         lstm_out, _ = self.lstm(x)
-
-        # Temporal attention: aggregate LSTM output
-        temporal = self.temporal_attn(lstm_out)
         
-        # Feature attention: aggregate over feature dimensions
+        # Temporal attention
+        if self.use_local_attn:
+            temporal = self.temporal_attn(lstm_out, lstm_out, lstm_out)
+        else:
+            temporal = self.temporal_attn(lstm_out)
+        
+        # Feature attention over feature dimensions
         feature_raw = self.feature_attn(lstm_out.transpose(1, 2))
         feature_raw = feature_raw.squeeze(-1)
         feature = self.feature_proj(feature_raw)
 
-        # Concatenate the two branches: temporal and feature
+        # Concatenate the two branches
         combined = torch.cat([temporal, feature], dim = 1)
         output = self.fc(combined)
         mu, logvar = torch.chunk(output, 2, dim = 1)
         
-        # Reparameterization trick: add noise scaled by exp(0.5*logvar)
+        # Reparameterization trick with noise
         noise = 0.1 * torch.randn_like(mu, device = x.device) * torch.exp(0.5 * logvar)
         output = mu + noise
         

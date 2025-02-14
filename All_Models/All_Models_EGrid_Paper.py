@@ -217,7 +217,7 @@ class EModel_FeatureWeight(nn.Module):
                 ):
         super(EModel_FeatureWeight, self).__init__()
         self.feature_dim = feature_dim
-        self.use_local_attn = use_local_attn  # 保存该标识
+        self.use_local_attn = use_local_attn  # 保存是否使用局部注意力的标识
         
         # Feature gating mechanism: fully connected layer + Sigmoid to compute feature weights
         self.feature_gate = nn.Sequential(
@@ -297,9 +297,13 @@ class EModel_FeatureWeight(nn.Module):
         # Process with LSTM to obtain bidirectional output
         lstm_out, _ = self.lstm(x)
         
-        # Temporal attention: if using local attention, pass query, key, value all为 ltsm_out
+        # Temporal attention:
         if self.use_local_attn:
+            # 调用LocalAttention，将query, key, value均设置为lstm_out
             temporal = self.temporal_attn(lstm_out, lstm_out, lstm_out)
+            # 聚合沿时间步（例如使用求和或者平均），使得维度变为二维
+            temporal = temporal.sum(dim=1)
+            # 如果希望归一化，可以改为：temporal = temporal.mean(dim=1)
         else:
             temporal = self.temporal_attn(lstm_out)
         
@@ -422,6 +426,7 @@ class EModel_FeatureWeight2(nn.Module):
         # Temporal attention
         if self.use_local_attn:
             temporal = self.temporal_attn(lstm_out, lstm_out, lstm_out)
+            temporal = temporal.sum(dim=1)  # 聚合到2D
         else:
             temporal = self.temporal_attn(lstm_out)
         

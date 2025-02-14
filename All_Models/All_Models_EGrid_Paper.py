@@ -20,6 +20,7 @@ from rotary_embedding_torch import RotaryEmbedding
  
 # Global style settings for plots
 mpl.rcParams.update({
+    'font.family': 'Times New Roman',
     'font.size': 18,          # Global default font size
     'axes.labelsize': 18,     # Axis label font size
     'axes.titlesize': 20,     # Chart title font size
@@ -384,7 +385,7 @@ class EModel_FeatureWeight2(nn.Module):
                  local_attn_window_size = 5
                 ):
         
-        super(EModel_FeatureWeight, self).__init__()
+        super(EModel_FeatureWeight2, self).__init__()
         self.feature_dim = feature_dim
         
         # Feature gating mechanism: fully connected layer + Sigmoid to compute feature weights
@@ -995,7 +996,7 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
         lstm_num_layers   = lstm_num_layers,
         lstm_dropout      = 0.2
     ).to(device)
-    
+
     # Train Model: EModel_FeatureWeight
     print("\n========== Training Model: A ==========")
     histA = train_model(

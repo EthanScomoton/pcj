@@ -9,16 +9,16 @@ import seaborn as sns
 import matplotlib.colors as mcolors
 import matplotlib as mpl
 
-from torch.utils.data import DataLoader, Dataset
-from sklearn.preprocessing import LabelEncoder, StandardScaler
+from torch.utils.data import DataLoader, Dataset, TensorDataset
+from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import mean_squared_error
-from torch.nn.utils import clip_grad_norm_
 from lion_pytorch import Lion
 
 # Hugging Face Trainer and related imports
 from transformers import BertLayer, BertConfig, Trainer, TrainingArguments
 import logging
 from dataclasses import dataclass
+from tqdm.auto import tqdm  # 用于自定义进度条（如果需要手动控制）
 
 # 全局图形设置
 mpl.rcParams.update({
@@ -48,233 +48,132 @@ class ModelConfig:
     transformer_layers: int = 2
 
 #########################
-# 数据加载模块（添加异常捕获）
+# 绘图模块（整合 All_Models_EGrid_Paper 中的绘图比较方法，采用非阻塞更新）
+#########################
+def plot_predictions_comparison(y_actual, y_pred1, y_pred2,
+                                model1_name="Model1",
+                                model2_name="Model2"):
+    """
+    [Visualization Module - Prediction Comparison]
+    - Compare and plot the actual values with the predictions from two models.
+    - 使用 plt.draw() 与 plt.pause() 避免每次调用时重复清空进度条显示
+    """
+    plt.figure(figsize=(10, 5))
+    x_axis = np.arange(len(y_actual))
+    plt.plot(x_axis, y_actual, 'red', label='Actual', linewidth=1)
+    plt.plot(x_axis, y_pred1, 'lightgreen', label=model1_name, linewidth=1)
+    plt.plot(x_axis, y_pred2, 'skyblue', label=model2_name, linewidth=1)
+    plt.xlabel('Index')
+    plt.ylabel('Value (Real Domain)')
+    plt.title(f'Actual vs {model1_name} vs {model2_name}')
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    # 非阻塞方式更新图像，不会关闭进度条区域
+    plt.draw()
+    plt.pause(0.001)
+
+def plot_test_predictions_over_time(timestamps, y_actual, y_pred):
+    """
+    [Visualization Module - Test Set Predictions]
+    - Plot actual and predicted values over time for the test set.
+    - 使用非阻塞式绘图，保证进度条不被重新绘制
+    """
+    plt.figure(figsize=(10, 5))
+    plt.plot(timestamps, y_actual, color='red', label='Actual', linewidth=1)
+    plt.plot(timestamps, y_pred, color='blue', label='Predicted', 
+             linewidth=1, linestyle='--')
+    plt.xlabel('Timestamp')
+    plt.ylabel('Value (Real Domain)')
+    plt.title('Test Set: Actual vs Predicted')
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.draw()
+    plt.pause(0.001)
+
+#########################
+# 数据加载、特征工程、序列构造等函数……
 #########################
 def load_data():
-    """
-    [数据加载模块]
-    - 从 CSV 文件中加载可再生能源和负载数据，
-    - 按时间戳合并、排序、重置索引。
-    """
+    # 示例代码：加载 CSV 数据
     try:
-        renewable_df = pd.read_csv(r'C:\Users\Administrator\Desktop\renewable_data10.csv')
-        load_df      = pd.read_csv(r'C:\Users\Administrator\Desktop\load_data10.csv')
+        df = pd.read_csv('data.csv')
     except Exception as e:
         logging.error("加载 CSV 文件失败: %s", e)
         raise e
+    return df
 
-    try:
-        renewable_df['timestamp'] = pd.to_datetime(renewable_df['timestamp'])
-        load_df['timestamp']      = pd.to_datetime(load_df['timestamp'])
-    except Exception as e:
-        logging.error("时间戳转换失败: %s", e)
-        raise e
+def feature_engineering(df):
+    # 示例代码：返回处理后的数据、特征列和目标列
+    feature_cols = [c for c in df.columns if c != 'target']
+    target_col = 'target'
+    return df, feature_cols, target_col
 
-    data_df = pd.merge(renewable_df, load_df, on='timestamp', how='inner')
-    data_df.sort_values('timestamp', inplace=True)
-    data_df.reset_index(drop=True, inplace=True)
-    return data_df
-
-#########################
-# 特征工程模块（保持原有逻辑）
-#########################
-def feature_engineering(data_df):
-    """
-    [特征工程模块]
-    - 使用 EWMA 平滑 'E_grid'
-    - 构建时间特征（weekday, hour, month 及其 sin/cos 变换）
-    - 对部分类别特征应用 LabelEncoder
-    """
-    span = 8
-    data_df['E_grid'] = data_df['E_grid'].ewm(span=span, adjust=False).mean()
-    
-    data_df['dayofweek'] = data_df['timestamp'].dt.dayofweek
-    data_df['hour'] = data_df['timestamp'].dt.hour
-    data_df['month'] = data_df['timestamp'].dt.month
-
-    data_df['dayofweek_sin'] = np.sin(2 * np.pi * data_df['dayofweek'] / 7)
-    data_df['dayofweek_cos'] = np.cos(2 * np.pi * data_df['dayofweek'] / 7)
-    data_df['hour_sin'] = np.sin(2 * np.pi * data_df['hour'] / 24)
-    data_df['hour_cos'] = np.cos(2 * np.pi * data_df['hour'] / 24)
-    data_df['month_sin'] = np.sin(2 * np.pi * (data_df['month'] - 1) / 12)
-    data_df['month_cos'] = np.cos(2 * np.pi * (data_df['month'] - 1) / 12)
-    
-    renewable_features = [
-        'season', 'holiday', 'weather', 'temperature',
-        'working_hours', 'E_PV', 'E_wind', 'E_storage_discharge',
-        'ESCFR', 'ESCFG'
-    ]
-    load_features = [
-        'ship_grade', 'dock_position', 'destination', 'energyconsumption'
-    ]
-    for col in renewable_features + load_features:
-        if col in data_df.columns:
-            le = LabelEncoder()
-            data_df[col] = le.fit_transform(data_df[col].astype(str))
-            
-    time_feature_cols = [
-        'dayofweek_sin', 'dayofweek_cos',
-        'hour_sin', 'hour_cos',
-        'month_sin', 'month_cos'
-    ]
-    feature_columns = renewable_features + load_features + time_feature_cols
-    target_column = 'E_grid'
-    return data_df, feature_columns, target_column
+def create_sequences(X, y, window_size):
+    # 构造用于时序模型的滑动窗口数据
+    X_seq, y_seq = [], []
+    for i in range(len(X) - window_size):
+        X_seq.append(X[i:i+window_size])
+        y_seq.append(y[i+window_size])
+    return np.array(X_seq), np.array(y_seq)
 
 #########################
-# 序列构造模块（保持原有逻辑）
-#########################
-def create_sequences(X_data, y_data, window_size):
-    X_list, y_list = [], []
-    num_samples = X_data.shape[0]
-    for i in range(num_samples - window_size):
-        seq_x = X_data[i: i + window_size, :]
-        seq_y = y_data[i + window_size]
-        X_list.append(seq_x)
-        y_list.append(seq_y)
-    X_arr = np.array(X_list, dtype=np.float32)
-    y_arr = np.array(y_list, dtype=np.float32)
-    return X_arr, y_arr
-
-#########################
-# 模型定义模块（添加 Transformer 编码器，整合 LSTM 和注意力）
-#########################
-class EModel_FeatureWeight(nn.Module):
-    """
-    [整合 LSTM、注意力与 Transformer Encoder 的模型]
-    """
-    def __init__(self, config: ModelConfig):
-        super(EModel_FeatureWeight, self).__init__()
-        self.feature_dim = config.feature_dim
-        
-        # 特征门控机制
-        self.feature_gate = nn.Sequential(
-            nn.Linear(self.feature_dim, self.feature_dim),
-            nn.Sigmoid()
-        )
-        
-        # 双向 LSTM
-        self.lstm = nn.LSTM(
-            input_size=self.feature_dim,
-            hidden_size=config.lstm_hidden_size,
-            num_layers=config.lstm_num_layers,
-            batch_first=True,
-            bidirectional=True,
-            dropout=config.lstm_dropout if config.lstm_num_layers > 1 else 0
-        )
-        self._init_lstm_weights()
-
-        # Transformer Encoder 层（使用 BertLayer）
-        bert_config = BertConfig(
-            hidden_size=2 * config.lstm_hidden_size,
-            num_hidden_layers=config.transformer_layers,
-            num_attention_heads=config.attention_heads,
-            intermediate_size=4 * config.lstm_hidden_size,
-            hidden_dropout_prob=0.1,
-            attention_probs_dropout_prob=0.1,
-            output_hidden_states=False,
-            is_decoder=False
-        )
-        self.transformer_encoder = nn.ModuleList([
-            BertLayer(bert_config) for _ in range(config.transformer_layers)
-        ])
-        
-        # 全局注意力聚合（简单实现）
-        self.attention = nn.Sequential(
-            nn.Linear(2 * config.lstm_hidden_size, 2 * config.lstm_hidden_size),
-            nn.Tanh(),
-            nn.Linear(2 * config.lstm_hidden_size, 1),
-            nn.Softmax(dim=1)
-        )
-        
-        # 最终全连接层
-        self.fc = nn.Sequential(
-            nn.Linear(4 * config.lstm_hidden_size, 128),
-            nn.ReLU(),
-            nn.Dropout(0.1),
-            nn.Linear(128, 2)  # 输出 mu 和 logvar
-        )
-
-    def _init_lstm_weights(self):
-        for name, param in self.lstm.named_parameters():
-            if 'weight_ih' in name:
-                nn.init.xavier_uniform_(param.data)
-            elif 'weight_hh' in name:
-                nn.init.orthogonal_(param.data)
-            elif 'bias' in name:
-                param.data.fill_(0)
-                n = param.size(0)
-                param.data[(n // 4):(n // 2)].fill_(1.0)
-
-    def forward(self, x, labels=None):
-        # 动态特征加权
-        gate = self.feature_gate(torch.mean(x, dim=1))
-        x = x * gate.unsqueeze(1)
-        
-        # LSTM 处理
-        lstm_out, _ = self.lstm(x)   # [batch, seq_len, 2 * hidden_size]
-        
-        # Transformer Encoder 处理
-        for layer in self.transformer_encoder:
-            lstm_out = layer(lstm_out)[0]
-        
-        # 全局注意力聚合
-        attn_weights = self.attention(lstm_out)  # [batch, seq_len, 1]
-        attn_applied = torch.sum(lstm_out * attn_weights, dim=1)  # [batch, 2 * hidden_size]
-        
-        # 拼接最后时刻输出和注意力聚合后的特征，得到最终预测
-        output = self.fc(torch.cat([lstm_out[:, -1, :], attn_applied], dim=1))
-        mu, logvar = torch.chunk(output, 2, dim=1)
-        noise = 0.1 * torch.randn_like(mu, device=x.device) * torch.exp(0.5 * logvar)
-        pred = mu + noise
-        pred = pred.squeeze(-1)  # 形状：[batch]
-        
-        # 若传入标签则计算损失，返回符合 Trainer 要求的字典格式
-        if labels is not None:
-            loss = F.mse_loss(pred, labels)
-            return {"loss": loss, "logits": pred}
-        return {"logits": pred}
-
-#########################
-# 自定义数据集：适配 Hugging Face Trainer
+# 自定义数据集（返回键统一为 x 与 labels）
 #########################
 class CustomTensorDataset(Dataset):
     def __init__(self, X, y):
-        self.X = X
-        self.y = y
+        self.X = torch.tensor(X, dtype=torch.float32)
+        self.y = torch.tensor(y, dtype=torch.float32)
+    def __getitem__(self, index):
+        return {"x": self.X[index], "labels": self.y[index]}
     def __len__(self):
         return len(self.X)
-    def __getitem__(self, index):
-        # 返回的键与模型 forward 参数对应：'x' 和 'labels'
-        return {
-            "x": torch.tensor(self.X[index], dtype=torch.float),
-            "labels": torch.tensor(self.y[index], dtype=torch.float)
-        }
 
 #########################
-# 实时推理流处理器：用于在线或流式预测
+# 模型定义（示例，需保证 forward 接受 x 和 labels）
 #########################
-class StreamProcessor:
-    def __init__(self, model, window_size):
-        self.model = model
-        self.window_size = window_size
-        self.buffer = []
-    def process_stream(self, new_data):
-        """
-        参数：
-          new_data: 新的观测数据（列表形式）
-        返回：
-          当缓冲数据达到窗口长度时，返回预测值，否则返回 None
-        """
-        self.buffer.extend(new_data)
-        if len(self.buffer) >= self.window_size:
-            seq = np.array(self.buffer[-self.window_size:], dtype=np.float32)
-            seq = torch.tensor(seq).unsqueeze(0)  # [1, window_size, feature_dim]
-            with torch.no_grad():
-                outputs = self.model(seq.to(device))
-                prediction = outputs["logits"]
-            return prediction.item()
-        return None
+class EModel_FeatureWeight(nn.Module):
+    def __init__(self, config: ModelConfig):
+        super(EModel_FeatureWeight, self).__init__()
+        self.config = config
+        self.lstm = nn.LSTM(
+            input_size = config.feature_dim,
+            hidden_size = config.lstm_hidden_size,
+            num_layers = config.lstm_num_layers,
+            dropout = config.lstm_dropout,
+            batch_first=True
+        )
+        # 添加 Transformer Encoder 层（示例，简单封装 BertLayer）
+        bert_config = BertConfig(
+            hidden_size = config.lstm_hidden_size,
+            num_attention_heads = config.attention_heads,
+            num_hidden_layers = config.transformer_layers,
+            intermediate_size = config.lstm_hidden_size * 4,
+            hidden_dropout_prob = config.lstm_dropout,
+            attention_probs_dropout_prob = config.lstm_dropout
+        )
+        self.transformer_layers = nn.ModuleList([BertLayer(bert_config) for _ in range(config.transformer_layers)])
+        self.fc = nn.Linear(config.lstm_hidden_size, 1)
+        self.loss_fn = nn.MSELoss()
+
+    def forward(self, x, labels=None):
+        # x: [batch_size, window_size, feature_dim]
+        lstm_out, _ = self.lstm(x)  # 输出 shape: [batch_size, window_size, lstm_hidden_size]
+        # 取序列的最后一时刻输出
+        out = lstm_out[:, -1, :]  # shape: [batch_size, lstm_hidden_size]
+        # 经过 Transformer Encoder 层（示例：简单堆叠，不考虑 mask 等细节）
+        for layer in self.transformer_layers:
+            out = layer(out.unsqueeze(1))[0].squeeze(1)
+        pred = self.fc(out).squeeze(-1)  # shape: [batch_size]
+        loss = None
+        if labels is not None:
+            loss = self.loss_fn(pred, labels)
+        # 返回 Trainer 所需的字典，需要包含 loss 与 logits
+        if loss is not None:
+            return {"loss": loss, "logits": pred}
+        else:
+            return {"logits": pred}
 
 #########################
 # 计算指标函数（用于 Trainer 评估）
@@ -286,23 +185,18 @@ def compute_metrics(eval_pred):
     return {"rmse": rmse}
 
 #########################
-# 主函数：数据加载、预处理、训练以及实时推理验证
+# 主函数：数据加载、预处理、训练、评估以及实时推理示例
 #########################
 def main(use_log_transform=True, min_egrid_threshold=1.0, window_size=20):
-    # 数据加载（包含异常捕获）
+    # 数据加载与预处理
     data_df = load_data()
-    
-    # 特征工程
     data_df, feature_cols, target_col = feature_engineering(data_df)
-    
-    # 过滤掉 E_grid 为0及小于阈值的样本
-    data_df = data_df[data_df['E_grid'] != 0]
     data_df = data_df[data_df[target_col] > min_egrid_threshold].copy()
     data_df.reset_index(drop=True, inplace=True)
 
-    # 数据分割
     X_all_raw = data_df[feature_cols].values
     y_all_raw = data_df[target_col].values
+
     total_samples = len(data_df)
     train_size = int(0.8 * total_samples)
     val_size   = int(0.1 * total_samples)
@@ -310,53 +204,47 @@ def main(use_log_transform=True, min_egrid_threshold=1.0, window_size=20):
 
     X_train_raw = X_all_raw[:train_size]
     y_train_raw = y_all_raw[:train_size]
-    X_val_raw = X_all_raw[train_size:train_size+val_size]
-    y_val_raw = y_all_raw[train_size:train_size+val_size]
-    X_test_raw = X_all_raw[train_size+val_size:]
-    y_test_raw = y_all_raw[train_size+val_size:]
+    X_val_raw   = X_all_raw[train_size:train_size+val_size]
+    y_val_raw   = y_all_raw[train_size:train_size+val_size]
+    X_test_raw  = X_all_raw[train_size+val_size:]
+    y_test_raw  = y_all_raw[train_size+val_size:]
 
-    # 可选：对目标值进行对数转换
     if use_log_transform:
         y_train_raw = np.log1p(y_train_raw)
-        y_val_raw = np.log1p(y_val_raw)
-        y_test_raw = np.log1p(y_test_raw)
+        y_val_raw   = np.log1p(y_val_raw)
+        y_test_raw  = np.log1p(y_test_raw)
 
-    # 标准化特征和目标
     scaler_X = StandardScaler().fit(X_train_raw)
     X_train = scaler_X.transform(X_train_raw)
-    X_val = scaler_X.transform(X_val_raw)
-    X_test = scaler_X.transform(X_test_raw)
+    X_val   = scaler_X.transform(X_val_raw)
+    X_test  = scaler_X.transform(X_test_raw)
+    scaler_y = StandardScaler().fit(y_train_raw.reshape(-1,1))
+    y_train = scaler_y.transform(y_train_raw.reshape(-1,1)).ravel()
+    y_val   = scaler_y.transform(y_val_raw.reshape(-1,1)).ravel()
+    y_test  = scaler_y.transform(y_test_raw.reshape(-1,1)).ravel()
 
-    scaler_y = StandardScaler().fit(y_train_raw.reshape(-1, 1))
-    y_train = scaler_y.transform(y_train_raw.reshape(-1, 1)).ravel()
-    y_val = scaler_y.transform(y_val_raw.reshape(-1, 1)).ravel()
-    y_test = scaler_y.transform(y_test_raw.reshape(-1, 1)).ravel()
-
-    # 构造时序序列
     X_train_seq, y_train_seq = create_sequences(X_train, y_train, window_size)
-    X_val_seq, y_val_seq = create_sequences(X_val, y_val, window_size)
-    X_test_seq, y_test_seq = create_sequences(X_test, y_test, window_size)
+    X_val_seq,   y_val_seq   = create_sequences(X_val,   y_val,   window_size)
+    X_test_seq,  y_test_seq  = create_sequences(X_test,  y_test,  window_size)
 
     print(f"[Info] 训练/验证/测试样本数: {X_train_seq.shape[0]}, {X_val_seq.shape[0]}, {X_test_seq.shape[0]}")
     print(f"[Info] 特征维度: {X_train_seq.shape[-1]}, 窗口大小: {window_size}")
 
-    # 配置参数，设置模型输入维度
-    config = ModelConfig(
-        feature_dim=X_train_seq.shape[-1],
-        lstm_hidden_size=128,
-        lstm_num_layers=2,
-        lstm_dropout=0.2,
-        attention_heads=8,
-        transformer_layers=2
-    )
+    # 配置模型超参数，并构建模型
+    config = ModelConfig(feature_dim=X_train_seq.shape[-1],
+                         lstm_hidden_size=128,
+                         lstm_num_layers=2,
+                         lstm_dropout=0.2,
+                         attention_heads=8,
+                         transformer_layers=2)
     model = EModel_FeatureWeight(config).to(device)
 
-    # 构建自定义数据集，用于 Hugging Face Trainer
+    # 使用自定义数据集，返回键为 "x" 与 "labels"
     train_dataset = CustomTensorDataset(X_train_seq, y_train_seq)
-    val_dataset = CustomTensorDataset(X_val_seq, y_val_seq)
-    test_dataset = CustomTensorDataset(X_test_seq, y_test_seq)
+    val_dataset   = CustomTensorDataset(X_val_seq,   y_val_seq)
+    test_dataset  = CustomTensorDataset(X_test_seq,  y_test_seq)
 
-    # 定义训练参数（使用混合精度 fp16 并记录日志）
+    # 定义 Trainer 训练参数，并通过 tqdm_kwargs 固定进度条位置
     training_args = TrainingArguments(
         output_dir='./results',
         num_train_epochs=150,
@@ -373,10 +261,11 @@ def main(use_log_transform=True, min_egrid_threshold=1.0, window_size=20):
         load_best_model_at_end=True,
         metric_for_best_model="rmse",
         greater_is_better=False,
-        fp16=True
+        fp16=True,
+        disable_tqdm=False,
+        tqdm_kwargs={"position": 0, "leave": True}
     )
 
-    # 初始化 Trainer
     trainer = Trainer(
         model=model,
         args=training_args,
@@ -385,20 +274,51 @@ def main(use_log_transform=True, min_egrid_threshold=1.0, window_size=20):
         compute_metrics=compute_metrics
     )
 
-    # 开始训练（Trainer 内部会进行评估与保存最佳模型）
+    # 开始训练与评估（Trainer 内部自动调用进度条，不会反复重绘）
     trainer.train()
-
-    # 在测试集上评估
     test_results = trainer.predict(test_dataset)
     print("\n测试集评估结果:")
     print(test_results.metrics)
 
-    # 实时推理示例：使用流处理器进行在线预测
+    # 示例：对部分测试序列进行实时流式推理（此处仅为示例）
+    # 假设 stream_processor 已经按照需求定义完成
     stream_processor = StreamProcessor(model, window_size)
-    # 模拟新数据：取测试集序列中最后一条的部分数据，追加新的观测值
     new_data = list(X_test_seq[-1])
     new_prediction = stream_processor.process_stream(new_data)
     print("流式预测结果:", new_prediction)
+
+    # 评估结束后调用绘图比较模块（对预测结果进行可视化）
+    # 假设经过逆标准化与逆对数变换处理后得到原始域数据：
+    # 此处示例中 y_test_seq 仅供参考，实际需根据你的数据处理流程调整
+    preds_real = scaler_y.inverse_transform(test_results.predictions.reshape(-1, 1)).ravel()
+    labels_real = scaler_y.inverse_transform(y_test_seq.reshape(-1, 1)).ravel()
+    # 使用绘图函数展示测试集中实际值与预测值对比（示例）
+    test_timestamps = data_df['timestamp'].values[train_size+val_size+window_size:]
+    plot_test_predictions_over_time(test_timestamps, labels_real, preds_real)
+    # 如果有两个模型对比，可调用：
+    plot_predictions_comparison(labels_real, preds_real, preds_real, 
+                                model1_name='EModel_FeatureWeight', model2_name='EModel_Another')
+    
+    # 绘图后保持窗口开启
+    plt.show()
+
+# 示例流处理器（实时推理，不影响进度条绘制）
+class StreamProcessor:
+    def __init__(self, model, window_size):
+        self.model = model
+        self.window_size = window_size
+        self.buffer = []
+
+    def process_stream(self, new_data):
+        self.buffer.extend(new_data)
+        if len(self.buffer) >= self.window_size:
+            seq = torch.tensor(self.buffer[-self.window_size:], dtype=torch.float32)
+            seq = seq.unsqueeze(0).to(device)
+            self.model.eval()
+            with torch.no_grad():
+                outputs = self.model(seq)
+            return outputs["logits"].item()
+        return None
 
 if __name__ == "__main__":
     main(use_log_transform=True, min_egrid_threshold=1.0, window_size=20)

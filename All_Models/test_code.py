@@ -239,8 +239,11 @@ class CustomTensorDataset(Dataset):
     def __len__(self):
         return len(self.X)
     def __getitem__(self, index):
-        return {"input_values": torch.tensor(self.X[index], dtype=torch.float),
-                "labels": torch.tensor(self.y[index], dtype=torch.float)}
+        # 注意这里将键 'input_values' 修改为 'x'
+        return {
+            "x": torch.tensor(self.X[index], dtype=torch.float),
+            "labels": torch.tensor(self.y[index], dtype=torch.float)
+        }
 
 #########################
 # 实时推理流处理器：用于在线或流式预测

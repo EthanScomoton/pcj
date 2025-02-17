@@ -447,7 +447,7 @@ class EModel_FeatureWeight2(nn.Module):
         return output.squeeze(-1)
 
 # 5. Evaluation Module
-def evaluate(model, dataloader, criterion, device = 'cuda'):
+def evaluate(model, dataloader, criterion, device = device):
     """
     [Evaluation Module]
     - Compute loss and multiple metrics (RMSE, MAPE, R², SMAPE, MAE) on the given dataset.
@@ -455,7 +455,6 @@ def evaluate(model, dataloader, criterion, device = 'cuda'):
       model: Model to evaluate
       dataloader: DataLoader for the dataset
       criterion: Loss function
-      device: Device to use (default: 'cuda')
     Returns:
       val_loss, rmse, mape, r2, smape, mae, preds, labels
     """

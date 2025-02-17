@@ -12,10 +12,10 @@ edge_indices = None
 energy_matrix = None
 start_point = 1
 
-load_data_path = "/Users/ethan/Desktop/load_data10.csv"
+load_data_path = "/Users/ethanzhu/Desktop/load_data10.csv"
 load_data_df = pd.read_csv(load_data_path)
 
-renewable_data_path = "/Users/ethan/Desktop/renewable_data10.csv"
+renewable_data_path = "/Users/ethanzhu/Desktop/renewable_data10.csv"
 renewable_data_df = pd.read_csv(renewable_data_path)
 
 def calculate_total_energy(input_row):
@@ -526,6 +526,6 @@ for idx, row in load_data_df.iterrows():
     })
 
 output_df = pd.DataFrame(results)
-output_path = "/Users/ethan/Desktop/output_power.csv"
+output_path = "/Users/ethanzhu/Desktop/output_power.csv"
 output_df.to_csv(output_path, index=False)
 print(f"已将结果保存到 {output_path}")

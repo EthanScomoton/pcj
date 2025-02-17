@@ -90,7 +90,7 @@ def feature_engineering(data_df):
     renewable_features = [
         'season', 'holiday', 'weather', 'temperature',
         'working_hours', 'E_PV', 'E_wind', 'E_storage_discharge',
-        'ESCFR', 'ESCFG'
+        'ESCFR', 'ESCFG','vw','wd'
     ]
     load_features = [
         'ship_grade', 'dock_position', 'destination', 'energyconsumption'

@@ -350,10 +350,14 @@ def calculate_total_energy(input_row):
     E_solar = P_solar * dt
 
     # ====== 风能计算（先按原逻辑得到 P_wind, E_wind）======
-    k_weibull = 2
-    c_weibull = 8
+    k_weibull = 2  # 形状参数
+    c_weibull = 8  # 平均风速
     np.random.seed(1)
     v_wind = weibull_min.rvs(k_weibull, scale=c_weibull, size=len(t))
+    # 添加风向信息，假设风向均匀分布在0到360度之间
+    wind_direction = np.random.uniform(0, 360, size=len(t))
+    optimal_wind_direction = 180  # 假设最佳风向为180度
+
     v_in = 5
     v_rated = 8
     v_out = 12
@@ -363,17 +367,28 @@ def calculate_total_energy(input_row):
 
     for i in range(len(v_wind)):
         v = v_wind[i]
+        # 计算当前步长的风向影响因子
+        current_dir = wind_direction[i]
+        angle_diff = abs(current_dir - optimal_wind_direction)
+        if angle_diff > 180:
+            angle_diff = 360 - angle_diff  # 考虑360度周期性
+        wind_factor = np.cos(np.deg2rad(angle_diff))
+        wind_factor = max(wind_factor, 0)  # 避免余弦为负，风向不利时功率降为0
+
         if v < v_in or v >= v_out:
-            P_wind[i] = 0
+            power = 0
         elif v_in <= v < v_rated:
-            P_wind[i] = P_wind_rated * ((v - v_in) / (v_rated - v_in)) ** 3
+            power = P_wind_rated * ((v - v_in) / (v_rated - v_in)) ** 3
         else:
-            P_wind[i] = P_wind_rated
+            power = P_wind_rated
+
+        # 将计算出的风速功率乘以风向影响因子
+        P_wind[i] = power * wind_factor
 
     P_wind *= N_wind_turbine
     E_wind = P_wind * dt
 
-    # =============== 根据 holiday/weather 置零 ===============
+        # =============== 根据 holiday/weather 置零 ===============
     if holiday_value == 'yes':
         # 节假日 -> 所有可再生能源都置 0
         P_solar = np.zeros_like(P_solar)
@@ -472,13 +487,18 @@ def calculate_total_energy(input_row):
     E_storage_charge_from_renewable_total = E_storage_charge_from_renewable.sum()
     E_storage_charge_from_grid_total = E_storage_charge_from_grid.sum()
 
+    avg_v_wind = np.mean(v_wind)
+    avg_wind_direction = np.mean(wind_direction)
+
     return (T_end,
             total_pv_supply_total,
             total_wind_supply_total,
             E_storage_discharge_total,
             E_grid_supply_total,
             E_storage_charge_from_renewable_total,
-            E_storage_charge_from_grid_total)
+            E_storage_charge_from_grid_total,
+            avg_v_wind,
+            avg_wind_direction)
 
 # ====== 主循环，对 load_data_df 逐行计算结果 ======
 results = []
@@ -489,7 +509,9 @@ for idx, row in load_data_df.iterrows():
      E_storage_discharge_total,
      E_grid_supply_total,
      E_storage_charge_from_renewable_total,
-     E_storage_charge_from_grid_total) = calculate_total_energy(row)
+     E_storage_charge_from_grid_total,
+     avg_v_wind,
+     avg_wind_direction) = calculate_total_energy(row)
 
     results.append({
         "T_end": T_end,
@@ -498,7 +520,9 @@ for idx, row in load_data_df.iterrows():
         "E_storage_discharge_total": E_storage_discharge_total,
         "E_grid_supply_total": E_grid_supply_total,
         "E_storage_charge_from_renewable_total": E_storage_charge_from_renewable_total,
-        "E_storage_charge_from_grid_total": E_storage_charge_from_grid_total
+        "E_storage_charge_from_grid_total": E_storage_charge_from_grid_total,
+        "avg_v_wind": avg_v_wind,
+        "avg_wind_direction": avg_wind_direction
     })
 
 output_df = pd.DataFrame(results)

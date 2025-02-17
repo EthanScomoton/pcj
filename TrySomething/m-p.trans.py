@@ -366,6 +366,10 @@ k_weibull = 2  # 形状参数
 c_weibull = 8  # 平均风速
 np.random.seed(1)
 v_wind = weibull_min.rvs(k_weibull, scale=c_weibull, size=len(t))
+# 添加风向信息，假设风向均匀分布在0到360度之间
+wind_direction = np.random.uniform(0, 360, size=len(t))
+optimal_wind_direction = 180  # 假设最佳风向为180度
+
 v_in = 5
 v_rated = 8
 v_out = 12
@@ -375,12 +379,25 @@ P_wind = np.zeros_like(t)
 
 for i in range(len(v_wind)):
     v = v_wind[i]
+    # 计算当前步长的风向影响因子
+    current_dir = wind_direction[i]
+    angle_diff = abs(current_dir - optimal_wind_direction)
+    if angle_diff > 180:
+        angle_diff = 360 - angle_diff  # 考虑360度周期性
+    wind_factor = np.cos(np.deg2rad(angle_diff))
+    wind_factor = max(wind_factor, 0)  # 避免余弦为负，风向不利时功率降为0
+
     if v < v_in or v >= v_out:
-        P_wind[i] = 0
+        power = 0
     elif v_in <= v < v_rated:
-        P_wind[i] = P_wind_rated * ((v - v_in) / (v_rated - v_in)) ** 3
+        power = P_wind_rated * ((v - v_in) / (v_rated - v_in)) ** 3
     else:
-        P_wind[i] = P_wind_rated
+        power = P_wind_rated
+
+    # 将计算出的风速功率乘以风向影响因子
+    P_wind[i] = power * wind_factor
+
+P_wind *= N_wind_turbine
 
 P_wind *= N_wind_turbine
 E_wind = P_wind * dt

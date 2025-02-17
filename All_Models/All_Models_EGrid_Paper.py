@@ -641,14 +641,13 @@ def train_model(model, train_loader, val_loader, model_name = 'Model', learning_
 
 
 # 7. Visualization and Helper Functions
-def plot_correlation_heatmap(df, feature_cols, title = "Heat map"):
+def plot_correlation_heatmap(df, feature_cols):
     """
     [Visualization Module - Correlation Heatmap]
     - Plot the correlation heatmap for the specified feature columns.
     Parameters:
       df: Dataset
       feature_cols: List of feature columns
-      title: Plot title (default: "Heat map")
     """
     df_encoded = df.copy()
     for col in feature_cols:
@@ -673,7 +672,6 @@ def plot_correlation_heatmap(df, feature_cols, title = "Heat map"):
         vmin       = -1,
         vmax       = 1
     )
-    plt.title(title, fontsize = 16)
     plt.xticks(rotation = 45, ha = 'right')
     plt.tight_layout()
     plt.show()

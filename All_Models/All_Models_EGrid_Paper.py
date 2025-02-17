@@ -90,7 +90,7 @@ def feature_engineering(data_df):
     renewable_features = [
         'season', 'holiday', 'weather', 'temperature',
         'working_hours', 'E_PV', 'E_wind', 'E_storage_discharge',
-        'ESCFR', 'ESCFG','vw','wd'
+        'ESCFR', 'ESCFG','v_wind', 'wind_direction'
     ]
     load_features = [
         'ship_grade', 'dock_position', 'destination', 'energyconsumption'
@@ -867,9 +867,9 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     data_df = load_data()
 
     # Plot correlation heatmap (before filtering E_grid = 0)
-    feature_cols_to_plot = ['season', 'holiday', 'weather', 'temperature', 'working_hours', 'E_grid', 'E_wind','E_PV','vw', 'wd']
+    feature_cols_to_plot = ['season', 'holiday', 'weather', 'temperature', 'working_hours', 'E_grid', 'E_wind','E_PV','v_wind', 'wind_direction']
     feature_cols_to_plot = [c for c in feature_cols_to_plot if c in data_df.columns] 
-    plot_correlation_heatmap(data_df, feature_cols_to_plot, title = "Heat map")
+    plot_correlation_heatmap(data_df, feature_cols_to_plot)
 
     # Filter out rows with E_grid = 0
     data_df = data_df[data_df['E_grid'] != 0].copy()

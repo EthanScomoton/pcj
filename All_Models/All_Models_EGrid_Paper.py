@@ -867,8 +867,8 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     data_df = load_data()
 
     # Plot correlation heatmap (before filtering E_grid = 0)
-    feature_cols_to_plot = ['season', 'holiday', 'weather', 'temperature', 'working_hours', 'E_grid']
-    feature_cols_to_plot = [c for c in feature_cols_to_plot if c in data_df.columns]
+    feature_cols_to_plot = ['season', 'holiday', 'weather', 'temperature', 'working_hours', 'E_grid', 'E_wind','E_PV','vw', 'wd']
+    feature_cols_to_plot = [c for c in feature_cols_to_plot if c in data_df.columns] 
     plot_correlation_heatmap(data_df, feature_cols_to_plot, title = "Heat map")
 
     # Filter out rows with E_grid = 0

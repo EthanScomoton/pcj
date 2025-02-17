@@ -206,28 +206,34 @@ class EModel_FeatureWeight(nn.Module):
                 n = param.size(0)
                 param.data[(n // 4):(n // 2)].fill_(1.0)
 
-    def forward(self, x):
+    def forward(self, x, labels=None):
         # 动态特征加权
         gate = self.feature_gate(torch.mean(x, dim=1))
         x = x * gate.unsqueeze(1)
         
         # LSTM 处理
-        lstm_out, _ = self.lstm(x)   # 输出 shape: [batch, seq_len, 2 * hidden_size]
+        lstm_out, _ = self.lstm(x)   # [batch, seq_len, 2 * hidden_size]
         
         # Transformer Encoder 处理
         for layer in self.transformer_encoder:
             lstm_out = layer(lstm_out)[0]
         
         # 全局注意力聚合
-        attn_weights = self.attention(lstm_out)  # shape: [batch, seq_len, 1]
-        attn_applied = torch.sum(lstm_out * attn_weights, dim=1)  # shape: [batch, 2 * hidden_size]
+        attn_weights = self.attention(lstm_out)  # [batch, seq_len, 1]
+        attn_applied = torch.sum(lstm_out * attn_weights, dim=1)  # [batch, 2 * hidden_size]
         
         # 拼接最后时刻输出和注意力聚合后的特征，得到最终预测
         output = self.fc(torch.cat([lstm_out[:, -1, :], attn_applied], dim=1))
         mu, logvar = torch.chunk(output, 2, dim=1)
         noise = 0.1 * torch.randn_like(mu, device=x.device) * torch.exp(0.5 * logvar)
         pred = mu + noise
-        return pred.squeeze(-1)
+        pred = pred.squeeze(-1)  # 形状：[batch]
+        
+        # 若传入标签则计算损失，返回符合 Trainer 要求的字典格式
+        if labels is not None:
+            loss = F.mse_loss(pred, labels)
+            return {"loss": loss, "logits": pred}
+        return {"logits": pred}
 
 #########################
 # 自定义数据集：适配 Hugging Face Trainer
@@ -239,7 +245,7 @@ class CustomTensorDataset(Dataset):
     def __len__(self):
         return len(self.X)
     def __getitem__(self, index):
-        # 注意这里将键 'input_values' 修改为 'x'
+        # 返回的键与模型 forward 参数对应：'x' 和 'labels'
         return {
             "x": torch.tensor(self.X[index], dtype=torch.float),
             "labels": torch.tensor(self.y[index], dtype=torch.float)
@@ -265,7 +271,8 @@ class StreamProcessor:
             seq = np.array(self.buffer[-self.window_size:], dtype=np.float32)
             seq = torch.tensor(seq).unsqueeze(0)  # [1, window_size, feature_dim]
             with torch.no_grad():
-                prediction = self.model(seq.to(device))
+                outputs = self.model(seq.to(device))
+                prediction = outputs["logits"]
             return prediction.item()
         return None
 

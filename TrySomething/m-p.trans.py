@@ -1,6 +1,7 @@
 import numpy as np
 import heapq
 import matplotlib.pyplot as plt
+import matplotlib as mpl
 from scipy.stats import weibull_min
 
 
@@ -9,6 +10,15 @@ latitude = None
 day_of_year = None
 edge_indices = None
 energy_matrix = None
+
+mpl.rcParams.update({
+    'font.family': 'Times New Roman',
+    'font.size': 22,          # Global default font size
+    'axes.labelsize': 22,     # Axis label font size
+    'axes.titlesize': 24,     # Chart title font size
+    'xtick.labelsize': 20,    # x-axis tick label size
+    'ytick.labelsize': 20     # y-axis tick label size
+})
 
 # 获取用户输入
 start_point = 1

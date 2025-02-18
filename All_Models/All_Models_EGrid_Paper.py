@@ -350,9 +350,9 @@ class EModel_FeatureWeight2(nn.Module):
 
         # 增强特征门控机制
         self.feature_gate = nn.Sequential(
-            nn.Linear(feature_dim, feature_dim*2),
+            nn.Linear(window_size, window_size*2),
             nn.GELU(),
-            nn.Linear(feature_dim*2, feature_dim),
+            nn.Linear(window_size*2, 1),
             nn.Sigmoid()
         )
         
@@ -401,7 +401,7 @@ class EModel_FeatureWeight2(nn.Module):
         
         # 增强全连接层
         self.fc = nn.Sequential(
-            nn.Linear(proj_dim * 2, 256),  # 调整输入维度
+            nn.Linear(2 * lstm_hidden_size + proj_dim, 256),  # 正确拼接后的维度
             nn.LayerNorm(256),
             nn.GELU(),
             nn.Dropout(0.2),

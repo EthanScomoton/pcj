@@ -336,45 +336,59 @@ class EModel_FeatureWeight2(nn.Module):
     """
     def __init__(self, 
                  feature_dim, 
-                 lstm_hidden_size = 128, 
-                 lstm_num_layers = 2, 
+                 lstm_hidden_size = 256, 
+                 lstm_num_layers = 3, 
                  lstm_dropout = 0.1,
                  use_local_attn = False,
-                 local_attn_window_size = 5
+                 local_attn_window_size = 5,
+                 proj_dim = 512           # 新增投影维度参数
                 ):
+        
         super(EModel_FeatureWeight2, self).__init__()
         self.feature_dim = feature_dim
         self.use_local_attn = use_local_attn  # 保存该标识
 
-        # Feature gating mechanism
+        # 增强特征门控机制
         self.feature_gate = nn.Sequential(
-            nn.Linear(feature_dim, feature_dim),
+            nn.Linear(feature_dim, feature_dim*2),
+            nn.GELU(),
+            nn.Linear(feature_dim*2, feature_dim),
             nn.Sigmoid()
         )
         
-        # Temporal attention
+        # 改进的局部注意力机制
         if use_local_attn:
             from local_attention.local_attention import LocalAttention
             self.temporal_attn = LocalAttention(
                 dim = 2 * lstm_hidden_size,
-                window_size = local_attn_window_size,  # 使用正确的参数名
-                causal = False
+                window_size = local_attn_window_size,
+                causal = False,
+                dropout = 0.1,
+                prenorm = True
             )
         else:
             self.temporal_attn = Attention(input_dim = 2 * lstm_hidden_size)
         
-        # Feature attention layer
+        # 增强特征注意力层
         self.feature_attn = nn.Sequential(
-            nn.Linear(window_size, 1),
+            nn.Linear(window_size, window_size*2),
+            nn.GELU(),
+            nn.Linear(window_size*2, 1),
             nn.Sigmoid()
         )
-        # Feature projection layer
-        self.feature_proj = nn.Linear(2 * lstm_hidden_size, 2 * lstm_hidden_size)
         
-        # Learnable feature importance weights
-        self.feature_importance = nn.Parameter(torch.ones(feature_dim), requires_grad = True)
+        # 增强特征投影层
+        self.feature_proj = nn.Sequential(
+            nn.Linear(2 * lstm_hidden_size, proj_dim),
+            nn.LayerNorm(proj_dim),
+            nn.GELU(),
+            nn.Dropout(0.1)
+        )
         
-        # Bidirectional LSTM
+        # 可学习的特征重要性权重（增加初始化范围）
+        self.feature_importance = nn.Parameter(torch.rand(feature_dim)*2-1, requires_grad=True)
+        
+        # 增强LSTM配置
         self.lstm = nn.LSTM(
             input_size    = feature_dim,
             hidden_size   = lstm_hidden_size,
@@ -385,7 +399,18 @@ class EModel_FeatureWeight2(nn.Module):
         )
         self._init_lstm_weights()
         
-        self.attention = Attention(input_dim = 2 * lstm_hidden_size)
+        # 增强全连接层
+        self.fc = nn.Sequential(
+            nn.Linear(proj_dim * 2, 256),  # 调整输入维度
+            nn.LayerNorm(256),
+            nn.GELU(),
+            nn.Dropout(0.2),
+            nn.Linear(256, 128),
+            nn.LayerNorm(128),
+            nn.GELU(),
+            nn.Dropout(0.1),
+            nn.Linear(128, 2)
+        )
         
         # Fully connected layer for final prediction
         self.fc = nn.Sequential(

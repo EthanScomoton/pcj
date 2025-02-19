@@ -601,9 +601,8 @@ class EModel_FeatureWeight4(nn.Module):
         from local_attention.local_attention import LocalAttention
         self.temporal_attn = LocalAttention(
             dim = 2 * lstm_hidden_size,
-            window_size = local_attn_window_size,
-            causal = False,
-            use_cuda_na = True  # 启用CUDA原生实现
+            window_size = local_attn_window_size,   # 使用正确的参数名
+            causal = False
         )
 
 

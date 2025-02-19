@@ -1125,9 +1125,9 @@ def plot_predictions_comparison(y_actual_real, predictions_dict, colors=None):
     """
     plt.figure(figsize = (14, 6))
     x_axis = np.arange(len(y_actual_real))
-    plt.plot(x_axis, y_actual_real, 'r-', label='Actual', linewidth=2, alpha=0.8)
+    plt.plot(x_axis, y_actual_real, 'black', label='Actual', linewidth=2, alpha=0.8)
 
-    colors = ['blue', 'green', 'orange', 'purple', 'brown']
+    colors = ['lightblue', 'lightgreen', 'lightsalmon', 'thistle', 'wheat']
     for (model_name, pred_values), color in zip(predictions_dict.items(), colors):
         plt.plot(x_axis, pred_values, color=color, label=model_name, linewidth=1.5, linestyle='--', alpha=0.9)
     plt.xlabel('Index')

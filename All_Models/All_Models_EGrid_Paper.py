@@ -1432,28 +1432,28 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
         lstm_hidden_size  = 128, 
         lstm_num_layers   = 2
     ).to(device)
-    best_model1.load_state_dict(torch.load('best_EModel_FeatureWeight.pth', map_location=device, weights_only=True), strict=False)
+    best_model1.load_state_dict(torch.load('best_EModel_FeatureWeight1.pth', map_location=device, weights_only=True), strict=False)
 
     best_model2 = EModel_FeatureWeight2(
         feature_dim       = feature_dim,
         lstm_hidden_size  = 128, 
         lstm_num_layers   = 2
     ).to(device)
-    best_model2.load_state_dict(torch.load('best_EModel_FeatureWeight.pth', map_location=device, weights_only=True), strict=False)
+    best_model2.load_state_dict(torch.load('best_EModel_FeatureWeight2.pth', map_location=device, weights_only=True), strict=False)
 
     best_model3 = EModel_FeatureWeight3(
         feature_dim       = feature_dim,
         lstm_hidden_size  = 256, 
         lstm_num_layers   = 2
     ).to(device)
-    best_model3.load_state_dict(torch.load('best_EModel_FeatureWeight.pth', map_location=device, weights_only=True), strict=False)
+    best_model3.load_state_dict(torch.load('best_EModel_FeatureWeight3.pth', map_location=device, weights_only=True), strict=False)
     
     best_model4 = EModel_FeatureWeight4(
         feature_dim       = feature_dim,
         lstm_hidden_size  = 256, 
         lstm_num_layers   = 3
     ).to(device)
-    best_model4.load_state_dict(torch.load('best_EModel_FeatureWeight.pth', map_location=device, weights_only=True), strict=False)
+    best_model4.load_state_dict(torch.load('best_EModel_FeatureWeight4.pth', map_location=device, weights_only=True), strict=False)
 
     best_model5 = EModel_FeatureWeight5(
         feature_dim       = feature_dim,

@@ -34,8 +34,6 @@ weight_decay      = 3e-4   # Weight decay
 patience          = 10     # Patience for early stopping
 num_workers       = 0      # Number of worker threads
 window_size       = 20     # Sequence window size
-lstm_hidden_size  = 128    # LSTM hidden size
-lstm_num_layers   = 2      # Number of LSTM layers
 
 # Set random seed and device
 torch.manual_seed(42)       # Random seed = 42
@@ -958,16 +956,16 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     feature_dim = X_train_seq.shape[-1]
     modelA = EModel_FeatureWeight(
         feature_dim       = feature_dim,
-        lstm_hidden_size  = lstm_hidden_size, 
-        lstm_num_layers   = lstm_num_layers,
+        lstm_hidden_size  = 128, 
+        lstm_num_layers   = 2,
         lstm_dropout      = 0.2
     ).to(device)
     
     modelB = EModel_FeatureWeight2(
         feature_dim       = feature_dim,
-        lstm_hidden_size  = lstm_hidden_size, 
-        lstm_num_layers   = lstm_num_layers,
-        lstm_dropout      = 0.2
+        lstm_hidden_size  = 256, 
+        lstm_num_layers   = 3,
+        lstm_dropout      = 0.1
     ).to(device)
 
     # Train Model: EModel_FeatureWeight
@@ -994,12 +992,20 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
         num_epochs    = num_epochs
     )
 
-    # Load best weights
-    best_modelA = EModel_FeatureWeight(feature_dim).to(device)
-    best_modelA.load_state_dict(torch.load('best_EModel_FeatureWeight.pth'))
+    # 修改加载模型部分的代码
+    best_modelA = EModel_FeatureWeight(
+        feature_dim       = feature_dim,
+        lstm_hidden_size  = 128, 
+        lstm_num_layers   = 2
+    ).to(device)
+    best_modelA.load_state_dict(torch.load('best_EModel_FeatureWeight.pth', map_location=device, weights_only=True))
 
-    best_modelB = EModel_FeatureWeight2(feature_dim).to(device)
-    best_modelB.load_state_dict(torch.load('best_EModel_FeatureWeight2.pth'))
+    best_modelB = EModel_FeatureWeight2(
+        feature_dim       = feature_dim,
+        lstm_hidden_size  = 256, 
+        lstm_num_layers   = 3
+    ).to(device)
+    best_modelB.load_state_dict(torch.load('best_EModel_FeatureWeight2.pth', map_location=device, weights_only=True))
 
     # Evaluate on test set (standardized domain)
     criterion_test = nn.SmoothL1Loss(beta = 1.0)

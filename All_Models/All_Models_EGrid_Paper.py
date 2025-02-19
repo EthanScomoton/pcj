@@ -352,7 +352,7 @@ class EModel_FeatureWeight2(nn.Module):
         self.feature_gate = nn.Sequential(
             nn.Linear(feature_dim, feature_dim*2),
             nn.GELU(),
-            nn.Linear(window_size*2, 1),
+            nn.Linear(feature_dim*2, 1),
             nn.Sigmoid()
         )
         

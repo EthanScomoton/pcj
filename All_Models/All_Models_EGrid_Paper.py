@@ -194,7 +194,7 @@ class Attention(nn.Module):
         weighted = x * attn_weights            # Element-wise weighting
         return torch.sum(weighted, dim = 1)    # Aggregate to shape [batch_size, input_dim]
 
-class EModel_FeatureWeight(nn.Module):
+class EModel_FeatureWeight1(nn.Module):
     """
     [Model 1: LSTM-based Model with Feature Weighting]
     Parameters:
@@ -213,7 +213,7 @@ class EModel_FeatureWeight(nn.Module):
                  use_local_attn = False,
                  local_attn_window_size = 5
                 ):
-        super(EModel_FeatureWeight, self).__init__()
+        super(EModel_FeatureWeight1, self).__init__()
         self.feature_dim = feature_dim
         self.use_local_attn = use_local_attn  # 保存是否使用局部注意力的标识
         
@@ -1335,28 +1335,28 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
 
     # Build models
     feature_dim = X_train_seq.shape[-1]
-    model1 = EModel_FeatureWeight(
+    model1 = EModel_FeatureWeight1(
         feature_dim       = feature_dim,
         lstm_hidden_size  = 128, 
         lstm_num_layers   = 2,
         lstm_dropout      = 0.2
     ).to(device)
     
-    model2 = EModel_FeatureWeight(
+    model2 = EModel_FeatureWeight2(
         feature_dim       = feature_dim,
         lstm_hidden_size  = 128, 
         lstm_num_layers   = 2,
         lstm_dropout      = 0.2
     ).to(device)
 
-    model3 = EModel_FeatureWeight(
+    model3 = EModel_FeatureWeight3(
         feature_dim       = feature_dim,
         lstm_hidden_size  = 256, 
         lstm_num_layers   = 2,
         lstm_dropout      = 0.2
     ).to(device)
 
-    model4 = EModel_FeatureWeight(
+    model4 = EModel_FeatureWeight4(
         feature_dim       = feature_dim,
         lstm_hidden_size  = 256, 
         lstm_num_layers   = 3,
@@ -1372,51 +1372,51 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
 
     # Train Model: EModel_FeatureWeight1
     print("\n========== Training Model: 1 ==========")
-    histA = train_model(
+    hist1 = train_model(
         model         = model1,
         train_loader  = train_loader,
         val_loader    = val_loader,
-        model_name    = 'EModel_FeatureWeight',
+        model_name    = 'EModel_FeatureWeight1',
         learning_rate = learning_rate,
         weight_decay  = weight_decay,
         num_epochs    = num_epochs
     )
     # Train Model: EModel_FeatureWeight2
     print("\n========== Training Model: 2 ==========")
-    histA = train_model(
+    hist2 = train_model(
         model         = model2,
         train_loader  = train_loader,
         val_loader    = val_loader,
-        model_name    = 'EModel_FeatureWeight',
+        model_name    = 'EModel_FeatureWeight2',
         learning_rate = learning_rate,
         weight_decay  = weight_decay,
         num_epochs    = num_epochs
     )
     # Train Model: EModel_FeatureWeight3
     print("\n========== Training Model: 3 ==========")
-    histA = train_model(
+    hist3 = train_model(
         model         = model3,
         train_loader  = train_loader,
         val_loader    = val_loader,
-        model_name    = 'EModel_FeatureWeight',
+        model_name    = 'EModel_FeatureWeight3',
         learning_rate = learning_rate,
         weight_decay  = weight_decay,
         num_epochs    = num_epochs
     )
     # Train Model: EModel_FeatureWeight4
     print("\n========== Training Model: 4 ==========")
-    histA = train_model(
+    hist4 = train_model(
         model         = model4,
         train_loader  = train_loader,
         val_loader    = val_loader,
-        model_name    = 'EModel_FeatureWeight',
+        model_name    = 'EModel_FeatureWeight4',
         learning_rate = learning_rate,
         weight_decay  = weight_decay,
         num_epochs    = num_epochs
     )
     # Train Model: EModel_FeatureWeight5
     print("\n========== Training Model: 5 ==========")
-    histB = train_model(
+    hist5 = train_model(
         model         = model5,
         train_loader  = train_loader,
         val_loader    = val_loader,
@@ -1427,40 +1427,40 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     )
 
     # 修改加载模型部分的代码
-    best_model1 = EModel_FeatureWeight(
+    best_model1 = EModel_FeatureWeight1(
         feature_dim       = feature_dim,
         lstm_hidden_size  = 128, 
         lstm_num_layers   = 2
     ).to(device)
-    best_model1.load_state_dict(torch.load('best_EModel_FeatureWeight.pth', map_location=device, weights_only=True))
+    best_model1.load_state_dict(torch.load('best_EModel_FeatureWeight.pth', map_location=device, weights_only=True), strict=False)
 
-    best_model2 = EModel_FeatureWeight(
+    best_model2 = EModel_FeatureWeight2(
         feature_dim       = feature_dim,
         lstm_hidden_size  = 128, 
         lstm_num_layers   = 2
     ).to(device)
-    best_model2.load_state_dict(torch.load('best_EModel_FeatureWeight.pth', map_location=device, weights_only=True))
+    best_model2.load_state_dict(torch.load('best_EModel_FeatureWeight.pth', map_location=device, weights_only=True), strict=False)
 
-    best_model3 = EModel_FeatureWeight(
+    best_model3 = EModel_FeatureWeight3(
         feature_dim       = feature_dim,
         lstm_hidden_size  = 256, 
         lstm_num_layers   = 2
     ).to(device)
-    best_model3.load_state_dict(torch.load('best_EModel_FeatureWeight.pth', map_location=device, weights_only=True))
+    best_model3.load_state_dict(torch.load('best_EModel_FeatureWeight.pth', map_location=device, weights_only=True), strict=False)
     
-    best_model4 = EModel_FeatureWeight(
+    best_model4 = EModel_FeatureWeight4(
         feature_dim       = feature_dim,
         lstm_hidden_size  = 256, 
         lstm_num_layers   = 3
     ).to(device)
-    best_model4.load_state_dict(torch.load('best_EModel_FeatureWeight.pth', map_location=device, weights_only=True))
+    best_model4.load_state_dict(torch.load('best_EModel_FeatureWeight.pth', map_location=device, weights_only=True), strict=False)
 
     best_model5 = EModel_FeatureWeight5(
         feature_dim       = feature_dim,
         lstm_hidden_size  = 256, 
         lstm_num_layers   = 3
     ).to(device)
-    best_model5.load_state_dict(torch.load('best_EModel_FeatureWeight5.pth', map_location=device, weights_only=True))
+    best_model5.load_state_dict(torch.load('best_EModel_FeatureWeight5.pth', map_location=device, weights_only=True), strict=False)
 
     # Evaluate on test set (standardized domain)
     criterion_test = nn.SmoothL1Loss(beta = 1.0)
@@ -1558,8 +1558,11 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     )
 
     # Plot training curves for various metrics
-    plot_training_curves_allmetrics(histA, model_name = 'EModel_FeatureWeight')
-    plot_training_curves_allmetrics(histB, model_name = 'EModel_FeatureWeight5')
+    plot_training_curves_allmetrics(hist1, model_name = 'EModel_FeatureWeight1')
+    plot_training_curves_allmetrics(hist2, model_name = 'EModel_FeatureWeight2')
+    plot_training_curves_allmetrics(hist3, model_name = 'EModel_FeatureWeight3')
+    plot_training_curves_allmetrics(hist4, model_name = 'EModel_FeatureWeight4')
+    plot_training_curves_allmetrics(hist5, model_name = 'EModel_FeatureWeight5')
 
     print("[Info] Processing complete!")
 

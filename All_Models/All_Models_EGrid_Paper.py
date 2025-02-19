@@ -577,14 +577,21 @@ class EModel_FeatureWeight3(nn.Module):
     
 class EModel_FeatureWeight4(nn.Module):
     """
-    [Model 1: LSTM-based Model with Feature Weighting]
-    Parameters:
-      - feature_dim: Input feature dimension
-      - lstm_hidden_size: LSTM hidden size
-      - lstm_num_layers: Number of LSTM layers
-      - lstm_dropout: LSTM dropout probability
-      - use_local_attn: Whether to use local attention 
-      - local_attn_window_size: Window size for local attention
+    [Model 4: LSTM-based Model with Feature Weighting and Deep Cross Attention]
+    
+    参数:
+      - feature_dim: 输入特征维度
+      - lstm_hidden_size: LSTM 隐藏层大小 (默认: 256)
+      - lstm_num_layers: LSTM 层数 (默认: 3)
+      - lstm_dropout: LSTM dropout 概率 (默认: 0.1)
+      - use_local_attn: 是否使用局部注意力 (默认: True)
+      - local_attn_window_size: 局部注意力窗口大小 (默认: 5)
+    
+    功能说明:
+      在原有的特征加权、LSTM、局部注意力以及特征注意力的基础上，
+      新增一个深层交叉注意力模块 (deep cross attention) ，用于在融合阶段将
+      时间信息（temporal 分支）与特征信息（feature 分支）进行更深入的交互，
+      最后将融合结果送入全连接层输出预测结果。
     """
     def __init__(self, 
                  feature_dim, 
@@ -596,15 +603,15 @@ class EModel_FeatureWeight4(nn.Module):
                 ):
         super(EModel_FeatureWeight4, self).__init__()
         self.feature_dim = feature_dim
-        self.use_local_attn = use_local_attn  # 保存是否使用局部注意力的标识
-        
-        # Feature gating mechanism: fully connected layer + Sigmoid to compute feature weights
+        self.use_local_attn = use_local_attn  # 是否使用局部注意力
+
+        # 1. 动态特征加权模块：利用全连接层和 Sigmoid 调整每个特征的重要性
         self.feature_gate = nn.Sequential(
             nn.Linear(feature_dim, feature_dim),
             nn.Sigmoid()
         )
         
-        # Temporal attention: choose between local or global (MLP) attention
+        # 2. 时序注意力模块：根据是否使用局部注意力选择不同的策略
         if use_local_attn:
             from local_attention.local_attention import LocalAttention
             self.temporal_attn = LocalAttention(
@@ -615,18 +622,18 @@ class EModel_FeatureWeight4(nn.Module):
         else:
             self.temporal_attn = Attention(input_dim = 2 * lstm_hidden_size)
         
-        # Feature attention layer: aggregate LSTM output over feature dimensions
+        # 3. 特征注意力模块：对 LSTM 输出沿特征维度进行加权聚合
         self.feature_attn = nn.Sequential(
             nn.Linear(window_size, 1),
             nn.Sigmoid()
         )
-        # Feature projection layer
+        # 特征投影层：将特征注意力后的结果映射到与时序分支相同的维度
         self.feature_proj = nn.Linear(2 * lstm_hidden_size, 2 * lstm_hidden_size)
         
-        # Learnable feature importance weights, initialized to 1
+        # 4. 可学习特征重要性权重（初始化为 1）
         self.feature_importance = nn.Parameter(torch.ones(feature_dim), requires_grad = True)
         
-        # Bidirectional LSTM
+        # 5. 双向 LSTM 层
         self.lstm = nn.LSTM(
             input_size    = feature_dim,
             hidden_size   = lstm_hidden_size,
@@ -637,20 +644,27 @@ class EModel_FeatureWeight4(nn.Module):
         )
         self._init_lstm_weights()
         
-        # Global attention module
+        # 6. 全局注意力（若需要，可用于其他步骤）
         self.attention = Attention(input_dim = 2 * lstm_hidden_size)
         
-        # Fully connected layer for final prediction
+        # 7. 深层交叉注意力模块：利用 PyTorch 的 MultiheadAttention 融合时序和特征表征
+        #    - 输入维度为 2 * lstm_hidden_size（例如 lstm_hidden_size=256 时为 512）
+        #    - 使用 8 个注意力头
+        self.cross_attn = nn.MultiheadAttention(embed_dim=2 * lstm_hidden_size, num_heads=8, dropout=0.1)
+        
+        # 8. 全连接层：输入维度为 4 * lstm_hidden_size（拼接后得到），输出 2 个值（mu 和 logvar）
         self.fc = nn.Sequential(
             nn.Linear(4 * lstm_hidden_size, 128),
             nn.ReLU(),
             nn.Dropout(0.1),
-            nn.Linear(128, 2)  # 输出两个值: mu 和 logvar
+            nn.Linear(128, 2)  # 最终输出两个值：mu 和 logvar
         )
 
     def _init_lstm_weights(self):
         """
         [LSTM Weight Initialization]
+        对 LSTM 权重进行初始化：输入权重采用 Xavier 均匀分布，隐层权重采用正交初始化，
+        同时对偏置进行初始化并将遗忘门的偏置置 1。
         """
         for name, param in self.lstm.named_parameters():
             if 'weight_ih' in name:
@@ -660,43 +674,57 @@ class EModel_FeatureWeight4(nn.Module):
             elif 'bias' in name:
                 param.data.fill_(0)
                 n = param.size(0)
-                param.data[(n // 4):(n // 2)].fill_(1.0)  # Set forget gate bias to 1
+                param.data[(n // 4):(n // 2)].fill_(1.0)  # 将遗忘门偏置置为1
 
     def forward(self, x):
         """
-        Parameters:
-          x: Input tensor with shape [batch_size, seq_len, feature_dim]
-        Returns:
+        前向传播过程:
+          1. 对输入进行动态特征加权
+          2. 使用双向 LSTM 提取时序特征
+          3. 对 LSTM 输出分别采用时序注意力和特征注意力获得两个分支输出
+          4. 利用深层交叉注意力模块对两个分支（时序、特征）进行融合
+          5. 融合后的特征送入全连接层，输出预测结果，并应用 reparameterization trick 加入噪声
+          
+        参数:
+          x: 大小为 [batch_size, seq_len, feature_dim] 的输入张量
+          
+        返回:
           Predicted output with shape [batch_size]
         """
-        # Apply dynamic feature weighting
+        # 1. 动态特征加权
         gate = self.feature_gate(x.mean(dim = 1))
         x = x * gate.unsqueeze(1)
 
-        # Process with LSTM to obtain bidirectional output
+        # 2. 通过 LSTM 获得双向输出
         lstm_out, _ = self.lstm(x)
         
-        # Temporal attention:
+        # 3. 时序注意力分支：根据设置选择局部注意力或全局注意力
         if self.use_local_attn:
-            # 调用LocalAttention，将query, key, value均设置为lstm_out
             temporal = self.temporal_attn(lstm_out, lstm_out, lstm_out)
-            # 聚合沿时间步（例如使用求和或者平均），使得维度变为二维
-            temporal = temporal.sum(dim=1)
-            # 如果希望归一化，可以改为：temporal = temporal.mean(dim=1)
+            temporal = temporal.sum(dim=1)  # 沿时间步聚合（可以选择求和或均值）
         else:
             temporal = self.temporal_attn(lstm_out)
         
-        # Feature attention over the feature dimensions
+        # 4. 特征注意力分支：对 LSTM 输出进行特征维度聚合
         feature_raw = self.feature_attn(lstm_out.transpose(1, 2))
         feature_raw = feature_raw.squeeze(-1)
         feature = self.feature_proj(feature_raw)
+        
+        # 5. 深层交叉注意力融合：将 temporal 与 feature 两分支进行交叉注意力交互
+        #    将两者都扩展出一个“序列维度”，因为 nn.MultiheadAttention 要求输入尺寸为 [seq_len, batch, embed_dim]
+        temporal_seq = temporal.unsqueeze(0)  # 形状: [1, batch, 2*lstm_hidden_size]
+        feature_seq = feature.unsqueeze(0)    # 形状: [1, batch, 2*lstm_hidden_size]
+        # 以 temporal 作为 query, 以 feature 作为 key 和 value 进行交叉注意力计算
+        cross_output, _ = self.cross_attn(query=temporal_seq, key=feature_seq, value=feature_seq)
+        cross_output = cross_output.squeeze(0)  # 得到形状: [batch, 2*lstm_hidden_size]
+        
+        # 融合原始 temporal 分支和交叉注意力输出，形成最终融合特征
+        fused = torch.cat([temporal, cross_output], dim = 1)  # 融合后维度为 [batch, 4*lstm_hidden_size]
 
-        # Concatenate the two branches
-        combined = torch.cat([temporal, feature], dim = 1)
-        output = self.fc(combined)
+        # 6. 将融合特征送入全连接层，输出 [mu, logvar]，再做 reparameterization 加噪声
+        output = self.fc(fused)
         mu, logvar = torch.chunk(output, 2, dim = 1)
         
-        # Reparameterization trick with noise
         noise = 0.1 * torch.randn_like(mu, device = x.device) * torch.exp(0.5 * logvar)
         output = mu + noise
         

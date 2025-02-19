@@ -1136,26 +1136,6 @@ def plot_predictions_comparison(y_actual_real, predictions_dict, colors=None):
     plt.tight_layout()
     plt.show()
 
-def plot_test_predictions_over_time(test_timestamps, y_actual_real, y_pred_real):
-    """
-    [Visualization Module - Test Set Predictions]
-    - Plot actual and predicted values over time for the test set.
-    Parameters:
-      test_timestamps: Timestamps for the test set
-      y_actual_real: Actual values
-      y_pred_real: Predicted values
-    """
-    plt.figure(figsize = (10, 5))
-    plt.plot(test_timestamps, y_actual_real, color = 'red', label = 'Actual E_grid', linewidth = 1)
-    plt.plot(test_timestamps, y_pred_real, color = 'blue', label = 'Predicted E_grid', linewidth = 1, linestyle = '--')
-    plt.xlabel('Timestamp (Test Data)')
-    plt.ylabel('E_grid (Real Domain)')
-    plt.title('Test Set: Actual vs Predicted E_grid')
-    plt.legend()
-    plt.grid(True)
-    plt.tight_layout()
-    plt.show()
-
 def plot_training_curves_allmetrics(hist_dict, model_name = 'Model'):
     """
     [Visualization Module - Training Curves]
@@ -1537,13 +1517,6 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     plot_dataset_distribution(val_timestamps, 'Validation Set')
     plot_dataset_distribution(test_timestamps, 'Test Set')
 
-    # Visualize test predictions (using model1 as an example)
-    plot_test_predictions_over_time(test_timestamps[window_size:], 
-                                    labels1_real, preds1_real, 
-                                    labels2_real, preds2_real, 
-                                    labels3_real, preds3_real, 
-                                    labels4_real, preds4_real, 
-                                    labels5_real, preds5_real)
     predictions_dict = {
     'Model1': preds1_real,
     'Model2': preds2_real,

@@ -1117,8 +1117,7 @@ def plot_predictions_comparison(y_actual_real, predictions_dict, timestamps, col
     
     Parameters:
         y_actual_real (np.array): 实际值（原始域）
-        predictions_dict (dict): 模型预测字典，格式为 {模型名: 预测值数组}
-        timestamps (np.array): 对应的时间戳数组（需与y_actual_real长度一致）
+        timestamps (np.array): 对应的时间戳数组
         colors (list): 可选，自定义颜色列表
     """
     plt.figure(figsize=(16, 8))
@@ -1135,16 +1134,14 @@ def plot_predictions_comparison(y_actual_real, predictions_dict, timestamps, col
     
     # 绘制各模型预测值
     for (model_name, pred_values), color in zip(predictions_dict.items(), colors):
-        plt.plot(dates, pred_values, color=color, label=model_name, 
-                 linewidth=1.5, linestyle='--', alpha=0.9)
+        plt.plot(dates, pred_values, color=color, label=model_name, linewidth=1.5, linestyle='--', alpha=0.9)
     
     # 优化横轴标签格式
-    plt.gca().xaxis.set_major_formatter(mpl.dates.DateFormatter("%Y-%m-%d %H:%M"))
+    plt.gca().xaxis.set_major_formatter(mpl.dates.DateFormatter("%Y-%m-%d"))
     plt.gcf().autofmt_xdate()  # 自动旋转日期标签
     
     plt.xlabel('Timestamp')
-    plt.ylabel('E_grid Value (Original Scale)')
-    plt.title('Predictions vs Actual (Full Time Domain)')
+    plt.ylabel('E_grid Value')
     plt.legend()
     plt.grid(True)
     plt.tight_layout()

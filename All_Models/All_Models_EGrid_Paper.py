@@ -450,7 +450,6 @@ class EModel_FeatureWeight2(nn.Module):
     
 class EModel_FeatureWeight3(nn.Module):
     """
-    [Model 1: LSTM-based Model with Feature Weighting]
     Parameters:
       - feature_dim: Input feature dimension
       - lstm_hidden_size: LSTM hidden size
@@ -1127,7 +1126,7 @@ def plot_predictions_comparison(y_actual_real, predictions_dict, colors=None):
     x_axis = np.arange(len(y_actual_real))
     plt.plot(x_axis, y_actual_real, 'black', label='Actual', linewidth=2, alpha=0.8)
 
-    colors = ['lightblue', 'lightgreen', 'lightsalmon', 'thistle', 'wheat']
+    colors = ['#FFF3CE', '#D6E9D5', '#FAD8D4', '#AFE3E6', '#D9E8FC']
     for (model_name, pred_values), color in zip(predictions_dict.items(), colors):
         plt.plot(x_axis, pred_values, color=color, label=model_name, linewidth=1.5, linestyle='--', alpha=0.9)
     plt.xlabel('Index')

@@ -1111,26 +1111,40 @@ def plot_Egrid_over_time(data_df):
     plt.tight_layout()
     plt.show()
 
-def plot_predictions_comparison(y_actual_real, predictions_dict, colors=None):
+def plot_predictions_comparison(y_actual_real, predictions_dict, timestamps, colors=None):
     """
-    [Visualization Module - Prediction Comparison]
-    - Compare and plot the actual values and the predictions from two models.
+    [增强版可视化函数] 使用时间戳作为横轴，全时间域对比预测值
+    
     Parameters:
-      y_actual_real: Actual values
-      y_pred_model1_real: Predictions from model 1
-      y_pred_model2_real: Predictions from model 2
-      model1_name: Name of model 1 (default: 'Model1')
-      model2_name: Name of model 2 (default: 'Model2')
+        y_actual_real (np.array): 实际值（原始域）
+        predictions_dict (dict): 模型预测字典，格式为 {模型名: 预测值数组}
+        timestamps (np.array): 对应的时间戳数组（需与y_actual_real长度一致）
+        colors (list): 可选，自定义颜色列表
     """
-    plt.figure(figsize = (14, 6))
-    x_axis = np.arange(len(y_actual_real))
-    plt.plot(x_axis, y_actual_real, 'black', label='Actual', linewidth=2, alpha=0.8)
-
-    colors = ['#FFF3CE', '#D6E9D5', '#FAD8D4', '#AFE3E6', '#D9E8FC']
+    plt.figure(figsize=(16, 8))
+    
+    # 转换时间戳为日期格式
+    dates = pd.to_datetime(timestamps)
+    
+    # 绘制实际值
+    plt.plot(dates, y_actual_real, 'black', label='Actual', linewidth=2, alpha=0.8)
+    
+    # 定义默认颜色（若未提供）
+    if colors is None:
+        colors = ['#FFF3CE', '#D6E9D5', '#FAD8D4', '#AFE3E6', '#D9E8FC']
+    
+    # 绘制各模型预测值
     for (model_name, pred_values), color in zip(predictions_dict.items(), colors):
-        plt.plot(x_axis, pred_values, color=color, label=model_name, linewidth=1.5, linestyle='--', alpha=0.9)
-    plt.xlabel('Index')
-    plt.ylabel('Value (Real Domain)')
+        plt.plot(dates, pred_values, color=color, label=model_name, 
+                 linewidth=1.5, linestyle='--', alpha=0.9)
+    
+    # 优化横轴标签格式
+    plt.gca().xaxis.set_major_formatter(mpl.dates.DateFormatter("%Y-%m-%d %H:%M"))
+    plt.gcf().autofmt_xdate()  # 自动旋转日期标签
+    
+    plt.xlabel('Timestamp')
+    plt.ylabel('E_grid Value (Original Scale)')
+    plt.title('Predictions vs Actual (Full Time Domain)')
     plt.legend()
     plt.grid(True)
     plt.tight_layout()
@@ -1278,7 +1292,7 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
 
     train_timestamps = timestamps_all[:train_size]
     val_timestamps   = timestamps_all[train_size : train_size + val_size]
-    test_timestamps  = timestamps_all[train_size + val_size:]
+    test_timestamps = timestamps_all[train_size + val_size + window_size:]
 
     # Apply logarithmic transformation to target values if set
     if use_log_transform:
@@ -1527,7 +1541,8 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     # 使用增强版可视化函数
     plot_predictions_comparison(
         y_actual_real=labels1_real,
-        predictions_dict=predictions_dict
+        predictions_dict=predictions_dict,
+        timestamps=test_timestamps  # 确保已按窗口偏移截取
     )
 
     # Plot training curves for various metrics

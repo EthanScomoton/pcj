@@ -27,9 +27,9 @@ mpl.rcParams.update({
 })
 
 # Global hyperparameters
-learning_rate     = 1e-4   # Learning rate
+learning_rate     = 1e-5   # Learning rate
 num_epochs        = 150    # Number of training epochs
-batch_size        = 128    # Batch size
+batch_size        = 64    # Batch size
 weight_decay      = 1e-4   # Weight decay
 patience          = 12     # Patience for early stopping
 num_workers       = 0      # Number of worker threads
@@ -461,7 +461,7 @@ class EModel_FeatureWeight21(nn.Module):
     """
     def __init__(self, 
                  feature_dim, 
-                 lstm_hidden_size = 512, 
+                 lstm_hidden_size = 256, 
                  lstm_num_layers = 4, 
                  lstm_dropout = 0.2,
                  use_local_attn = True,

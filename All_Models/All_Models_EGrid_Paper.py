@@ -1241,7 +1241,7 @@ def plot_Egrid_over_time(data_df):
 def plot_predictions_comparison(y_actual_real, predictions_dict, colors=None, timestamps=None):
 
     plt.figure(figsize = (14, 6))
-    x_axis = pd.to_datetime(timestamps[:len(y_actual_real)])  # 使用与数据长度匹配的时间戳
+    x_axis = np.arange(len(y_actual_real))
 
     plt.plot(x_axis, y_actual_real, 'black', label='Actual', linewidth=2, alpha=0.8)
 
@@ -1249,10 +1249,6 @@ def plot_predictions_comparison(y_actual_real, predictions_dict, colors=None, ti
     for (model_name, pred_values), color in zip(predictions_dict.items(), colors):
         plt.plot(x_axis, pred_values, color=color, label=model_name, linewidth=1.5, linestyle='--', alpha=0.9)
 
-        
-    plt.gca().xaxis.set_major_formatter(mpl.dates.DateFormatter("%Y-%m-%d"))
-    plt.gcf().autofmt_xdate()  # 自动旋转日期标签
-    
     plt.xlabel('Timestamp')
     plt.ylabel('E_grid Value')
     plt.legend()

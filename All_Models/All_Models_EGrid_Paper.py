@@ -355,10 +355,8 @@ class EModel_FeatureWeight2(nn.Module):
             from local_attention.local_attention import LocalAttention
             self.temporal_attn = LocalAttention(
                 dim = 2 * lstm_hidden_size,
-                window_size = local_attn_window_size,
-                causal = False,
-                dropout = 0.1,
-                prenorm = True
+                window_size = local_attn_window_size,   # 使用正确的参数名
+                causal = False
             )
         else:
             self.temporal_attn = Attention(input_dim = 2 * lstm_hidden_size)
@@ -485,8 +483,7 @@ class EModel_FeatureWeight21(nn.Module):
             self.temporal_attn = LocalAttention(
                 dim = 2 * lstm_hidden_size,
                 window_size = local_attn_window_size,   # 使用正确的参数名
-                causal = False,
-                prenorm = True
+                causal = False
             )
         else:
             self.temporal_attn = Attention(input_dim = 2 * lstm_hidden_size)
@@ -611,10 +608,8 @@ class EModel_FeatureWeight3(nn.Module):
             from local_attention.local_attention import LocalAttention
             self.temporal_attn = LocalAttention(
                 dim = 2 * lstm_hidden_size,
-                window_size = local_attn_window_size,
-                causal = False,
-                dropout = 0.1,
-                prenorm = True
+                window_size = local_attn_window_size,   # 使用正确的参数名
+                causal = False
             )
         else:
             self.temporal_attn = Attention(input_dim = 2 * lstm_hidden_size)
@@ -740,10 +735,8 @@ class EModel_FeatureWeight4(nn.Module):
             from local_attention.local_attention import LocalAttention
             self.temporal_attn = LocalAttention(
                 dim = 2 * lstm_hidden_size,
-                window_size = local_attn_window_size,
-                causal = False,
-                dropout = 0.1,
-                prenorm = True
+                window_size = local_attn_window_size,   # 使用正确的参数名
+                causal = False
             )
         else:
             self.temporal_attn = Attention(input_dim = 2 * lstm_hidden_size)
@@ -1459,7 +1452,7 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
 
     model21 = EModel_FeatureWeight21(
         feature_dim       = feature_dim,
-        lstm_hidden_size  = 512, 
+        lstm_hidden_size  = 128, 
         lstm_num_layers   = 4,
         lstm_dropout      = 0.2
     ).to(device)
@@ -1473,8 +1466,8 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
 
     model4 = EModel_FeatureWeight4(
         feature_dim       = feature_dim,
-        lstm_hidden_size  = 256, 
-        lstm_num_layers   = 3,
+        lstm_hidden_size  = 64, 
+        lstm_num_layers   = 4,
         lstm_dropout      = 0.1
     ).to(device)
 

@@ -476,7 +476,7 @@ class EModel_FeatureWeight21(nn.Module):
     def __init__(self, 
                  feature_dim, 
                  lstm_hidden_size = 128, 
-                 lstm_num_layers = 2, 
+                 lstm_num_layers = 3, 
                  lstm_dropout = 0.2,
                  use_local_attn = True,
                  local_attn_window_size = 5
@@ -1485,7 +1485,7 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     model21 = EModel_FeatureWeight21(
         feature_dim       = feature_dim,
         lstm_hidden_size  = 128, 
-        lstm_num_layers   = 2,
+        lstm_num_layers   = 3,
         lstm_dropout      = 0.2
     ).to(device)
 

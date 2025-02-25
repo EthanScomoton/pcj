@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import matplotlib.colors as mcolors
 import matplotlib as mpl
+import random
 
 from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader, TensorDataset
@@ -15,7 +16,13 @@ from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.metrics import mean_squared_error
 from torch.nn.utils import clip_grad_norm_
 from lion_pytorch import Lion
- 
+
+# 在顶部导入LocalAttention，避免在类内部多次导入
+try:
+    from local_attention.local_attention import LocalAttention
+except ImportError:
+    print("[Warning] local_attention package not found. Please install it with: pip install local-attention")
+
 # Global style settings for plots
 mpl.rcParams.update({
     'font.family': 'Times New Roman',
@@ -48,11 +55,18 @@ def load_data():
     - Load renewable energy and load data from CSV files.
     - Merge and sort by timestamp, then reset the index.
     """
-    renewable_df = pd.read_csv(r'C:\Users\Administrator\Desktop\renewable_data10.csv')
-    load_df      = pd.read_csv(r'C:\Users\Administrator\Desktop\load_data10.csv')
+    try:
+        # 尝试使用相对路径
+        renewable_df = pd.read_csv('data/renewable_data10.csv')
+        load_df = pd.read_csv('data/load_data10.csv')
+    except FileNotFoundError:
+        # 如果相对路径失败，尝试使用原始路径（保留为备选）
+        print("[Warning] 使用备选路径加载数据文件")
+        renewable_df = pd.read_csv(r'C:\Users\Administrator\Desktop\renewable_data10.csv')
+        load_df = pd.read_csv(r'C:\Users\Administrator\Desktop\load_data10.csv')
 
     renewable_df['timestamp'] = pd.to_datetime(renewable_df['timestamp'])  # Convert timestamp to datetime
-    load_df['timestamp']      = pd.to_datetime(load_df['timestamp'])       # Convert timestamp to datetime
+    load_df['timestamp'] = pd.to_datetime(load_df['timestamp'])       # Convert timestamp to datetime
 
     data_df = pd.merge(renewable_df, load_df, on='timestamp', how='inner')  # Merge data using inner join
     data_df.sort_values('timestamp', inplace=True)                         # Sort by timestamp
@@ -467,7 +481,7 @@ class EModel_FeatureWeight21(nn.Module):
                  use_local_attn = True,
                  local_attn_window_size = 5
                 ):
-        super(EModel_FeatureWeight2, self).__init__()
+        super(EModel_FeatureWeight21, self).__init__()
         self.feature_dim = feature_dim
         self.use_local_attn = use_local_attn  # 保存是否使用局部注意力的标识
         
@@ -1238,28 +1252,34 @@ def plot_Egrid_over_time(data_df):
     plt.tight_layout()
     plt.show()
 
-def plot_predictions_comparison(y_actual_real, predictions_dict, colors=None):
+def plot_predictions_comparison(y_actual_real, predictions_dict, colors=None, timestamps=None):
     """
     [Visualization Module - Prediction Comparison]
-    - Compare and plot the actual values and the predictions from two models.
+    - Compare and plot the actual values and the predictions from multiple models.
     Parameters:
       y_actual_real: Actual values
-      y_pred_model1_real: Predictions from model 1
-      y_pred_model2_real: Predictions from model 2
-      model1_name: Name of model 1 (default: 'Model1')
-      model2_name: Name of model 2 (default: 'Model2')
+      predictions_dict: Dictionary of model name to prediction values
+      colors: List of colors for plotting (optional)
+      timestamps: Time stamps for x-axis (optional)
     """
     plt.figure(figsize = (14, 6))
-    x_axis = np.arange(len(y_actual_real))
+    
+    if timestamps is not None and len(timestamps) == len(y_actual_real):
+        x_axis = timestamps
+    else:
+        x_axis = np.arange(len(y_actual_real))
+        
     plt.plot(x_axis, y_actual_real, 'black', label='Actual', linewidth=2, alpha=0.8)
 
-    colors = ['#FFF3CE', '#D6E9D5', '#FAD8D4', '#AFE3E6', '#D9E8FC']
-    for (model_name, pred_values), color in zip(predictions_dict.items(), colors):
+    if colors is None:
+        colors = ['#FFF3CE', '#D6E9D5', '#FAD8D4', '#AFE3E6', '#D9E8FC', '#F5E1FD']
+    
+    for (model_name, pred_values), color in zip(predictions_dict.items(), colors[:len(predictions_dict)]):
         plt.plot(x_axis, pred_values, color=color, label=model_name, linewidth=1.5, linestyle='--', alpha=0.9)
 
-        
-    plt.gca().xaxis.set_major_formatter(mpl.dates.DateFormatter("%Y-%m-%d"))
-    plt.gcf().autofmt_xdate()  # 自动旋转日期标签
+    if timestamps is not None:    
+        plt.gca().xaxis.set_major_formatter(mpl.dates.DateFormatter("%Y-%m-%d"))
+        plt.gcf().autofmt_xdate()  # 自动旋转日期标签
     
     plt.xlabel('Timestamp')
     plt.ylabel('E_grid Value')
@@ -1562,13 +1582,15 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     best_model1 = EModel_FeatureWeight1(
         feature_dim       = feature_dim,
         lstm_hidden_size  = 128, 
-        lstm_num_layers   = 2
+        lstm_num_layers   = 2,
+        lstm_dropout      = 0.2  # 确保加载与训练参数一致
     ).to(device)
-    best_model1.load_state_dict(torch.load('best_EModel_FeatureWeight1.pth', map_location=device, weights_only=True), strict=False)
+    best_model1.load_state_dict(torch.load('best_EModel_FeatureWeight1.pth', map_location=device), strict=True)
 
     best_model2 = EModel_FeatureWeight2(
         feature_dim       = feature_dim,
         lstm_hidden_size  = 128, 
+        lstm_num_layers   = 2,
         lstm_num_layers   = 2
     ).to(device)
     best_model2.load_state_dict(torch.load('best_EModel_FeatureWeight2.pth', map_location=device, weights_only=True), strict=False)

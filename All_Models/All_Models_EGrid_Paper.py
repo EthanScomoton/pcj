@@ -1238,19 +1238,11 @@ def plot_Egrid_over_time(data_df):
     plt.tight_layout()
     plt.show()
 
-def plot_predictions_comparison(y_actual_real, predictions_dict, colors=None):
-    """
-    [Visualization Module - Prediction Comparison]
-    - Compare and plot the actual values and the predictions from two models.
-    Parameters:
-      y_actual_real: Actual values
-      y_pred_model1_real: Predictions from model 1
-      y_pred_model2_real: Predictions from model 2
-      model1_name: Name of model 1 (default: 'Model1')
-      model2_name: Name of model 2 (default: 'Model2')
-    """
+def plot_predictions_comparison(y_actual_real, predictions_dict, colors=None, timestamps=None):
+
     plt.figure(figsize = (14, 6))
-    x_axis = np.arange(len(y_actual_real))
+    x_axis = pd.to_datetime(timestamps[:len(y_actual_real)])  # 使用与数据长度匹配的时间戳
+
     plt.plot(x_axis, y_actual_real, 'black', label='Actual', linewidth=2, alpha=0.8)
 
     colors = ['#FFF3CE', '#D6E9D5', '#FAD8D4', '#AFE3E6', '#D9E8FC']
@@ -1697,7 +1689,8 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     # 使用增强版可视化函数
     plot_predictions_comparison(
         y_actual_real=labels1_real,
-        predictions_dict=predictions_dict
+        predictions_dict=predictions_dict,
+        timestamps=train_timestamps  # 训练集对应的时间戳
     )
 
     # Plot training curves for various metrics

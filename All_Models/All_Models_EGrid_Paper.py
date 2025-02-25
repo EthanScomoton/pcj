@@ -355,8 +355,9 @@ class EModel_FeatureWeight2(nn.Module):
             from local_attention.local_attention import LocalAttention
             self.temporal_attn = LocalAttention(
                 dim = 2 * lstm_hidden_size,
-                window_size = local_attn_window_size,   # 使用正确的参数名
+                window_size = local_attn_window_size,
                 causal = False,
+                dropout = 0.1,
                 prenorm = True
             )
         else:
@@ -610,8 +611,9 @@ class EModel_FeatureWeight3(nn.Module):
             from local_attention.local_attention import LocalAttention
             self.temporal_attn = LocalAttention(
                 dim = 2 * lstm_hidden_size,
-                window_size = local_attn_window_size,   # 使用正确的参数名
+                window_size = local_attn_window_size,
                 causal = False,
+                dropout = 0.1,
                 prenorm = True
             )
         else:
@@ -738,8 +740,9 @@ class EModel_FeatureWeight4(nn.Module):
             from local_attention.local_attention import LocalAttention
             self.temporal_attn = LocalAttention(
                 dim = 2 * lstm_hidden_size,
-                window_size = local_attn_window_size,   # 使用正确的参数名
+                window_size = local_attn_window_size,
                 causal = False,
+                dropout = 0.1,
                 prenorm = True
             )
         else:

@@ -1697,8 +1697,7 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     # 使用增强版可视化函数
     plot_predictions_comparison(
         y_actual_real=labels1_real,
-        predictions_dict=predictions_dict,
-        timestamps=test_timestamps  # 确保已按窗口偏移截取
+        predictions_dict=predictions_dict
     )
 
     # Plot training curves for various metrics

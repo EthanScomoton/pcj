@@ -715,7 +715,7 @@ class EModel_FeatureWeight4(nn.Module):
     def __init__(self, 
                  feature_dim, 
                  lstm_hidden_size = 256, 
-                 lstm_num_layers = 6, 
+                 lstm_num_layers = 1, 
                  lstm_dropout = 0.2,
                  use_local_attn = True,
                  local_attn_window_size = 5
@@ -1467,7 +1467,7 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     model4 = EModel_FeatureWeight4(
         feature_dim       = feature_dim,
         lstm_hidden_size  = 256, 
-        lstm_num_layers   = 6,
+        lstm_num_layers   = 1,
         lstm_dropout      = 0.1
     ).to(device)
 

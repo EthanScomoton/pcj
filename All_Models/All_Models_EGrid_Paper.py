@@ -461,8 +461,8 @@ class EModel_FeatureWeight21(nn.Module):
     """
     def __init__(self, 
                  feature_dim, 
-                 lstm_hidden_size = 128, 
-                 lstm_num_layers = 4, 
+                 lstm_hidden_size = 256, 
+                 lstm_num_layers = 2, 
                  lstm_dropout = 0.2,
                  use_local_attn = True,
                  local_attn_window_size = 5
@@ -714,8 +714,8 @@ class EModel_FeatureWeight4(nn.Module):
     """
     def __init__(self, 
                  feature_dim, 
-                 lstm_hidden_size = 64, 
-                 lstm_num_layers = 4, 
+                 lstm_hidden_size = 256, 
+                 lstm_num_layers = 6, 
                  lstm_dropout = 0.2,
                  use_local_attn = True,
                  local_attn_window_size = 5
@@ -1563,8 +1563,8 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
 
     best_model21 = EModel_FeatureWeight21(
         feature_dim       = feature_dim,
-        lstm_hidden_size  = 128, 
-        lstm_num_layers   = 4
+        lstm_hidden_size  = 256, 
+        lstm_num_layers   = 2
     ).to(device)
     best_model21.load_state_dict(torch.load('best_EModel_FeatureWeight21.pth', map_location=device, weights_only=True), strict=False)
 
@@ -1577,8 +1577,8 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     
     best_model4 = EModel_FeatureWeight4(
         feature_dim       = feature_dim,
-        lstm_hidden_size  = 64, 
-        lstm_num_layers   = 4
+        lstm_hidden_size  = 256, 
+        lstm_num_layers   = 6
     ).to(device)
     best_model4.load_state_dict(torch.load('best_EModel_FeatureWeight4.pth', map_location=device, weights_only=True), strict=False)
 

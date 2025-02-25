@@ -467,7 +467,7 @@ class EModel_FeatureWeight21(nn.Module):
                  use_local_attn = True,
                  local_attn_window_size = 5
                 ):
-        super(EModel_FeatureWeight2, self).__init__()
+        super(EModel_FeatureWeight21, self).__init__()
         self.feature_dim = feature_dim
         self.use_local_attn = use_local_attn  # 保存是否使用局部注意力的标识
         

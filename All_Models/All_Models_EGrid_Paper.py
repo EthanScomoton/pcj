@@ -461,7 +461,7 @@ class EModel_FeatureWeight21(nn.Module):
     """
     def __init__(self, 
                  feature_dim, 
-                 lstm_hidden_size = 256, 
+                 lstm_hidden_size = 128, 
                  lstm_num_layers = 4, 
                  lstm_dropout = 0.2,
                  use_local_attn = True,
@@ -714,9 +714,9 @@ class EModel_FeatureWeight4(nn.Module):
     """
     def __init__(self, 
                  feature_dim, 
-                 lstm_hidden_size = 256, 
-                 lstm_num_layers = 3, 
-                 lstm_dropout = 0.1,
+                 lstm_hidden_size = 64, 
+                 lstm_num_layers = 4, 
+                 lstm_dropout = 0.2,
                  use_local_attn = True,
                  local_attn_window_size = 5
                 ):

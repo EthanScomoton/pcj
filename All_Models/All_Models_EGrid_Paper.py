@@ -27,7 +27,7 @@ mpl.rcParams.update({
 })
 
 # Global hyperparameters
-learning_rate     = 1e-4   # Learning rate
+learning_rate     = 1e-3   # Learning rate
 num_epochs        = 150    # Number of training epochs
 batch_size        = 128    # Batch size
 weight_decay      = 1e-4   # Weight decay
@@ -1496,7 +1496,7 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
         train_loader  = train_loader,
         val_loader    = val_loader,
         model_name    = 'EModel_FeatureWeight2',
-        learning_rate = 1e-1,
+        learning_rate = learning_rate,
         weight_decay  = weight_decay,
         num_epochs    = num_epochs
     )
@@ -1507,7 +1507,7 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
         train_loader  = train_loader,
         val_loader    = val_loader,
         model_name    = 'EModel_FeatureWeight21',
-        learning_rate = 1e-2,
+        learning_rate = learning_rate,
         weight_decay  = weight_decay,
         num_epochs    = num_epochs
     )
@@ -1519,7 +1519,7 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
         train_loader  = train_loader,
         val_loader    = val_loader,
         model_name    = 'EModel_FeatureWeight3',
-        learning_rate = 3e-4,
+        learning_rate = learning_rate,
         weight_decay  = weight_decay,
         num_epochs    = num_epochs
     )
@@ -1530,7 +1530,7 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
         train_loader  = train_loader,
         val_loader    = val_loader,
         model_name    = 'EModel_FeatureWeight4',
-        learning_rate = 1e-5,
+        learning_rate = learning_rate,
         weight_decay  = weight_decay,
         num_epochs    = num_epochs
     )

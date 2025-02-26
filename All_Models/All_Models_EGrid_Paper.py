@@ -461,7 +461,7 @@ class EModel_FeatureWeight21(nn.Module):
     """
     def __init__(self, 
                  feature_dim, 
-                 lstm_hidden_size = 256, 
+                 lstm_hidden_size = 128, 
                  lstm_num_layers = 2, 
                  lstm_dropout = 0.2,
                  use_local_attn = True,
@@ -587,8 +587,8 @@ class EModel_FeatureWeight3(nn.Module):
     """
     def __init__(self, 
                  feature_dim, 
-                 lstm_hidden_size = 256, 
-                 lstm_num_layers = 4, 
+                 lstm_hidden_size = 128, 
+                 lstm_num_layers = 2, 
                  lstm_dropout = 0.2,
                  use_local_attn = True,
                  local_attn_window_size = 5
@@ -714,8 +714,8 @@ class EModel_FeatureWeight4(nn.Module):
     """
     def __init__(self, 
                  feature_dim, 
-                 lstm_hidden_size = 256, 
-                 lstm_num_layers = 1, 
+                 lstm_hidden_size = 128, 
+                 lstm_num_layers = 2, 
                  lstm_dropout = 0.2,
                  use_local_attn = True,
                  local_attn_window_size = 5
@@ -1496,7 +1496,7 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
         train_loader  = train_loader,
         val_loader    = val_loader,
         model_name    = 'EModel_FeatureWeight2',
-        learning_rate = learning_rate,
+        learning_rate = 1e-3,
         weight_decay  = weight_decay,
         num_epochs    = num_epochs
     )
@@ -1507,7 +1507,7 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
         train_loader  = train_loader,
         val_loader    = val_loader,
         model_name    = 'EModel_FeatureWeight21',
-        learning_rate = learning_rate,
+        learning_rate = 1e-4,
         weight_decay  = weight_decay,
         num_epochs    = num_epochs
     )
@@ -1519,7 +1519,7 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
         train_loader  = train_loader,
         val_loader    = val_loader,
         model_name    = 'EModel_FeatureWeight3',
-        learning_rate = learning_rate,
+        learning_rate = 3e-4,
         weight_decay  = weight_decay,
         num_epochs    = num_epochs
     )
@@ -1530,7 +1530,7 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
         train_loader  = train_loader,
         val_loader    = val_loader,
         model_name    = 'EModel_FeatureWeight4',
-        learning_rate = learning_rate,
+        learning_rate = 1e-5,
         weight_decay  = weight_decay,
         num_epochs    = num_epochs
     )

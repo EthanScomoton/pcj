@@ -411,7 +411,7 @@ class EModel_FeatureWeight2(nn.Module):
                  use_local_attn=True,
                  local_attn_window_size=5
                 ):
-        super(EModel_FeatureWeight2_CNN, self).__init__()
+        super(EModel_FeatureWeight2, self).__init__()
         self.feature_dim = feature_dim
         self.use_local_attn = use_local_attn
         

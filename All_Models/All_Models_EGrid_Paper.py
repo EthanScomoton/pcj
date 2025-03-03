@@ -787,7 +787,9 @@ class EModel_FeatureWeight4(nn.Module):
         
         # Feature gating mechanism: fully connected layer + Sigmoid to compute feature weights
         self.feature_gate = nn.Sequential(
-            nn.Linear(feature_dim, feature_dim),
+            nn.Linear(feature_dim, feature_dim * 2),
+            nn.GELU(),
+            nn.Linear(feature_dim * 2, feature_dim),
             nn.Sigmoid()
         )
         
@@ -804,14 +806,20 @@ class EModel_FeatureWeight4(nn.Module):
         
         # Feature attention layer: aggregate LSTM output over feature dimensions
         self.feature_attn = nn.Sequential(
-            nn.Linear(window_size, 1),
+            nn.Linear(window_size, window_size * 2),
+            nn.GELU(),
+            nn.LayerNorm(window_size * 2),
+            nn.Linear(window_size * 2, 1),
             nn.Sigmoid()
         )
         # Feature projection layer
-        self.feature_proj = nn.Linear(2 * lstm_hidden_size, 2 * lstm_hidden_size)
+        self.feature_proj = nn.Sequential(
+            nn.Linear(2 * lstm_hidden_size, 2 * lstm_hidden_size),
+            nn.LayerNorm(2 * lstm_hidden_size),
+            nn.GELU()
+        )
         
-        # Learnable feature importance weights, initialized to 1
-        self.feature_importance = nn.Parameter(torch.ones(feature_dim), requires_grad = True)
+        self.feature_importance = nn.Parameter(torch.ones(feature_dim), requires_grad=True)
         
         # Bidirectional LSTM
         self.lstm = nn.LSTM(
@@ -829,10 +837,15 @@ class EModel_FeatureWeight4(nn.Module):
         
         # Fully connected layer for final prediction
         self.fc = nn.Sequential(
-            nn.Linear(4 * lstm_hidden_size, 128),
-            nn.ReLU(),
+            nn.Linear(4 * lstm_hidden_size, 256),
+            nn.LayerNorm(256),
+            nn.GELU(),
             nn.Dropout(0.1),
-            nn.Linear(128, 2)  # 输出两个值: mu 和 logvar
+            nn.Linear(256, 128),
+            nn.LayerNorm(128),
+            nn.GELU(),
+            nn.Dropout(0.1),
+            nn.Linear(128, 2)
         )
 
     def _init_lstm_weights(self):

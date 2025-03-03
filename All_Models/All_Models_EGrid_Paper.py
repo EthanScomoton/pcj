@@ -1319,7 +1319,7 @@ def plot_predictions_comparison(y_actual_real, predictions_dict, colors=None, ti
 
     plt.plot(x_axis, y_actual_real, '#3A3B98', label='Actual', linewidth=2, alpha=0.8)
 
-    colors = ['#FFF3CE', '#D6E9D5', '#FAD8D4', '#AFE3E6', '#D9E8FC']
+    colors = ['#E6B422', '#4CAF50', '#E85D75', '#17A2B8', '#5D8AA8']
     for (model_name, pred_values), color in zip(predictions_dict.items(), colors):
         plt.plot(x_axis, pred_values, color=color, label=model_name, linewidth=1.5, linestyle='--', alpha=0.9)
 

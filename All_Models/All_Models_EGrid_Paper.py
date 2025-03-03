@@ -829,7 +829,7 @@ class EModel_FeatureWeight4(nn.Module):
         
         # Fully connected layer for final prediction
         self.fc = nn.Sequential(
-            nn.Linear(2 * lstm_hidden_size, 128),
+            nn.Linear(4 * lstm_hidden_size, 128),
             nn.ReLU(),
             nn.Dropout(0.1),
             nn.Linear(128, 2)  # 输出两个值: mu 和 logvar

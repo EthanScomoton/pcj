@@ -1307,17 +1307,25 @@ def plot_Egrid_over_time(data_df):
     plt.show()
 
 def plot_predictions_comparison(y_actual_real, predictions_dict, colors=None, timestamps=None):
-
-    plt.figure(figsize = (14, 6))
+    plt.figure(figsize=(14, 6))
     x_axis = np.arange(len(y_actual_real))
-
-
     plt.plot(x_axis, y_actual_real, '#3A3B98', label='Actual', linewidth=2, alpha=0.8)
-
-    colors = ['#E6B422', '#4CAF50', '#E85D75', '#17A2B8', '#5D8AA8']
-    for (model_name, pred_values), color in zip(predictions_dict.items(), colors):
+    
+    # Define fixed colors for each model
+    model_colors = {
+        'Model1': '#E6B422',  # Gold
+        'Model2': '#4CAF50',  # Green
+        'Model21': '#E85D75', # Pink
+        'Model3': '#17A2B8',  # Teal
+        'Model4': '#5D8AA8',  # Steel Blue
+        'Model5': '#9370DB'   # Medium Purple (added an extra color)
+    }
+    
+    # Plot each model's predictions with its fixed color
+    for model_name, pred_values in predictions_dict.items():
+        color = model_colors.get(model_name, '#333333')  # Default to dark gray if model not in dictionary
         plt.plot(x_axis, pred_values, color=color, label=model_name, linewidth=1.5, linestyle='--', alpha=0.9)
-
+    
     plt.xlabel('Timestamp')
     plt.ylabel('E_grid Value')
     plt.legend()

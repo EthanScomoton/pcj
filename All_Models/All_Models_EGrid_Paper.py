@@ -275,7 +275,7 @@ class EModel_FeatureWeight1(nn.Module):
     """
     def __init__(self, 
                  feature_dim, 
-                 lstm_hidden_size = 128, 
+                 lstm_hidden_size = 256, 
                  lstm_num_layers = 2, 
                  lstm_dropout = 0.2,
                  use_local_attn = False,
@@ -405,7 +405,7 @@ class EModel_FeatureWeight2(nn.Module):
     def __init__(self,
                  feature_dim,
                  window_size=window_size,  # Using global window_size
-                 lstm_hidden_size=128,
+                 lstm_hidden_size=256,
                  lstm_num_layers=2,
                  lstm_dropout=0.2,
                  use_local_attn=True,
@@ -524,7 +524,7 @@ class EModel_FeatureWeight21(nn.Module):
     """
     def __init__(self, 
                  feature_dim, 
-                 lstm_hidden_size = 128, 
+                 lstm_hidden_size = 256, 
                  lstm_num_layers = 2, 
                  lstm_dropout = 0.2,
                  use_local_attn = True,
@@ -650,7 +650,7 @@ class EModel_FeatureWeight3(nn.Module):
     """
     def __init__(self, 
                  feature_dim, 
-                 gru_hidden_size = 10,  # 固定为10个隐藏层节点
+                 gru_hidden_size = 128, 
                  gru_num_layers = 2, 
                  gru_dropout = 0.2,
                  use_local_attn = True,
@@ -775,7 +775,7 @@ class EModel_FeatureWeight4(nn.Module):
     """
     def __init__(self, 
                  feature_dim, 
-                 lstm_hidden_size = 128, 
+                 lstm_hidden_size = 256, 
                  lstm_num_layers = 2, 
                  lstm_dropout = 0.2,
                  use_local_attn = True,
@@ -891,7 +891,7 @@ class EModel_FeatureWeight4(nn.Module):
 
 class EModel_FeatureWeight5(nn.Module):
     """
-    [Model 1: LSTM-based Model with Feature Weighting]
+    [Model 5: LSTM-based Model with Feature Weighting]
     Parameters:
       - feature_dim: Input feature dimension
       - lstm_hidden_size: LSTM hidden size
@@ -1499,14 +1499,14 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     feature_dim = X_train_seq.shape[-1]
     model1 = EModel_FeatureWeight1(
         feature_dim       = feature_dim,
-        lstm_hidden_size  = 128, 
+        lstm_hidden_size  = 256, 
         lstm_num_layers   = 2,
         lstm_dropout      = 0.2
     ).to(device)
     
     model2 = EModel_FeatureWeight2(
         feature_dim       = feature_dim,
-        lstm_hidden_size  = 128, 
+        lstm_hidden_size  = 256, 
         lstm_num_layers   = 2,
         lstm_dropout      = 0.2
     ).to(device)
@@ -1520,7 +1520,7 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
 
     model3 = EModel_FeatureWeight3(
         feature_dim       = feature_dim,
-        gru_hidden_size   = 10,  # 固定为10个隐藏层节点
+        gru_hidden_size   = 128,  # 固定为10个隐藏层节点
         gru_num_layers    = 2, 
         gru_dropout       = 0.2,
         use_local_attn    = True,
@@ -1633,7 +1633,7 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
 
     best_model3 = EModel_FeatureWeight3(
         feature_dim       = feature_dim,
-        gru_hidden_size   = 10,  # 固定为10个隐藏层节点
+        gru_hidden_size   = 128,  # 固定为10个隐藏层节点
         gru_num_layers    = 2
     ).to(device)
     best_model3.load_state_dict(torch.load('best_EModel_FeatureWeight3.pth', map_location=device, weights_only=True), strict=False)

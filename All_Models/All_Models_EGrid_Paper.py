@@ -1753,15 +1753,6 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     plot_dataset_distribution(val_timestamps, 'Validation Set')
     plot_dataset_distribution(test_timestamps, 'Test Set')
 
-    predictions_dict = {
-    'Model1': preds1_real,
-    'Model2': preds2_real,
-    'Model21': preds21_real,
-    'Model3': preds3_real,
-    'Model4': preds4_real,
-    'Model5': preds5_real
-    }
-
     plot_predictions_comparison(
         y_actual_real=labels4_real,
         predictions_dict={'Model4': preds1_real, 'Model5': preds3_real},

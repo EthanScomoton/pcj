@@ -1317,7 +1317,7 @@ def plot_predictions_comparison(y_actual_real, predictions_dict, colors=None, ti
     plt.figure(figsize = (14, 6))
     x_axis = np.arange(len(y_actual_real))
 
-    plt.plot(x_axis, y_actual_real, 'black', label='Actual', linewidth=2, alpha=0.8)
+    plt.plot(x_axis, y_actual_real, '#3A3B98', label='Actual', linewidth=2, alpha=0.8)
 
     colors = ['#FFF3CE', '#D6E9D5', '#FAD8D4', '#AFE3E6', '#D9E8FC']
     for (model_name, pred_values), color in zip(predictions_dict.items(), colors):
@@ -1758,16 +1758,10 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     'Model4': preds4_real,
     'Model5': preds5_real
     }
-    # 使用增强版可视化函数
-    plot_predictions_comparison(
-        y_actual_real=labels1_real,
-        predictions_dict= {'Model1': preds1_real, 'Model2': preds2_real},
-        timestamps=train_timestamps  # 训练集对应的时间戳
-    )
 
     plot_predictions_comparison(
-        y_actual_real=labels1_real,
-        predictions_dict={'Model1': preds1_real, 'Model3': preds3_real},
+        y_actual_real=labels4_real,
+        predictions_dict={'Model4': preds1_real, 'Model5': preds3_real},
         timestamps=train_timestamps  # 训练集对应的时间戳
     )
 

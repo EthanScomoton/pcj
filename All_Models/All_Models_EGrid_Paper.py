@@ -329,7 +329,7 @@ class EModel_FeatureWeight1(nn.Module):
         
         # Fully connected layer for final prediction
         self.fc = nn.Sequential(
-            nn.Linear(2 * lstm_hidden_size, 2 * lstm_hidden_size),
+            nn.Linear(4 * lstm_hidden_size, 128),
             nn.ReLU(),
             nn.Dropout(0.1),
             nn.Linear(128, 2)  # 输出两个值: mu 和 logvar
@@ -457,7 +457,7 @@ class EModel_FeatureWeight2(nn.Module):
         
         # Fully connected layer for final prediction
         self.fc = nn.Sequential(
-            nn.Linear(2 * lstm_hidden_size, 2 * lstm_hidden_size),
+            nn.Linear(4 * lstm_hidden_size, 128),
             nn.ReLU(),
             nn.Dropout(0.1),
             nn.Linear(128, 2)  # Output mu and logvar
@@ -578,7 +578,7 @@ class EModel_FeatureWeight21(nn.Module):
         
         # Fully connected layer for final prediction
         self.fc = nn.Sequential(
-            nn.Linear(2 * lstm_hidden_size, 2 * lstm_hidden_size),
+            nn.Linear(4 * lstm_hidden_size, 128),
             nn.ReLU(),
             nn.Dropout(0.1),
             nn.Linear(128, 2)  # 输出两个值: mu 和 logvar
@@ -918,7 +918,7 @@ class EModel_FeatureWeight5(nn.Module):
         self.feature_gate = nn.Sequential(
             nn.Linear(feature_dim, feature_dim*2),
             nn.GELU(),
-            nn.Linear(feature_dim*2, 1),
+            nn.Linear(feature_dim*2, feature_dim),
             nn.Sigmoid()
         )
         

@@ -329,7 +329,7 @@ class EModel_FeatureWeight1(nn.Module):
         
         # Fully connected layer for final prediction
         self.fc = nn.Sequential(
-            nn.Linear(4 * lstm_hidden_size, 128),
+            nn.Linear(2 * lstm_hidden_size, 2 * lstm_hidden_size),
             nn.ReLU(),
             nn.Dropout(0.1),
             nn.Linear(128, 2)  # 输出两个值: mu 和 logvar
@@ -457,7 +457,7 @@ class EModel_FeatureWeight2(nn.Module):
         
         # Fully connected layer for final prediction
         self.fc = nn.Sequential(
-            nn.Linear(4 * lstm_hidden_size, 128),
+            nn.Linear(2 * lstm_hidden_size, 2 * lstm_hidden_size),
             nn.ReLU(),
             nn.Dropout(0.1),
             nn.Linear(128, 2)  # Output mu and logvar
@@ -578,7 +578,7 @@ class EModel_FeatureWeight21(nn.Module):
         
         # Fully connected layer for final prediction
         self.fc = nn.Sequential(
-            nn.Linear(4 * lstm_hidden_size, 128),
+            nn.Linear(2 * lstm_hidden_size, 2 * lstm_hidden_size),
             nn.ReLU(),
             nn.Dropout(0.1),
             nn.Linear(128, 2)  # 输出两个值: mu 和 logvar
@@ -829,7 +829,7 @@ class EModel_FeatureWeight4(nn.Module):
         
         # Fully connected layer for final prediction
         self.fc = nn.Sequential(
-            nn.Linear(4 * lstm_hidden_size, 128),
+            nn.Linear(2 * lstm_hidden_size, 128),
             nn.ReLU(),
             nn.Dropout(0.1),
             nn.Linear(128, 2)  # 输出两个值: mu 和 logvar
@@ -1530,7 +1530,7 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     model4 = EModel_FeatureWeight4(
         feature_dim       = feature_dim,
         lstm_hidden_size  = 256, 
-        lstm_num_layers   = 1,
+        lstm_num_layers   = 2,
         lstm_dropout      = 0.1
     ).to(device)
 
@@ -1612,14 +1612,14 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     # 修改加载模型部分的代码
     best_model1 = EModel_FeatureWeight1(
         feature_dim       = feature_dim,
-        lstm_hidden_size  = 128, 
+        lstm_hidden_size  = 256, 
         lstm_num_layers   = 2
     ).to(device)
     best_model1.load_state_dict(torch.load('best_EModel_FeatureWeight1.pth', map_location=device, weights_only=True), strict=False)
 
     best_model2 = EModel_FeatureWeight2(
         feature_dim       = feature_dim,
-        lstm_hidden_size  = 128, 
+        lstm_hidden_size  = 256, 
         lstm_num_layers   = 2
     ).to(device)
     best_model2.load_state_dict(torch.load('best_EModel_FeatureWeight2.pth', map_location=device, weights_only=True), strict=False)
@@ -1641,7 +1641,7 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     best_model4 = EModel_FeatureWeight4(
         feature_dim       = feature_dim,
         lstm_hidden_size  = 256, 
-        lstm_num_layers   = 6
+        lstm_num_layers   = 2
     ).to(device)
     best_model4.load_state_dict(torch.load('best_EModel_FeatureWeight4.pth', map_location=device, weights_only=True), strict=False)
 

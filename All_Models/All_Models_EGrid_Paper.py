@@ -1761,7 +1761,30 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     # 使用增强版可视化函数
     plot_predictions_comparison(
         y_actual_real=labels1_real,
-        predictions_dict=predictions_dict,
+        predictions_dict= {'Model1': preds1_real, 'Model2': preds2_real},
+        timestamps=train_timestamps  # 训练集对应的时间戳
+    )
+
+    plot_predictions_comparison(
+        y_actual_real=labels1_real,
+        predictions_dict={'Model1': preds1_real, 'Model3': preds3_real},
+        timestamps=train_timestamps  # 训练集对应的时间戳
+    )
+
+    plot_predictions_comparison(
+        y_actual_real=labels1_real,
+        predictions_dict={'Model1': preds1_real, 'Model4': preds4_real},
+        timestamps=train_timestamps  # 训练集对应的时间戳
+    )
+    plot_predictions_comparison(
+        y_actual_real=labels2_real,
+        predictions_dict={'Model2': preds1_real, 'Model4': preds4_real},
+        timestamps=train_timestamps  # 训练集对应的时间戳
+    )
+
+    plot_predictions_comparison(
+        y_actual_real=labels3_real,
+        predictions_dict={'Model3': preds1_real, 'Model4': preds4_real},
         timestamps=train_timestamps  # 训练集对应的时间戳
     )
 

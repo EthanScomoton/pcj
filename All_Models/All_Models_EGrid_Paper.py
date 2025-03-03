@@ -1046,13 +1046,13 @@ class EModel_FeatureWeight5(nn.Module):
 def evaluate(model, dataloader, criterion, device = device):
     """
     [Evaluation Module]
-    - Compute loss and multiple metrics (RMSE, MAPE, R², SMAPE, MAE) on the given dataset.
+    - Compute loss and multiple metrics (RMSE, MAPE, R², mse, MAE) on the given dataset.
     Parameters:
       model: Model to evaluate
       dataloader: DataLoader for the dataset
       criterion: Loss function
     Returns:
-      val_loss, rmse, mape, r2, smape, mae, preds, labels
+      val_loss, rmse, mape, r2, mse, mae, preds, labels
     """
     model.eval()
     running_loss, num_samples = 0.0, 0
@@ -1091,19 +1091,13 @@ def evaluate(model, dataloader, criterion, device = device):
     ss_tot = np.sum((labels_arr - np.mean(labels_arr)) ** 2)
     r2_std = 1 - (ss_res / ss_tot) if ss_tot != 0 else 0.0
 
-    # Compute SMAPE
-    numerator = np.abs(labels_arr - preds_arr)
-    denominator = np.abs(labels_arr) + np.abs(preds_arr)
-    nonzero_mask_smape = (denominator != 0)
-    if np.sum(nonzero_mask_smape) > 0:
-        smape_val = 100.0 * 2.0 * np.mean(numerator[nonzero_mask_smape] / denominator[nonzero_mask_smape])
-    else:
-        smape_val = 0.0
+    # Compute mse
+    mse_val = np.mean((labels_arr - preds_arr) ** 2)
 
     # Compute MAE
     mae_val = np.mean(np.abs(labels_arr - preds_arr))
 
-    return val_loss, rmse_std, mape_std, r2_std, smape_val, mae_val, preds_arr, labels_arr
+    return val_loss, rmse_std, mape_std, r2_std, mse_val, mae_val, preds_arr, labels_arr
 
 
 # 6. Training Module
@@ -1146,14 +1140,14 @@ def train_model(model, train_loader, val_loader, model_name = 'Model', learning_
     train_rmse_history   = []
     train_mape_history   = []
     train_r2_history     = []
-    train_smape_history  = []
+    train_mse_history  = []
     train_mae_history    = []
 
     val_loss_history     = []
     val_rmse_history     = []
     val_mape_history     = []
     val_r2_history       = []
-    val_smape_history    = []
+    val_mse_history    = []
     val_mae_history      = []
 
     for epoch in range(num_epochs):
@@ -1180,22 +1174,22 @@ def train_model(model, train_loader, val_loader, model_name = 'Model', learning_
         train_loss_epoch = running_loss / num_samples
 
         # Evaluate on training and validation sets
-        train_loss_eval, train_rmse_eval, train_mape_eval, train_r2_eval, train_smape_eval, train_mae_eval, _, _ = evaluate(model, train_loader, criterion)
-        val_loss_eval, val_rmse_eval, val_mape_eval, val_r2_eval, val_smape_eval, val_mae_eval, _, _ = evaluate(model, val_loader, criterion)
+        train_loss_eval, train_rmse_eval, train_mape_eval, train_r2_eval, train_mse_eval, train_mae_eval, _, _ = evaluate(model, train_loader, criterion)
+        val_loss_eval, val_rmse_eval, val_mape_eval, val_r2_eval, val_mse_eval, val_mae_eval, _, _ = evaluate(model, val_loader, criterion)
 
         # Save metric histories
         train_loss_history.append(train_loss_eval)
         train_rmse_history.append(train_rmse_eval)
         train_mape_history.append(train_mape_eval)
         train_r2_history.append(train_r2_eval)
-        train_smape_history.append(train_smape_eval)
+        train_mse_history.append(train_mse_eval)
         train_mae_history.append(train_mae_eval)
 
         val_loss_history.append(val_loss_eval)
         val_rmse_history.append(val_rmse_eval)
         val_mape_history.append(val_mape_eval)
         val_r2_history.append(val_r2_eval)
-        val_smape_history.append(val_smape_eval)
+        val_mse_history.append(val_mse_eval)
         val_mae_history.append(val_mae_eval)
 
         # Print log information
@@ -1205,7 +1199,7 @@ def train_model(model, train_loader, val_loader, model_name = 'Model', learning_
               f"ValRMSE: {val_rmse_eval:.4f}, "
               f"ValMAPE: {val_mape_eval:.2f}%, "
               f"ValR^2: {val_r2_eval:.4f}, "
-              f"ValSMAPE: {val_smape_eval:.2f}%, "
+              f"Valmse: {val_mse_eval:.2f}%, "
               f"ValMAE: {val_mae_eval:.4f}")
 
         # Early Stopping check
@@ -1225,13 +1219,13 @@ def train_model(model, train_loader, val_loader, model_name = 'Model', learning_
         "train_rmse":   train_rmse_history,
         "train_mape":   train_mape_history,
         "train_r2":     train_r2_history,
-        "train_smape":  train_smape_history,
+        "train_mse":  train_mse_history,
         "train_mae":    train_mae_history,
         "val_loss":     val_loss_history,
         "val_rmse":     val_rmse_history,
         "val_mape":     val_mape_history,
         "val_r2":       val_r2_history,
-        "val_smape":    val_smape_history,
+        "val_mse":    val_mse_history,
         "val_mae":      val_mae_history
     }
 
@@ -1317,6 +1311,7 @@ def plot_predictions_comparison(y_actual_real, predictions_dict, colors=None, ti
     plt.figure(figsize = (14, 6))
     x_axis = np.arange(len(y_actual_real))
 
+
     plt.plot(x_axis, y_actual_real, '#3A3B98', label='Actual', linewidth=2, alpha=0.8)
 
     colors = ['#E6B422', '#4CAF50', '#E85D75', '#17A2B8', '#5D8AA8']
@@ -1334,7 +1329,7 @@ def plot_predictions_comparison(y_actual_real, predictions_dict, colors=None, ti
 def plot_training_curves_allmetrics(hist_dict, model_name = 'Model'):
     """
     [Visualization Module - Training Curves]
-    - Plot training and validation curves for Loss, RMSE, MAPE, R², SMAPE, and MAE.
+    - Plot training and validation curves for Loss, RMSE, MAPE, R², mse, and MAE.
     Parameters:
       hist_dict: Dictionary containing metric histories
       model_name: Model name (default: 'Model')
@@ -1382,13 +1377,13 @@ def plot_training_curves_allmetrics(hist_dict, model_name = 'Model'):
     plt.legend()
     plt.grid(True)
 
-    # SMAPE curve
+    # mse curve
     plt.subplot(3, 2, 5)
-    plt.plot(epochs, hist_dict["train_smape"], 'r-o', label = 'Train SMAPE', markersize = 4)
-    plt.plot(epochs, hist_dict["val_smape"], 'b-o', label = 'Val SMAPE', markersize = 4)
+    plt.plot(epochs, hist_dict["train_mse"], 'r-o', label = 'Train mse', markersize = 4)
+    plt.plot(epochs, hist_dict["val_mse"], 'b-o', label = 'Val mse', markersize = 4)
     plt.xlabel('Epoch')
-    plt.ylabel('SMAPE (%)')
-    plt.title('SMAPE')
+    plt.ylabel('mse (%)')
+    plt.title('mse')
     plt.legend()
     plt.grid(True)
 
@@ -1667,20 +1662,20 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
 
     # Evaluate on test set (standardized domain)
     criterion_test = nn.SmoothL1Loss(beta = 1.0)
-    (_, test_rmse1_std, test_mape1_std, test_r21_std, test_smape1_std, test_mae1_std, preds1_std, labels1_std) = evaluate(best_model1, test_loader, criterion_test)
-    (_, test_rmse2_std, test_mape2_std, test_r22_std, test_smape2_std, test_mae2_std, preds2_std, labels2_std) = evaluate(best_model2, test_loader, criterion_test)
-    (_, test_rmse21_std, test_mape21_std, test_r221_std, test_smape21_std, test_mae21_std, preds21_std, labels21_std) = evaluate(best_model21, test_loader, criterion_test)
-    (_, test_rmse3_std, test_mape3_std, test_r23_std, test_smape3_std, test_mae3_std, preds3_std, labels3_std) = evaluate(best_model3, test_loader, criterion_test)
-    (_, test_rmse4_std, test_mape4_std, test_r24_std, test_smape4_std, test_mae4_std, preds4_std, labels4_std) = evaluate(best_model4, test_loader, criterion_test)
-    (_, test_rmse5_std, test_mape5_std, test_r25_std, test_smape5_std, test_mae5_std, preds5_std, labels5_std) = evaluate(best_model5, test_loader, criterion_test)
+    (_, test_rmse1_std, test_mape1_std, test_r21_std, test_mse1_std, test_mae1_std, preds1_std, labels1_std) = evaluate(best_model1, test_loader, criterion_test)
+    (_, test_rmse2_std, test_mape2_std, test_r22_std, test_mse2_std, test_mae2_std, preds2_std, labels2_std) = evaluate(best_model2, test_loader, criterion_test)
+    (_, test_rmse21_std, test_mape21_std, test_r221_std, test_mse21_std, test_mae21_std, preds21_std, labels21_std) = evaluate(best_model21, test_loader, criterion_test)
+    (_, test_rmse3_std, test_mape3_std, test_r23_std, test_mse3_std, test_mae3_std, preds3_std, labels3_std) = evaluate(best_model3, test_loader, criterion_test)
+    (_, test_rmse4_std, test_mape4_std, test_r24_std, test_mse4_std, test_mae4_std, preds4_std, labels4_std) = evaluate(best_model4, test_loader, criterion_test)
+    (_, test_rmse5_std, test_mape5_std, test_r25_std, test_mse5_std, test_mae5_std, preds5_std, labels5_std) = evaluate(best_model5, test_loader, criterion_test)
 
     print("\n========== [Test Set Evaluation (Standardized Domain)] ==========")
-    print(f"[EModel_FeatureWeight1]  RMSE: {test_rmse1_std:.4f}, MAPE: {test_mape1_std:.2f}%, R²: {test_r21_std:.4f}, SMAPE: {test_smape1_std:.2f}%, MAE: {test_mae1_std:.4f}")
-    print(f"[EModel_FeatureWeight2]  RMSE: {test_rmse2_std:.4f}, MAPE: {test_mape2_std:.2f}%, R²: {test_r22_std:.4f}, SMAPE: {test_smape2_std:.2f}%, MAE: {test_mae2_std:.4f}")
-    print(f"[EModel_FeatureWeight21]  RMSE: {test_rmse21_std:.4f}, MAPE: {test_mape21_std:.2f}%, R²: {test_r221_std:.4f}, SMAPE: {test_smape21_std:.2f}%, MAE: {test_mae21_std:.4f}")
-    print(f"[EModel_FeatureWeight3]  RMSE: {test_rmse3_std:.4f}, MAPE: {test_mape3_std:.2f}%, R²: {test_r23_std:.4f}, SMAPE: {test_smape3_std:.2f}%, MAE: {test_mae3_std:.4f}")
-    print(f"[EModel_FeatureWeight4]  RMSE: {test_rmse4_std:.4f}, MAPE: {test_mape4_std:.2f}%, R²: {test_r24_std:.4f}, SMAPE: {test_smape4_std:.2f}%, MAE: {test_mae4_std:.4f}")
-    print(f"[EModel_FeatureWeight5]  RMSE: {test_rmse5_std:.4f}, MAPE: {test_mape5_std:.2f}%, R²: {test_r25_std:.4f}, SMAPE: {test_smape5_std:.2f}%, MAE: {test_mae5_std:.4f}")
+    print(f"[EModel_FeatureWeight1]  RMSE: {test_rmse1_std:.4f}, MAPE: {test_mape1_std:.2f}%, R²: {test_r21_std:.4f}, mse: {test_mse1_std:.2f}%, MAE: {test_mae1_std:.4f}")
+    print(f"[EModel_FeatureWeight2]  RMSE: {test_rmse2_std:.4f}, MAPE: {test_mape2_std:.2f}%, R²: {test_r22_std:.4f}, mse: {test_mse2_std:.2f}%, MAE: {test_mae2_std:.4f}")
+    print(f"[EModel_FeatureWeight21]  RMSE: {test_rmse21_std:.4f}, MAPE: {test_mape21_std:.2f}%, R²: {test_r221_std:.4f}, mse: {test_mse21_std:.2f}%, MAE: {test_mae21_std:.4f}")
+    print(f"[EModel_FeatureWeight3]  RMSE: {test_rmse3_std:.4f}, MAPE: {test_mape3_std:.2f}%, R²: {test_r23_std:.4f}, mse: {test_mse3_std:.2f}%, MAE: {test_mae3_std:.4f}")
+    print(f"[EModel_FeatureWeight4]  RMSE: {test_rmse4_std:.4f}, MAPE: {test_mape4_std:.2f}%, R²: {test_r24_std:.4f}, mse: {test_mse4_std:.2f}%, MAE: {test_mae4_std:.4f}")
+    print(f"[EModel_FeatureWeight5]  RMSE: {test_rmse5_std:.4f}, MAPE: {test_mape5_std:.2f}%, R²: {test_r25_std:.4f}, mse: {test_mse5_std:.2f}%, MAE: {test_mae5_std:.4f}")
 
     # Inverse standardization and (optionally) inverse logarithmic transformation
     preds1_real_std = scaler_y.inverse_transform(preds1_std.reshape(-1, 1)).ravel()

@@ -941,30 +941,32 @@ class EModel_FeatureWeight5(nn.Module):
             nn.GELU(),
         )
         
-        # 3. 自定义多头注意力实现
+        # 3. 自定义多头注意力实现 - 兼容修复版本
         if use_local_attn:
             from local_attention.local_attention import LocalAttention
-            # 使用原始LocalAttention作为基础
-            self.local_attn_base = LocalAttention(
-                dim = self.hidden_size // num_heads,  # 每个头的维度
-                window_size = local_attn_window_size,
-                causal = False,
-                dropout = 0.15,
-                prenorm = True
-            )
-            # 添加投影层实现多头功能
+            # 创建多个LocalAttention实例，每个对应一个头
+            self.local_attn_heads = nn.ModuleList([
+                LocalAttention(
+                    dim = self.hidden_size,
+                    window_size = local_attn_window_size,
+                    causal = False,
+                    dropout = 0.15
+                    # 移除不兼容的prenorm参数
+                ) for _ in range(num_heads)
+            ])
+            
+            # 投影层实现多头功能
             self.q_proj = nn.Linear(self.hidden_size, self.hidden_size)
             self.k_proj = nn.Linear(self.hidden_size, self.hidden_size)
             self.v_proj = nn.Linear(self.hidden_size, self.hidden_size)
             self.o_proj = nn.Linear(self.hidden_size, self.hidden_size)
         else:
-            # 使用PyTorch内置的多头注意力
-            self.mha = nn.MultiheadAttention(
-                embed_dim=self.hidden_size,
-                num_heads=num_heads,
-                dropout=0.15,
-                batch_first=True
-            )
+            # 使用标准的Attention模块
+            self.attention_heads = nn.ModuleList([
+                Attention(input_dim=self.hidden_size, dropout=0.15)
+                for _ in range(num_heads)
+            ])
+            self.output_projection = nn.Linear(num_heads * self.hidden_size, self.hidden_size)
             
         # 4. 改进的特征注意力层 - 添加LayerNorm
         self.feature_attn = nn.Sequential(
@@ -1039,20 +1041,6 @@ class EModel_FeatureWeight5(nn.Module):
                 param.data.fill_(0)
                 n = param.size(0)
                 param.data[(n // 4):(n // 2)].fill_(1.0)  # 遗忘门bias设为1
-    
-    def _split_heads(self, x, batch_size):
-        """将张量分割成多个注意力头"""
-        # 将最后一个维度分割成num_heads * depth
-        x = x.view(batch_size, -1, self.num_heads, self.hidden_size // self.num_heads)
-        # 转置结果使得shape变为(batch_size, num_heads, seq_len, depth)
-        return x.permute(0, 2, 1, 3)
-    
-    def _combine_heads(self, x, batch_size):
-        """将多头注意力的结果重新组合"""
-        # 转置回来
-        x = x.permute(0, 2, 1, 3)
-        # 合并最后两个维度
-        return x.reshape(batch_size, -1, self.hidden_size)
                 
     def forward(self, x):
         batch_size, seq_len, _ = x.shape
@@ -1073,39 +1061,33 @@ class EModel_FeatureWeight5(nn.Module):
         
         # 4. 时间维度注意力 - 多头实现
         if self.use_local_attn:
-            # 实现自定义多头局部注意力
+            # 投影查询、键、值
             q = self.q_proj(lstm_out)
             k = self.k_proj(lstm_out)
             v = self.v_proj(lstm_out)
             
-            # 分割成多个头
-            q_heads = self._split_heads(q, batch_size)
-            k_heads = self._split_heads(k, batch_size)
-            v_heads = self._split_heads(v, batch_size)
+            # 应用多个局部注意力头
+            multi_head_outputs = []
+            for head_idx in range(self.num_heads):
+                head_output = self.local_attn_heads[head_idx](q, k, v)
+                multi_head_outputs.append(head_output)
             
-            # 存储每个头的输出
-            head_outputs = []
-            
-            # 对每个头应用局部注意力
-            for h in range(self.num_heads):
-                # 提取当前头的查询、键、值
-                q_h = q_heads[:, h]  # [batch_size, seq_len, head_dim]
-                k_h = k_heads[:, h]
-                v_h = v_heads[:, h]
-                
-                # 应用局部注意力
-                head_out = self.local_attn_base(q_h, k_h, v_h)
-                head_outputs.append(head_out)
-                
-            # 将所有头的输出连接起来
-            multi_head_output = torch.cat([h.unsqueeze(1) for h in head_outputs], dim=1)
-            temporal = self._combine_heads(multi_head_output, batch_size)
-            temporal = self.o_proj(temporal)  # 最终投影
-            temporal = temporal.sum(dim=1)  # 聚合到2D
+            # 聚合多头输出
+            # 先对每个头的输出进行求和，得到[batch_size, num_heads, hidden_size]
+            head_outputs_summed = torch.stack([output.sum(dim=1) for output in multi_head_outputs], dim=1)
+            # 然后对多个头的输出求平均
+            temporal = head_outputs_summed.mean(dim=1)
+            temporal = self.o_proj(temporal)  # 输出投影
         else:
-            # 使用PyTorch内置的多头注意力
-            temporal_attn_out, _ = self.mha(lstm_out, lstm_out, lstm_out)
-            temporal = temporal_attn_out.mean(dim=1)  # 平均池化
+            # 应用多个标准注意力头
+            head_outputs = []
+            for head in self.attention_heads:
+                head_output = head(lstm_out)
+                head_outputs.append(head_output)
+            
+            # 连接多个头的输出并投影
+            multi_head_output = torch.cat(head_outputs, dim=1)
+            temporal = self.output_projection(multi_head_output)
         
         # 5. 特征维度注意力 - 与残差连接
         feature_raw = self.feature_attn(lstm_out.transpose(1, 2))

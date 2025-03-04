@@ -904,140 +904,182 @@ class EModel_FeatureWeight4(nn.Module):
 
 class EModel_FeatureWeight5(nn.Module):
     """
-    [Model 5: LSTM-based Model with Feature Weighting]
-    Parameters:
-      - feature_dim: Input feature dimension
-      - lstm_hidden_size: LSTM hidden size
-      - lstm_num_layers: Number of LSTM layers
-      - lstm_dropout: LSTM dropout probability
-      - use_local_attn: Whether to use local attention (default: False)
-      - local_attn_window_size: Window size for local attention (default: 5)
+    Enhanced Model 5: Advanced LSTM with Transformer-inspired components
     """
-    def __init__(self, 
-                 feature_dim, 
-                 lstm_hidden_size = 256, 
-                 lstm_num_layers = 3, 
+    def __init__(self,
+                 feature_dim,
+                 lstm_hidden_size = 256,
+                 lstm_num_layers = 3,
                  lstm_dropout = 0.1,
-                 use_local_attn = False,
-                 local_attn_window_size = 5,
-                 proj_dim = 512           # 新增投影维度参数
+                 use_local_attn = True,  # 改为默认使用局部注意力
+                 local_attn_window_size = 8,  # 增大窗口尺寸
+                 proj_dim = 512,
+                 num_heads = 4  # 多头注意力参数
                 ):
-        
         super(EModel_FeatureWeight5, self).__init__()
         self.feature_dim = feature_dim
-        self.use_local_attn = use_local_attn  # 保存该标识
-
-        # 增强特征门控机制
+        self.use_local_attn = use_local_attn
+        self.num_heads = num_heads
+        
+        # 1. 增强特征门控机制 - 添加批量归一化和残差连接
         self.feature_gate = nn.Sequential(
             nn.Linear(feature_dim, feature_dim*2),
+            nn.BatchNorm1d(feature_dim*2),
             nn.GELU(),
+            nn.Dropout(0.2),
             nn.Linear(feature_dim*2, feature_dim),
+            nn.BatchNorm1d(feature_dim),
             nn.Sigmoid()
         )
         
-        # 改进的局部注意力机制
+        # 2. 添加频率域特征提取 - 时间卷积网络分支
+        self.tcn = nn.Sequential(
+            nn.Conv1d(feature_dim, feature_dim*2, kernel_size=3, padding=1, dilation=1),
+            nn.GELU(),
+            nn.Conv1d(feature_dim*2, feature_dim, kernel_size=3, padding=2, dilation=2),
+            nn.GELU(),
+        )
+        
+        # 3. 多头注意力机制 - Transformer风格
         if use_local_attn:
             from local_attention.local_attention import LocalAttention
             self.temporal_attn = LocalAttention(
                 dim = 2 * lstm_hidden_size,
                 window_size = local_attn_window_size,
                 causal = False,
-                dropout = 0.1,
-                prenorm = True
+                dropout = 0.15,  # 增加dropout防止过拟合
+                prenorm = True,
+                heads = num_heads  # 多头注意力
             )
         else:
-            self.temporal_attn = Attention(input_dim = 2 * lstm_hidden_size)
-        
-        # 增强特征注意力层
+            # 实现多头注意力
+            self.temporal_attn = nn.MultiheadAttention(
+                embed_dim=2*lstm_hidden_size, 
+                num_heads=num_heads,
+                dropout=0.15
+            )
+            
+        # 4. 改进的特征注意力层 - 添加LayerNorm
         self.feature_attn = nn.Sequential(
+            nn.LayerNorm(window_size),
             nn.Linear(window_size, window_size*2),
             nn.GELU(),
-            nn.Linear(window_size*2, 1),
+            nn.Dropout(0.15),
+            nn.Linear(window_size*2, window_size),
+            nn.GELU(),
+            nn.Linear(window_size, 1),
             nn.Sigmoid()
         )
         
-        # 增强特征投影层
+        # 5. 增强特征投影层 - 添加残差连接和LayerNorm
+        self.feature_proj_norm = nn.LayerNorm(2 * lstm_hidden_size)
         self.feature_proj = nn.Sequential(
             nn.Linear(2 * lstm_hidden_size, proj_dim),
+            nn.LayerNorm(proj_dim),
+            nn.GELU(),
+            nn.Dropout(0.2),
+            nn.Linear(proj_dim, proj_dim),
             nn.LayerNorm(proj_dim),
             nn.GELU(),
             nn.Dropout(0.1)
         )
         
-        # 可学习的特征重要性权重（增加初始化范围）
-        self.feature_importance = nn.Parameter(torch.rand(feature_dim)*2-1, requires_grad=True)
+        # 6. 更精细化的特征重要性表示
+        self.feature_importance = nn.Parameter(torch.randn(feature_dim)*0.02, requires_grad=True)
         
-        # 增强LSTM配置
+        # 7. LSTM with gradient clipping support
         self.lstm = nn.LSTM(
-            input_size    = feature_dim,
-            hidden_size   = lstm_hidden_size,
-            num_layers    = lstm_num_layers,
-            batch_first   = True,
+            input_size = feature_dim,
+            hidden_size = lstm_hidden_size,
+            num_layers = lstm_num_layers,
+            batch_first = True,
             bidirectional = True,
-            dropout       = lstm_dropout if lstm_num_layers > 1 else 0
+            dropout = lstm_dropout if lstm_num_layers > 1 else 0
         )
         self._init_lstm_weights()
         
-        # 增强全连接层
+        # 8. 残差连接和层归一化
+        self.lstm_norm = nn.LayerNorm(2 * lstm_hidden_size)
+        
+        # 9. 高级全连接层 - 更深层次、更渐进式
         self.fc = nn.Sequential(
-            nn.Linear(2 * lstm_hidden_size + proj_dim, 256),  # 正确拼接后的维度
-            nn.LayerNorm(256),
+            nn.Linear(2 * lstm_hidden_size + proj_dim, 512),
+            nn.LayerNorm(512),
             nn.GELU(),
             nn.Dropout(0.2),
+            nn.Linear(512, 256),
+            nn.LayerNorm(256),
+            nn.GELU(),
+            nn.Dropout(0.1),
             nn.Linear(256, 128),
             nn.LayerNorm(128),
             nn.GELU(),
-            nn.Dropout(0.1),
+            nn.Dropout(0.05),
             nn.Linear(128, 2)
         )
-
+        
+        # 10. 添加自适应噪声水平
+        self.noise_level = nn.Parameter(torch.tensor(0.05), requires_grad=True)
+        
     def _init_lstm_weights(self):
-        """
-        [LSTM Weight Initialization]
-        """
+        """优化的LSTM权重初始化"""
         for name, param in self.lstm.named_parameters():
             if 'weight_ih' in name:
-                nn.init.xavier_uniform_(param.data)
+                nn.init.kaiming_normal_(param.data)  # He初始化
             elif 'weight_hh' in name:
-                nn.init.orthogonal_(param.data)
+                nn.init.orthogonal_(param.data, gain=0.9)  # 正交初始化
             elif 'bias' in name:
                 param.data.fill_(0)
                 n = param.size(0)
-                param.data[(n // 4):(n // 2)].fill_(1.0)
-
+                param.data[(n // 4):(n // 2)].fill_(1.0)  # 遗忘门bias设为1
+                
     def forward(self, x):
-        """
-        Parameters:
-          x: Input tensor with shape [batch_size, seq_len, feature_dim]
-        Returns:
-          Predicted output with shape [batch_size]
-        """
-        # Dynamic feature weighting
-        gate = self.feature_gate(x.mean(dim = 1))
-        x = x * gate.unsqueeze(1)
-
-        # Process with LSTM
-        lstm_out, _ = self.lstm(x)
+        batch_size, seq_len, _ = x.shape
         
-        # Temporal attention
+        # 1. 动态特征加权 - 批归一化需要特殊处理
+        x_mean = x.mean(dim=1)
+        gate = self.feature_gate(x_mean)
+        x_weighted = x * gate.unsqueeze(1)
+        
+        # 2. 加入TCN分支 - 频率域特征提取
+        x_t = x.transpose(1, 2)  # [B, F, T]
+        x_tcn = self.tcn(x_t).transpose(1, 2)  # [B, T, F]
+        x_combined = x_weighted + 0.2 * x_tcn  # 残差连接
+        
+        # 3. LSTM处理
+        lstm_out, _ = self.lstm(x_combined)
+        lstm_out = self.lstm_norm(lstm_out)  # 层归一化
+        
+        # 4. 时间维度注意力
         if self.use_local_attn:
             temporal = self.temporal_attn(lstm_out, lstm_out, lstm_out)
-            temporal = temporal.sum(dim=1)  # 聚合到2D
+            temporal = temporal.sum(dim=1)
         else:
-            temporal = self.temporal_attn(lstm_out)
+            # 多头注意力处理
+            temporal_attn_out, _ = self.temporal_attn(
+                lstm_out.transpose(0, 1), 
+                lstm_out.transpose(0, 1), 
+                lstm_out.transpose(0, 1)
+            )
+            temporal = temporal_attn_out.transpose(0, 1).mean(dim=1)
         
-        # Feature attention over feature dimensions
+        # 5. 特征维度注意力 - 与残差连接
         feature_raw = self.feature_attn(lstm_out.transpose(1, 2))
         feature_raw = feature_raw.squeeze(-1)
-        feature = self.feature_proj(feature_raw)
-
-        # Concatenate the two branches
-        combined = torch.cat([temporal, feature], dim = 1)
-        output = self.fc(combined)
-        mu, logvar = torch.chunk(output, 2, dim = 1)
         
-        # Reparameterization trick with noise
-        noise = 0.1 * torch.randn_like(mu, device = x.device) * torch.exp(0.5 * logvar)
+        # 添加归一化和残差连接
+        feature_raw_norm = self.feature_proj_norm(feature_raw)
+        feature = self.feature_proj(feature_raw_norm)
+        
+        # 6. 连接两个分支
+        combined = torch.cat([temporal, feature], dim=1)
+        
+        # 7. 最终预测
+        output = self.fc(combined)
+        mu, logvar = torch.chunk(output, 2, dim=1)
+        
+        # 8. 自适应噪声水平的重参数化技巧
+        noise = self.noise_level * torch.randn_like(mu, device=x.device) * torch.exp(0.5 * logvar)
         output = mu + noise
         
         return output.squeeze(-1)

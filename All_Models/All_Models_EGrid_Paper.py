@@ -904,15 +904,15 @@ class EModel_FeatureWeight4(nn.Module):
 
 class EModel_FeatureWeight5(nn.Module):
     """
-    Enhanced Model 5: Advanced LSTM with Transformer-inspired components
+    Enhanced Model 5: Advanced LSTM with multi-head attention mechanisms
     """
     def __init__(self,
                  feature_dim,
                  lstm_hidden_size = 256,
                  lstm_num_layers = 3,
                  lstm_dropout = 0.1,
-                 use_local_attn = True,  # 改为默认使用局部注意力
-                 local_attn_window_size = 8,  # 增大窗口尺寸
+                 use_local_attn = True,
+                 local_attn_window_size = 8,
                  proj_dim = 512,
                  num_heads = 4  # 多头注意力参数
                 ):
@@ -920,8 +920,9 @@ class EModel_FeatureWeight5(nn.Module):
         self.feature_dim = feature_dim
         self.use_local_attn = use_local_attn
         self.num_heads = num_heads
+        self.hidden_size = lstm_hidden_size * 2  # 双向LSTM输出维度
         
-        # 1. 增强特征门控机制 - 添加批量归一化和残差连接
+        # 1. 增强特征门控机制 - 添加批量归一化
         self.feature_gate = nn.Sequential(
             nn.Linear(feature_dim, feature_dim*2),
             nn.BatchNorm1d(feature_dim*2),
@@ -940,22 +941,29 @@ class EModel_FeatureWeight5(nn.Module):
             nn.GELU(),
         )
         
-        # 3. 多头注意力机制 - Transformer风格
+        # 3. 自定义多头注意力实现
         if use_local_attn:
             from local_attention.local_attention import LocalAttention
-            self.temporal_attn = LocalAttention(
-                dim = 2 * lstm_hidden_size,
+            # 使用原始LocalAttention作为基础
+            self.local_attn_base = LocalAttention(
+                dim = self.hidden_size // num_heads,  # 每个头的维度
                 window_size = local_attn_window_size,
                 causal = False,
-                dropout = 0.15,  # 增加dropout防止过拟合
-                heads = num_heads  # 多头注意力
+                dropout = 0.15,
+                prenorm = True
             )
+            # 添加投影层实现多头功能
+            self.q_proj = nn.Linear(self.hidden_size, self.hidden_size)
+            self.k_proj = nn.Linear(self.hidden_size, self.hidden_size)
+            self.v_proj = nn.Linear(self.hidden_size, self.hidden_size)
+            self.o_proj = nn.Linear(self.hidden_size, self.hidden_size)
         else:
-            # 实现多头注意力
-            self.temporal_attn = nn.MultiheadAttention(
-                embed_dim=2*lstm_hidden_size, 
+            # 使用PyTorch内置的多头注意力
+            self.mha = nn.MultiheadAttention(
+                embed_dim=self.hidden_size,
                 num_heads=num_heads,
-                dropout=0.15
+                dropout=0.15,
+                batch_first=True
             )
             
         # 4. 改进的特征注意力层 - 添加LayerNorm
@@ -971,9 +979,9 @@ class EModel_FeatureWeight5(nn.Module):
         )
         
         # 5. 增强特征投影层 - 添加残差连接和LayerNorm
-        self.feature_proj_norm = nn.LayerNorm(2 * lstm_hidden_size)
+        self.feature_proj_norm = nn.LayerNorm(self.hidden_size)
         self.feature_proj = nn.Sequential(
-            nn.Linear(2 * lstm_hidden_size, proj_dim),
+            nn.Linear(self.hidden_size, proj_dim),
             nn.LayerNorm(proj_dim),
             nn.GELU(),
             nn.Dropout(0.2),
@@ -998,11 +1006,11 @@ class EModel_FeatureWeight5(nn.Module):
         self._init_lstm_weights()
         
         # 8. 残差连接和层归一化
-        self.lstm_norm = nn.LayerNorm(2 * lstm_hidden_size)
+        self.lstm_norm = nn.LayerNorm(self.hidden_size)
         
         # 9. 高级全连接层 - 更深层次、更渐进式
         self.fc = nn.Sequential(
-            nn.Linear(2 * lstm_hidden_size + proj_dim, 512),
+            nn.Linear(self.hidden_size + proj_dim, 512),
             nn.LayerNorm(512),
             nn.GELU(),
             nn.Dropout(0.2),
@@ -1031,6 +1039,20 @@ class EModel_FeatureWeight5(nn.Module):
                 param.data.fill_(0)
                 n = param.size(0)
                 param.data[(n // 4):(n // 2)].fill_(1.0)  # 遗忘门bias设为1
+    
+    def _split_heads(self, x, batch_size):
+        """将张量分割成多个注意力头"""
+        # 将最后一个维度分割成num_heads * depth
+        x = x.view(batch_size, -1, self.num_heads, self.hidden_size // self.num_heads)
+        # 转置结果使得shape变为(batch_size, num_heads, seq_len, depth)
+        return x.permute(0, 2, 1, 3)
+    
+    def _combine_heads(self, x, batch_size):
+        """将多头注意力的结果重新组合"""
+        # 转置回来
+        x = x.permute(0, 2, 1, 3)
+        # 合并最后两个维度
+        return x.reshape(batch_size, -1, self.hidden_size)
                 
     def forward(self, x):
         batch_size, seq_len, _ = x.shape
@@ -1049,18 +1071,41 @@ class EModel_FeatureWeight5(nn.Module):
         lstm_out, _ = self.lstm(x_combined)
         lstm_out = self.lstm_norm(lstm_out)  # 层归一化
         
-        # 4. 时间维度注意力
+        # 4. 时间维度注意力 - 多头实现
         if self.use_local_attn:
-            temporal = self.temporal_attn(lstm_out, lstm_out, lstm_out)
-            temporal = temporal.sum(dim=1)
+            # 实现自定义多头局部注意力
+            q = self.q_proj(lstm_out)
+            k = self.k_proj(lstm_out)
+            v = self.v_proj(lstm_out)
+            
+            # 分割成多个头
+            q_heads = self._split_heads(q, batch_size)
+            k_heads = self._split_heads(k, batch_size)
+            v_heads = self._split_heads(v, batch_size)
+            
+            # 存储每个头的输出
+            head_outputs = []
+            
+            # 对每个头应用局部注意力
+            for h in range(self.num_heads):
+                # 提取当前头的查询、键、值
+                q_h = q_heads[:, h]  # [batch_size, seq_len, head_dim]
+                k_h = k_heads[:, h]
+                v_h = v_heads[:, h]
+                
+                # 应用局部注意力
+                head_out = self.local_attn_base(q_h, k_h, v_h)
+                head_outputs.append(head_out)
+                
+            # 将所有头的输出连接起来
+            multi_head_output = torch.cat([h.unsqueeze(1) for h in head_outputs], dim=1)
+            temporal = self._combine_heads(multi_head_output, batch_size)
+            temporal = self.o_proj(temporal)  # 最终投影
+            temporal = temporal.sum(dim=1)  # 聚合到2D
         else:
-            # 多头注意力处理
-            temporal_attn_out, _ = self.temporal_attn(
-                lstm_out.transpose(0, 1), 
-                lstm_out.transpose(0, 1), 
-                lstm_out.transpose(0, 1)
-            )
-            temporal = temporal_attn_out.transpose(0, 1).mean(dim=1)
+            # 使用PyTorch内置的多头注意力
+            temporal_attn_out, _ = self.mha(lstm_out, lstm_out, lstm_out)
+            temporal = temporal_attn_out.mean(dim=1)  # 平均池化
         
         # 5. 特征维度注意力 - 与残差连接
         feature_raw = self.feature_attn(lstm_out.transpose(1, 2))

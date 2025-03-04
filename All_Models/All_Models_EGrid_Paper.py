@@ -912,7 +912,7 @@ class EModel_FeatureWeight5(nn.Module):
                  lstm_num_layers = 3,
                  lstm_dropout = 0.1,
                  use_local_attn = True,
-                 local_attn_window_size = 8,
+                 local_attn_window_size = 20,
                  proj_dim = 512,
                  num_heads = 4  # 多头注意力参数
                 ):

@@ -948,7 +948,6 @@ class EModel_FeatureWeight5(nn.Module):
                 window_size = local_attn_window_size,
                 causal = False,
                 dropout = 0.15,  # 增加dropout防止过拟合
-                prenorm = False,
                 heads = num_heads  # 多头注意力
             )
         else:

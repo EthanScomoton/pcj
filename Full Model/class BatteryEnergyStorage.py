@@ -1,7 +1,5 @@
 class BatteryEnergyStorage:
-    def __init__(self, capacity_kwh, max_power_kw, initial_soc=0.5, 
-                 charging_efficiency=0.95, discharging_efficiency=0.95,
-                 min_soc=0.1, max_soc=0.9):
+    def __init__(self, capacity_kwh, max_power_kw, initial_soc=0.5, charging_efficiency=0.95, discharging_efficiency=0.95, min_soc=0.1, max_soc=0.9):
         """
         初始化储能系统
         

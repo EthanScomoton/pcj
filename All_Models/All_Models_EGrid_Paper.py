@@ -1512,7 +1512,7 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
       use_log_transform: Whether to apply logarithmic transformation to target values (True/False)
       min_egrid_threshold: Minimum threshold for E_grid, filter out values below this (default: 1.0)
     """
-    print("[Info] 1) Loading raw data...")
+    print("Loading raw data...")
     data_df = load_data()
 
     # Plot correlation heatmap (before filtering E_grid = 0)

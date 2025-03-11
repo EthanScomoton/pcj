@@ -9,6 +9,8 @@ if __name__ == "__main__":
     # 加载您的数据
     data_df = load_data()
     data_df, feature_cols, target_col = feature_engineering(data_df)
+
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     
     # 加载您的最佳预测模型(假设model4是您的最佳模型)
     best_model = EModel_FeatureWeight4(
@@ -16,8 +18,8 @@ if __name__ == "__main__":
         lstm_hidden_size=256,
         lstm_num_layers=2
     ).to(device)
-    best_model.load_state_dict(torch.load('best_EModel_FeatureWeight4.pth', 
-                                           map_location=device))
+    
+    best_model.load_state_dict(torch.load('best_EModel_FeatureWeight4.pth',  map_location=device))
     
     # 生成示例电价数据
     # 在实际应用中，您应加载真实的分时电价数据

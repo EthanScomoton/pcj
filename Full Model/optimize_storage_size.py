@@ -1,6 +1,4 @@
-def optimize_storage_size(demand_data, renewable_data, price_data=None, 
-                         min_capacity=100, max_capacity=2000, step=100,
-                         min_power=50, max_power=500, power_step=50):
+def optimize_storage_size(demand_data, renewable_data, price_data = None, min_capacity = 100, max_capacity = 2000, step = 100,min_power = 50, max_power = 500, power_step = 50):
     """
     基于经济性指标寻找最优储能规模
     
@@ -31,22 +29,22 @@ def optimize_storage_size(demand_data, renewable_data, price_data=None,
             
             # 模拟不使用储能系统的基准场景
             baseline_system = IntegratedEnergySystem(
-                bess_capacity_kwh=0,  # 无储能
-                bess_power_kw=0,      # 无储能
-                prediction_model=model4
+                bess_capacity_kwh = 0,  # 无储能
+                bess_power_kw = 0,      # 无储能
+                prediction_model = model4
             )
             
             # 运行模拟
             baseline_results = baseline_system.simulate_operation(
-                historic_data=demand_data,
-                time_steps=min(24*30, len(demand_data)),  # 1个月或全部数据
-                price_data=price_data
+                historic_data = demand_data,
+                time_steps = min(24*30, len(demand_data)),  # 1个月或全部数据
+                price_data = price_data
             )
             
             system_results = system.simulate_operation(
-                historic_data=demand_data,
-                time_steps=min(24*30, len(demand_data)),  # 1个月或全部数据
-                price_data=price_data
+                historic_data = demand_data,
+                time_steps = min(24*30, len(demand_data)),  # 1个月或全部数据
+                price_data = price_data
             )
             
             # 计算关键绩效指标
@@ -58,7 +56,7 @@ def optimize_storage_size(demand_data, renewable_data, price_data=None,
             
             economic_metrics = calculate_economic_metrics(
                 costs=[baseline_results['cost'].sum(), system_results['cost'].sum()],
-                investment_cost=investment_cost
+                investment_cost = investment_cost
             )
             
             # 存储结果
@@ -75,7 +73,7 @@ def optimize_storage_size(demand_data, renewable_data, price_data=None,
             })
     
     # 寻找净现值最高的配置
-    best_config = max(results, key=lambda x: x['npv'])
+    best_config = max(results, key = lambda x: x['npv'])
     
     return {
         'all_results': results,
@@ -96,11 +94,11 @@ def visualize_optimization_results(results):
     df = pd.DataFrame(results['all_results'])
     
     # 创建数据透视表用于热图
-    npv_pivot = df.pivot(index='capacity', columns='power', values='npv')
-    payback_pivot = df.pivot(index='capacity', columns='power', values='payback_period')
+    npv_pivot = df.pivot(index = 'capacity', column = 'power', values = 'npv')
+    payback_pivot = df.pivot(index = 'capacity', columns = 'power', values = 'payback_period')
     
     # 创建图表
-    fig, axes = plt.subplots(1, 2, figsize=(18, 8))
+    fig, axes = plt.subplots(1, 2, figsize = (18, 8))
     
     # NPV热图
     im1 = axes[0].imshow(npv_pivot, cmap='viridis')
@@ -116,8 +114,7 @@ def visualize_optimization_results(results):
     # 标记最佳NPV
     best_capacity = results['best_config']['capacity']
     best_power = results['best_config']['power']
-    best_idx = (list(npv_pivot.index).index(best_capacity), 
-                list(npv_pivot.columns).index(best_power))
+    best_idx = (list(npv_pivot.index).index(best_capacity), list(npv_pivot.columns).index(best_power))
     axes[0].plot(best_idx[1], best_idx[0], 'r*', markersize=15)
     
     # 回收期热图

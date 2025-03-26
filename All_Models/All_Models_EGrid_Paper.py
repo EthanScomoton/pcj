@@ -1360,7 +1360,6 @@ def analyze_target_distribution(data_df, target_col):
 
     plt.figure(figsize = (6, 4))
     plt.hist(data_df[target_col], bins = 30, color = 'skyblue', edgecolor = 'black')
-    plt.title(f"'{target_col}' Original Distribution")
     plt.xlabel(target_col)
     plt.ylabel("Frequency")
     plt.grid(True)
@@ -1378,7 +1377,6 @@ def plot_Egrid_over_time(data_df):
     plt.plot(data_df['timestamp'], data_df['E_grid'], color = 'blue', marker = 'o', markersize = 3, linewidth = 1)
     plt.xlabel('Timestamp')
     plt.ylabel('E_grid')
-    plt.title('E_grid Over Time (Full Dataset)')
     plt.grid(True)
     plt.tight_layout()
     plt.show()

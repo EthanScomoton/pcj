@@ -10,8 +10,7 @@ class RenewableEnergyOptimizer:
         self.max_pv_curtailment = max_pv_curtailment
         self.max_wind_curtailment = max_wind_curtailment
     
-    def optimize_renewables(self, pv_forecast, wind_forecast, demand_forecast, 
-                           bess_capacity, grid_prices=None):
+    def optimize_renewables(self, pv_forecast, wind_forecast, demand_forecast, bess_capacity, grid_prices=None):
         """
         优化可再生能源发电和储能利用
         

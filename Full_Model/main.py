@@ -1,6 +1,6 @@
-from .OSS import optimize_storage_size
+from .OSS import optimize_storage_size, visualize_optimization_results
 from .IES import IntegratedEnergySystem
-from .OSS import visualize_optimization_results
+from .All_Models_EGrid_Paper import (load_data, feature_engineering, EModel_FeatureWeight4)
 
 # 主函数 - 完整示例
 if __name__ == "__main__":
@@ -14,19 +14,21 @@ if __name__ == "__main__":
     data_df = load_data()
     data_df, feature_cols, target_col = feature_engineering(data_df)
 
+    # 设置设备（GPU或CPU）
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    
-    # 加载您的最佳预测模型(假设model4是您的最佳模型)
+
+    # 加载最佳预测模型（EModel_FeatureWeight4）
     best_model = EModel_FeatureWeight4(
         feature_dim=len(feature_cols),
         lstm_hidden_size=256,
         lstm_num_layers=2
     ).to(device)
-    
-    best_model.load_state_dict(torch.load('best_EModel_FeatureWeight4.pth',  map_location=device))
+
+    # 加载训练好的模型权重
+    best_model.load_state_dict(torch.load('best_EModel_FeatureWeight4.pth', map_location=device))
     
     # 生成示例电价数据
-    # 在实际应用中，您应加载真实的分时电价数据
+    # 在实际应用中，加载真实的分时电价数据
     timestamps = data_df['timestamp']
     prices = []
     

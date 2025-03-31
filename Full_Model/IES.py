@@ -1,9 +1,10 @@
-from .BatteryEnergyStorage import BatteryEnergyStorage
-from .EnergyOptimizer import EnergyOptimizer
-from .RenewableEnergyOptimizer import RenewableEnergyOptimizer
+from .BES import BatteryEnergyStorage
+from .EO import EnergyOptimizer
+from .REO import RenewableEnergyOptimizer
 import torch
 import pandas as pd
 
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')  
 class IntegratedEnergySystem:
     def __init__(self, bess_capacity_kwh, bess_power_kw, prediction_model=None):
         """

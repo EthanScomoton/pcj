@@ -1,3 +1,5 @@
+import numpy as np
+
 def extract_features(df, index):
     """从数据框中提取特定索引处的特征"""
     # 根据具体数据结构实现

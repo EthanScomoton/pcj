@@ -1,3 +1,5 @@
+from .IES import IntegratedEnergySystem
+
 def optimize_storage_size(demand_data, renewable_data, price_data = None, min_capacity = 100, max_capacity = 2000, step = 100,min_power = 50, max_power = 500, power_step = 50):
     """
     基于经济性指标寻找最优储能规模
@@ -24,7 +26,7 @@ def optimize_storage_size(demand_data, renewable_data, price_data = None, min_ca
             system = IntegratedEnergySystem(
                 bess_capacity_kwh=capacity,
                 bess_power_kw=power,
-                prediction_model=model4  # 使用您的最佳模型
+                prediction_model = model4  # 使用您的最佳模型
             )
             
             # 模拟不使用储能系统的基准场景

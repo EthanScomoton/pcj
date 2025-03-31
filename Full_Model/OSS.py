@@ -1,6 +1,6 @@
-from .IES import IntegratedEnergySystem
-from .EF  import calculate_economic_metrics
-from .All_Models_EGrid_Paper import (EModel_FeatureWeight4)
+from IES import IntegratedEnergySystem
+from EF  import calculate_economic_metrics
+from All_Models_EGrid_Paper import (EModel_FeatureWeight4)
 
 def optimize_storage_size(demand_data, renewable_data, price_data = None, min_capacity = 100, max_capacity = 2000, step = 100,min_power = 50, max_power = 500, power_step = 50):
     """

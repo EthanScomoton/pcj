@@ -1,3 +1,4 @@
+from Full_Model.BatteryEnergyStorage import BatteryEnergyStorage
 class IntegratedEnergySystem:
     def __init__(self, bess_capacity_kwh, bess_power_kw, prediction_model=None):
         """

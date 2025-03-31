@@ -4,6 +4,7 @@ from REO import RenewableEnergyOptimizer
 from EF import extract_features, get_renewable_forecast
 import torch
 import pandas as pd
+import numpy as np
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')  
 class IntegratedEnergySystem:
@@ -42,6 +43,19 @@ class IntegratedEnergySystem:
         if self.prediction_model is None:
             raise ValueError("未提供预测模型")
         
+        # 将 features 转换为 PyTorch 支持的浮点类型
+        if isinstance(features, np.ndarray) and features.dtype == np.dtype('O'):
+            try:
+                # 方法1: 尝试直接转换
+                features = features.astype(np.float32)
+            except:
+                try:
+                    # 方法2: 如果是混合数组，尝试堆叠并转换
+                    features = np.vstack(features).astype(np.float32)
+                except:
+                    # 方法3: 通过列表中转转换
+                    features = np.array(features.tolist(), dtype=np.float32)
+        
         with torch.no_grad():
             inputs = torch.tensor(features, dtype=torch.float32).to(device)
             outputs = self.prediction_model(inputs)
@@ -60,9 +74,6 @@ class IntegratedEnergySystem:
         返回:
             包含模拟结果的DataFrame
         """
-        import pandas as pd
-        import numpy as np
-        
         # 初始化结果存储
         results = []
         

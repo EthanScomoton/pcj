@@ -1,6 +1,8 @@
 from .BES import BatteryEnergyStorage
 from .EO import EnergyOptimizer
 from .REO import RenewableEnergyOptimizer
+from .EF import extract_features
+from .EF import get_renewable_forecast
 import torch
 import pandas as pd
 

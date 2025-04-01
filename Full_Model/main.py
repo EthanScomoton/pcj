@@ -25,7 +25,7 @@ if __name__ == "__main__":
     ).to(device)
 
     # 加载训练好的模型权重
-    best_model.load_state_dict(torch.load('best_EModel_FeatureWeight4.pth', map_location=device))
+    best_model.load_state_dict(torch.load('best_EModel_FeatureWeight4.pth', map_location=device, weights_only=True))
     
     # 生成示例电价数据
     # 在实际应用中，加载真实的分时电价数据

@@ -772,6 +772,7 @@ class EModel_FeatureWeight4(nn.Module):
       - lstm_dropout: LSTM dropout probability
       - use_local_attn: Whether to use local attention 
       - local_attn_window_size: Window size for local attention
+      - window_size: Window size for feature attention
     """
     def __init__(self, 
                  feature_dim, 
@@ -779,11 +780,13 @@ class EModel_FeatureWeight4(nn.Module):
                  lstm_num_layers = 2, 
                  lstm_dropout = 0.2,
                  use_local_attn = True,
-                 local_attn_window_size = 5
+                 local_attn_window_size = 5,
+                 window_size = 20
                 ):
         super(EModel_FeatureWeight4, self).__init__()
         self.feature_dim = feature_dim
         self.use_local_attn = use_local_attn  # 保存是否使用局部注意力的标识
+        self.window_size = window_size  # 保存窗口大小
         
         # Feature gating mechanism: fully connected layer + Sigmoid to compute feature weights
         self.feature_gate = nn.Sequential(
@@ -806,10 +809,10 @@ class EModel_FeatureWeight4(nn.Module):
         
         # Feature attention layer: aggregate LSTM output over feature dimensions
         self.feature_attn = nn.Sequential(
-            nn.Linear(window_size, window_size * 2),
+            nn.Linear(self.window_size, self.window_size * 2),
             nn.GELU(),
-            nn.LayerNorm(window_size * 2),
-            nn.Linear(window_size * 2, 1),
+            nn.LayerNorm(self.window_size * 2),
+            nn.Linear(self.window_size * 2, 1),
             nn.Sigmoid()
         )
         # Feature projection layer

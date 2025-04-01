@@ -1,6 +1,9 @@
 from IES import IntegratedEnergySystem
 from EF  import calculate_economic_metrics
 from All_Models_EGrid_Paper import (EModel_FeatureWeight4)
+import torch
+
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 def optimize_storage_size(demand_data, renewable_data, price_data = None, min_capacity = 100, max_capacity = 2000, step = 100,min_power = 50, max_power = 500, power_step = 50):
     """
@@ -22,33 +25,47 @@ def optimize_storage_size(demand_data, renewable_data, price_data = None, min_ca
     """
     results = []
     
+    # 创建一个共享的预测模型实例
+    feature_dim = len(demand_data.columns) - 1  # 排除timestamp列
+    prediction_model = EModel_FeatureWeight4(
+        feature_dim=feature_dim,
+        lstm_hidden_size=256,
+        lstm_num_layers=2
+    ).to(device)
+    
+    # 加载训练好的模型权重（如果有）
+    try:
+        prediction_model.load_state_dict(torch.load('best_EModel_FeatureWeight4.pth', map_location=device, weights_only=True))
+    except Exception as e:
+        print(f"警告：无法加载预训练模型，使用未训练的模型: {e}")
+    
     for capacity in range(min_capacity, max_capacity + step, step):
         for power in range(min_power, max_power + power_step, power_step):
             # 创建使用当前容量和功率的综合系统
             system = IntegratedEnergySystem(
                 bess_capacity_kwh=capacity,
                 bess_power_kw=power,
-                prediction_model = EModel_FeatureWeight4  # 使用您的最佳模型
+                prediction_model=prediction_model  # 使用模型实例
             )
             
             # 模拟不使用储能系统的基准场景
             baseline_system = IntegratedEnergySystem(
-                bess_capacity_kwh = 0,  # 无储能
-                bess_power_kw = 0,      # 无储能
-                prediction_model = EModel_FeatureWeight4
+                bess_capacity_kwh=0,  # 无储能
+                bess_power_kw=0,      # 无储能
+                prediction_model=prediction_model  # 使用同一个模型实例
             )
             
             # 运行模拟
             baseline_results = baseline_system.simulate_operation(
-                historic_data = demand_data,
-                time_steps = min(24*30, len(demand_data)),  # 1个月或全部数据
-                price_data = price_data
+                historic_data=demand_data,
+                time_steps=min(24*30, len(demand_data)),  # 1个月或全部数据
+                price_data=price_data
             )
             
             system_results = system.simulate_operation(
-                historic_data = demand_data,
-                time_steps = min(24*30, len(demand_data)),  # 1个月或全部数据
-                price_data = price_data
+                historic_data=demand_data,
+                time_steps=min(24*30, len(demand_data)),  # 1个月或全部数据
+                price_data=price_data
             )
             
             # 计算关键绩效指标
@@ -60,7 +77,7 @@ def optimize_storage_size(demand_data, renewable_data, price_data = None, min_ca
             
             economic_metrics = calculate_economic_metrics(
                 costs=[baseline_results['cost'].sum(), system_results['cost'].sum()],
-                investment_cost = investment_cost
+                investment_cost=investment_cost
             )
             
             # 存储结果
@@ -77,7 +94,7 @@ def optimize_storage_size(demand_data, renewable_data, price_data = None, min_ca
             })
     
     # 寻找净现值最高的配置
-    best_config = max(results, key = lambda x: x['npv'])
+    best_config = max(results, key=lambda x: x['npv'])
     
     return {
         'all_results': results,

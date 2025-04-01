@@ -57,6 +57,16 @@ class IntegratedEnergySystem:
                     features = np.array(features.tolist(), dtype=np.float32)
         
         with torch.no_grad():
+            # 确保输入是三维张量: [batch_size, seq_len, feature_dim]
+            # 如果是一维特征向量，添加batch和seq维度
+            if len(features.shape) == 1:
+                # 将一维特征转换为 [1, 1, feature_dim]
+                features = features.reshape(1, 1, -1)
+            # 如果是二维特征矩阵但缺少seq维度
+            elif len(features.shape) == 2:
+                # 将二维特征转换为 [batch_size, 1, feature_dim]
+                features = features.reshape(features.shape[0], 1, -1)
+                
             inputs = torch.tensor(features, dtype=torch.float32).to(device)
             outputs = self.prediction_model(inputs)
         

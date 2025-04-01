@@ -2,7 +2,7 @@ from OSS import optimize_storage_size, visualize_optimization_results
 from IES import IntegratedEnergySystem
 from All_Models_EGrid_Paper import (load_data, feature_engineering, EModel_FeatureWeight4)
 
-# 主函数 - 完整示例
+# 主函数 
 if __name__ == "__main__":
     # 导入必要的库
     import torch

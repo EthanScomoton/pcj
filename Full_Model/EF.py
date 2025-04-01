@@ -3,11 +3,11 @@ import numpy as np
 def extract_features(df, index):
     """从数据框中提取特定索引处的特征"""
     # 根据具体数据结构实现
-    # 这里假设我们提取当前行的所有特征列
+    # 提取当前行的所有特征列
     if index >= len(df):
         return None
     
-    # 假设我们的特征是除了timestamp和E_grid之外的所有列
+    # 特征是除了timestamp和E_grid之外的所有列
     feature_cols = [col for col in df.columns if col not in ['timestamp', 'E_grid']]
     return df.iloc[index][feature_cols].values
 

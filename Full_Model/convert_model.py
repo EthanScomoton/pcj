@@ -10,7 +10,7 @@ import torch
 import numpy as np
 import os
 
-def convert_model_weights(pretrained_path, new_feature_dim, output_path=None):
+def convert_model_weights(pretrained_path, new_feature_dim, output_path=None, feature_cols=None):
     """
     将预训练模型权重转换为适应新特征维度的权重
     
@@ -18,6 +18,7 @@ def convert_model_weights(pretrained_path, new_feature_dim, output_path=None):
         pretrained_path: 预训练模型路径
         new_feature_dim: 新的特征维度
         output_path: 输出路径，默认为None（使用默认文件名）
+        feature_cols: 特征列名称列表
         
     返回:
         转换后的模型
@@ -31,6 +32,37 @@ def convert_model_weights(pretrained_path, new_feature_dim, output_path=None):
     # 获取原始特征维度
     orig_feature_dim = pretrained_dict['feature_importance'].size(0)
     print(f"原始特征维度: {orig_feature_dim}, 新特征维度: {new_feature_dim}")
+    
+    # 显示特征重要性
+    if feature_cols is not None:
+        feature_importance = pretrained_dict['feature_importance'].cpu().numpy()
+        
+        print("\n预训练模型的特征重要性 (前10个):")
+        sorted_indices = np.argsort(-feature_importance)
+        for i, idx in enumerate(sorted_indices[:10]):
+            if idx < len(feature_cols):
+                feature_name = feature_cols[idx]
+            else:
+                feature_name = f"未知特征_{idx}"
+            print(f"{i+1:2d}. {feature_name}: {feature_importance[idx]:.4f}")
+        
+        print("\n当前数据集的特征列表:")
+        for i, col in enumerate(feature_cols):
+            mark = ""
+            if i >= orig_feature_dim:
+                mark = " (新增)"
+            print(f"{i+1:2d}. {col}{mark}")
+        
+        if new_feature_dim > orig_feature_dim:
+            print(f"\n需要添加的特征数量: {new_feature_dim - orig_feature_dim}")
+            for i in range(orig_feature_dim, new_feature_dim):
+                if i < len(feature_cols):
+                    print(f"  - 添加: {feature_cols[i]}")
+        elif new_feature_dim < orig_feature_dim:
+            print(f"\n需要删除的特征数量: {orig_feature_dim - new_feature_dim}")
+            for i in range(new_feature_dim, orig_feature_dim):
+                if i < len(feature_cols):
+                    print(f"  - 删除: {feature_cols[i]}")
     
     # 创建新模型（具有新的特征维度）
     new_model = EModel_FeatureWeight4(
@@ -151,12 +183,18 @@ if __name__ == "__main__":
     current_feature_dim = len(feature_cols)
     print(f"当前数据集特征维度: {current_feature_dim}")
     
+    # 打印当前数据集所有特征
+    print("\n当前数据集的所有特征:")
+    for i, col in enumerate(feature_cols):
+        print(f"{i+1:2d}. {col}")
+    
     # 尝试转换模型
     try:
         converted_model = convert_model_weights(
             pretrained_path=pretrained_model_path,
             new_feature_dim=current_feature_dim,
-            output_path=converted_model_path
+            output_path=converted_model_path,
+            feature_cols=feature_cols
         )
         print("模型转换成功！")
     except Exception as e:
@@ -172,5 +210,15 @@ if __name__ == "__main__":
             )
             test_model.load_state_dict(torch.load(converted_model_path))
             print("转换后的模型加载测试成功！")
+            
+            # 输出转换后模型的特征重要性
+            print("\n转换后模型的特征重要性:")
+            feature_importance = test_model.feature_importance.detach().cpu().numpy()
+            for i, importance in enumerate(feature_importance):
+                if i < len(feature_cols):
+                    print(f"{i+1:2d}. {feature_cols[i]}: {importance:.4f}")
+                else:
+                    print(f"{i+1:2d}. 未知特征: {importance:.4f}")
+                    
         except Exception as e:
             print(f"转换后的模型加载测试失败: {e}") 

@@ -1,6 +1,7 @@
 from OSS import optimize_storage_size, visualize_optimization_results
 from IES import IntegratedEnergySystem
 from All_Models_EGrid_Paper import (load_data, feature_engineering, EModel_FeatureWeight4)
+from EF import print_feature_info, get_feature_names
 
 # 主函数 
 if __name__ == "__main__":
@@ -18,10 +19,18 @@ if __name__ == "__main__":
     data_df = load_data()
     data_df, feature_cols, target_col = feature_engineering(data_df)
     print(f"数据加载完成，特征列数: {len(feature_cols)}")
+    
+    # 输出特征详细信息
+    print("\n=== 数据集特征详细信息 ===")
+    print_feature_info(data_df)
+    
+    print("\n当前数据集的26个特征名称:")
+    for i, col in enumerate(feature_cols):
+        print(f"{i+1:2d}. {col}")
 
     # 设置设备（GPU或CPU）
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print(f"使用设备: {device}")
+    print(f"\n使用设备: {device}")
 
     # 检查预训练模型可用性
     model_path = 'best_EModel_FeatureWeight4.pth'
@@ -34,6 +43,51 @@ if __name__ == "__main__":
         # 从预训练模型参数中获取特征维度
         feature_dim_from_model = pretrained_model_dict['feature_importance'].size(0)
         print(f"预训练模型特征维度: {feature_dim_from_model}")
+        
+        # 保存模型期望的特征权重信息
+        feature_importance = pretrained_model_dict['feature_importance'].cpu().numpy()
+        model_weights_info = [(i, w) for i, w in enumerate(feature_importance)]
+        model_weights_info.sort(key=lambda x: x[1], reverse=True)
+        
+        print("\n模型期望的22个特征重要性排序:")
+        for i, (idx, weight) in enumerate(model_weights_info):
+            if idx < len(feature_cols):
+                feature_name = feature_cols[idx]
+            else:
+                feature_name = f"未知特征_{idx}"
+            print(f"{i+1:2d}. 特征 {idx:2d} ({feature_name}): {weight:.4f}")
+            
+        # 对数据集中超出模型期望的特征进行分析
+        if len(feature_cols) > feature_dim_from_model:
+            print("\n数据集中超出模型期望的特征:")
+            for i in range(feature_dim_from_model, len(feature_cols)):
+                print(f"额外特征 {i+1}: {feature_cols[i]}")
+                
+        print("\n=== 特征对比分析 ===")
+        print("预训练模型特征数量: {}, 当前数据集特征数量: {}".format(
+            feature_dim_from_model, len(feature_cols)
+        ))
+        
+        if feature_dim_from_model == len(feature_cols):
+            print("特征数量匹配")
+        else:
+            print("特征数量不匹配，需要进行特征适配")
+            
+            # 计算特征重要性的平均值，用于评估特征的重要程度
+            avg_importance = np.mean(feature_importance)
+            print(f"模型特征重要性平均值: {avg_importance:.4f}")
+            
+            # 找出重要性高于平均值的特征
+            important_features = [(i, w) for i, w in enumerate(feature_importance) if w > avg_importance]
+            important_features.sort(key=lambda x: x[1], reverse=True)
+            
+            print("\n高重要性特征:")
+            for i, (idx, weight) in enumerate(important_features):
+                if idx < len(feature_cols):
+                    feature_name = feature_cols[idx]
+                else:
+                    feature_name = f"未知特征_{idx}"
+                print(f"{i+1:2d}. 特征 {idx:2d} ({feature_name}): {weight:.4f}")
         
         best_model = EModel_FeatureWeight4(
             feature_dim=feature_dim_from_model,  # 使用预训练模型的特征维度
@@ -50,7 +104,7 @@ if __name__ == "__main__":
         print(f"警告：未找到预训练模型，使用当前数据的特征维度: {len(feature_cols)}")
 
     # 加载训练好的模型权重
-    print("加载模型权重...")
+    print("\n加载模型权重...")
     try:
         best_model.load_state_dict(torch.load(model_path, map_location=device))
         print("模型权重加载成功")

@@ -74,7 +74,6 @@ class IntegratedEnergySystem:
         # 如果当前特征维度小于模型期望维度，用零填充
         if current_dim < self.expected_feature_dim:
             print(f"特征维度调整: 从{current_dim}填充到{self.expected_feature_dim}")
-            padding_size = self.expected_feature_dim - current_dim
             
             if len(features.shape) == 1:
                 padded = np.zeros(self.expected_feature_dim, dtype=np.float32)

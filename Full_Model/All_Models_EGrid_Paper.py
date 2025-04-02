@@ -781,7 +781,8 @@ class EModel_FeatureWeight4(nn.Module):
                  lstm_dropout = 0.2,
                  use_local_attn = True,
                  local_attn_window_size = 5,
-                 window_size = 20
+                 window_size = 20,
+                 feature_importance = None
                 ):
         super(EModel_FeatureWeight4, self).__init__()
         self.feature_dim = feature_dim
@@ -822,7 +823,11 @@ class EModel_FeatureWeight4(nn.Module):
             nn.GELU()
         )
         
-        self.feature_importance = nn.Parameter(torch.ones(feature_dim), requires_grad=True)
+        # 初始化特征重要性权重，如果提供了特征重要性，则使用它
+        if feature_importance is not None and len(feature_importance) == feature_dim:
+            self.feature_importance = nn.Parameter(torch.tensor(feature_importance, dtype=torch.float32), requires_grad=True)
+        else:
+            self.feature_importance = nn.Parameter(torch.ones(feature_dim), requires_grad=True)
         
         # Bidirectional LSTM
         self.lstm = nn.LSTM(
@@ -1504,6 +1509,56 @@ def plot_dataset_distribution(timestamps, title):
     plt.tight_layout()
     plt.show()
 
+# 添加新函数计算特征重要性
+def calculate_feature_importance(data_df, feature_cols, target_col):
+    """
+    计算特征与目标变量间的相关性，获取特征重要性权重
+    
+    参数:
+        data_df: 数据DataFrame
+        feature_cols: 特征列名称列表
+        target_col: 目标变量列名称
+        
+    返回:
+        特征重要性权重（绝对值相关系数）numpy数组
+    """
+    # 复制数据以避免修改原始数据
+    df_encoded = data_df.copy()
+    
+    # 初始化特征重要性数组
+    feature_importance = np.ones(len(feature_cols))
+    
+    # 计算每个特征与目标变量的Pearson相关系数
+    for i, col in enumerate(feature_cols):
+        # 确保特征列和目标列是数值型
+        if df_encoded[col].dtype == 'object':
+            le = LabelEncoder()
+            df_encoded[col] = le.fit_transform(df_encoded[col].astype(str))
+        
+        # 计算Pearson相关系数
+        corr = df_encoded[col].corr(df_encoded[target_col])
+        
+        # 使用相关系数的绝对值作为重要性
+        feature_importance[i] = abs(corr)
+    
+    # 确保没有零值（设置最小值为0.1）
+    feature_importance = np.maximum(feature_importance, 0.1)
+    
+    # 归一化，使最大值为1
+    if np.max(feature_importance) > 0:
+        feature_importance = feature_importance / np.max(feature_importance)
+    
+    # 打印特征重要性信息
+    importance_info = [(feature_cols[i], importance) for i, importance in enumerate(feature_importance)]
+    importance_info.sort(key=lambda x: x[1], reverse=True)
+    
+    print("\n基于Pearson相关系数的特征重要性：")
+    for feature, importance in importance_info:
+        print(f"{feature}: {importance:.4f}")
+    
+    return feature_importance
+
+
 # 8. Main Function
 def main(use_log_transform = True, min_egrid_threshold = 1.0):
     """
@@ -1527,6 +1582,9 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
 
     # Feature engineering (without standardization to avoid data leakage)
     data_df, feature_cols, target_col = feature_engineering(data_df)
+    
+    # 计算特征重要性
+    feature_importance = calculate_feature_importance(data_df, feature_cols, target_col)
 
     # Filter out small E_grid values
     data_df = data_df[data_df[target_col] > min_egrid_threshold].copy()
@@ -1625,7 +1683,8 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
         feature_dim       = feature_dim,
         lstm_hidden_size  = 256, 
         lstm_num_layers   = 2,
-        lstm_dropout      = 0.1
+        lstm_dropout      = 0.1,
+        feature_importance = feature_importance  # 使用计算的特征重要性
     ).to(device)
 
     model5 = EModel_FeatureWeight5(

@@ -122,6 +122,31 @@ class IntegratedEnergySystem:
                 # 将二维特征转换为 [batch_size, 1, feature_dim]
                 features = features.reshape(features.shape[0], 1, -1)
                 
+            # 获取序列长度
+            seq_len = features.shape[1]
+            
+            # 检查local attention是否需要调整序列长度
+            # 找出模型中local_attn_window_size的值
+            local_attn_window_size = 5  # 默认值
+            if hasattr(self.prediction_model, 'use_local_attn') and self.prediction_model.use_local_attn:
+                # 尝试从模型中获取window_size
+                if hasattr(self.prediction_model.temporal_attn, 'window_size'):
+                    local_attn_window_size = self.prediction_model.temporal_attn.window_size
+                
+                # 如果序列长度不能被窗口大小整除，添加填充
+                if seq_len < local_attn_window_size:
+                    # 需要复制序列以达到窗口大小
+                    padding_len = local_attn_window_size - seq_len
+                    repeated = np.repeat(features, local_attn_window_size, axis=1)
+                    features = repeated[:, :local_attn_window_size, :]
+                    print(f"序列长度调整: 从{seq_len}扩展到{local_attn_window_size}")
+                elif seq_len % local_attn_window_size != 0:
+                    # 填充到窗口大小的整数倍
+                    padding_len = local_attn_window_size - (seq_len % local_attn_window_size)
+                    padding = np.repeat(features[:, -1:, :], padding_len, axis=1)
+                    features = np.concatenate([features, padding], axis=1)
+                    print(f"序列长度调整: 从{seq_len}填充到{features.shape[1]}")
+                
             inputs = torch.tensor(features, dtype=torch.float32).to(device)
             outputs = self.prediction_model(inputs)
         

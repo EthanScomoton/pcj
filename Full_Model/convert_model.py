@@ -4,13 +4,14 @@
 
 from All_Models_EGrid_Paper import (
     load_data, feature_engineering, 
-    EModel_FeatureWeight4
+    EModel_FeatureWeight4,
+    calculate_feature_importance
 )
 import torch
 import numpy as np
 import os
 
-def convert_model_weights(pretrained_path, new_feature_dim, output_path=None, feature_cols=None):
+def convert_model_weights(pretrained_path, new_feature_dim, output_path=None, feature_cols=None, data_df=None, target_col=None):
     """
     将预训练模型权重转换为适应新特征维度的权重
     
@@ -19,6 +20,8 @@ def convert_model_weights(pretrained_path, new_feature_dim, output_path=None, fe
         new_feature_dim: 新的特征维度
         output_path: 输出路径，默认为None（使用默认文件名）
         feature_cols: 特征列名称列表
+        data_df: 数据DataFrame
+        target_col: 目标变量列名称
         
     返回:
         转换后的模型
@@ -33,10 +36,28 @@ def convert_model_weights(pretrained_path, new_feature_dim, output_path=None, fe
     orig_feature_dim = pretrained_dict['feature_importance'].size(0)
     print(f"原始特征维度: {orig_feature_dim}, 新特征维度: {new_feature_dim}")
     
+    # 检查特征重要性是否全都相同
+    feature_importance = pretrained_dict['feature_importance'].cpu().numpy()
+    is_all_same = np.all(feature_importance == feature_importance[0])
+    
+    if is_all_same and data_df is not None and target_col is not None and feature_cols is not None:
+        print(f"\n警告: 所有特征重要性值都相同 ({feature_importance[0]}). 尝试使用Pearson相关系数计算特征重要性...")
+        # 计算特征重要性
+        new_feature_importance = calculate_feature_importance(data_df, feature_cols, target_col)
+        
+        # 更新原始特征重要性（用于显示）
+        if len(new_feature_importance) == orig_feature_dim:
+            feature_importance = new_feature_importance
+        elif len(new_feature_importance) > orig_feature_dim:
+            feature_importance = new_feature_importance[:orig_feature_dim]
+        else:
+            # 如果新特征重要性数组长度小于原始维度，需要进行填充
+            temp = np.ones(orig_feature_dim)
+            temp[:len(new_feature_importance)] = new_feature_importance
+            feature_importance = temp
+    
     # 显示特征重要性
     if feature_cols is not None:
-        feature_importance = pretrained_dict['feature_importance'].cpu().numpy()
-        
         print("\n预训练模型的特征重要性 (前10个):")
         sorted_indices = np.argsort(-feature_importance)
         for i, idx in enumerate(sorted_indices[:10]):
@@ -74,16 +95,25 @@ def convert_model_weights(pretrained_path, new_feature_dim, output_path=None, fe
     # 获取新模型的状态字典
     new_model_dict = new_model.state_dict()
     
+    # 计算当前数据集的特征重要性（如果需要）
+    if new_feature_dim != orig_feature_dim and data_df is not None and target_col is not None and feature_cols is not None:
+        print("\n计算新数据集的特征重要性...")
+        new_feature_importance = calculate_feature_importance(data_df, feature_cols, target_col)
+    
     # 转换权重
     converted_dict = {}
     for name, param in pretrained_dict.items():
         if 'feature_importance' in name:
             # 调整特征重要性向量
             if new_feature_dim > orig_feature_dim:
-                # 扩展特征维度：复制后补充1
-                new_param = torch.ones(new_feature_dim, dtype=param.dtype)
-                new_param[:orig_feature_dim] = param
-                converted_dict[name] = new_param
+                # 如果有新计算的特征重要性则使用它
+                if 'new_feature_importance' in locals() and len(new_feature_importance) == new_feature_dim:
+                    converted_dict[name] = torch.tensor(new_feature_importance, dtype=param.dtype)
+                else:
+                    # 扩展特征维度：复制后补充1
+                    new_param = torch.ones(new_feature_dim, dtype=param.dtype)
+                    new_param[:orig_feature_dim] = param
+                    converted_dict[name] = new_param
             else:
                 # 缩减特征维度：截取前面的
                 converted_dict[name] = param[:new_feature_dim]
@@ -194,7 +224,9 @@ if __name__ == "__main__":
             pretrained_path=pretrained_model_path,
             new_feature_dim=current_feature_dim,
             output_path=converted_model_path,
-            feature_cols=feature_cols
+            feature_cols=feature_cols,
+            data_df=data_df,
+            target_col=target_col
         )
         print("模型转换成功！")
     except Exception as e:
@@ -214,11 +246,16 @@ if __name__ == "__main__":
             # 输出转换后模型的特征重要性
             print("\n转换后模型的特征重要性:")
             feature_importance = test_model.feature_importance.detach().cpu().numpy()
-            for i, importance in enumerate(feature_importance):
-                if i < len(feature_cols):
-                    print(f"{i+1:2d}. {feature_cols[i]}: {importance:.4f}")
+            
+            # 按照重要性降序排序进行显示
+            importance_info = [(i, importance) for i, importance in enumerate(feature_importance)]
+            importance_info.sort(key=lambda x: x[1], reverse=True)
+            
+            for i, (idx, importance) in enumerate(importance_info):
+                if idx < len(feature_cols):
+                    print(f"{i+1:2d}. {feature_cols[idx]}: {importance:.4f}")
                 else:
-                    print(f"{i+1:2d}. 未知特征: {importance:.4f}")
+                    print(f"{i+1:2d}. 未知特征_{idx}: {importance:.4f}")
                     
         except Exception as e:
             print(f"转换后的模型加载测试失败: {e}") 

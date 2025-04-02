@@ -26,6 +26,13 @@ class IntegratedEnergySystem:
         self.renewable_optimizer = RenewableEnergyOptimizer()
         self.prediction_model = prediction_model
         
+        # 检查模型的特征维度
+        if prediction_model is not None:
+            self.expected_feature_dim = prediction_model.feature_dim
+            print(f"模型期望的特征维度: {self.expected_feature_dim}")
+        else:
+            self.expected_feature_dim = None
+        
         # 结果存储
         self.results = {
             'timestamps': [],
@@ -37,6 +44,52 @@ class IntegratedEnergySystem:
             'bess_soc': [],
             'costs': []
         }
+    
+    def adapt_features(self, features):
+        """调整特征维度以匹配模型要求"""
+        if self.expected_feature_dim is None:
+            return features
+            
+        # 确保features是numpy数组
+        if isinstance(features, list):
+            features = np.array(features, dtype=np.float32)
+            
+        # 获取当前特征维度
+        current_dim = features.shape[-1]
+        
+        # 如果维度匹配，直接返回
+        if current_dim == self.expected_feature_dim:
+            return features
+            
+        # 如果当前特征维度大于模型期望维度，截取前expected_feature_dim个特征
+        if current_dim > self.expected_feature_dim:
+            print(f"特征维度调整: 从{current_dim}截取到{self.expected_feature_dim}")
+            if len(features.shape) == 1:
+                return features[:self.expected_feature_dim]
+            elif len(features.shape) == 2:
+                return features[:, :self.expected_feature_dim]
+            else:  # 3D tensor
+                return features[:, :, :self.expected_feature_dim]
+                
+        # 如果当前特征维度小于模型期望维度，用零填充
+        if current_dim < self.expected_feature_dim:
+            print(f"特征维度调整: 从{current_dim}填充到{self.expected_feature_dim}")
+            padding_size = self.expected_feature_dim - current_dim
+            
+            if len(features.shape) == 1:
+                padded = np.zeros(self.expected_feature_dim, dtype=np.float32)
+                padded[:current_dim] = features
+            elif len(features.shape) == 2:
+                padded = np.zeros((features.shape[0], self.expected_feature_dim), dtype=np.float32)
+                padded[:, :current_dim] = features
+            else:  # 3D tensor
+                padded = np.zeros((features.shape[0], features.shape[1], self.expected_feature_dim), dtype=np.float32)
+                padded[:, :, :current_dim] = features
+                
+            return padded
+            
+        # 不应该到达这里
+        return features
         
     def predict_demand(self, features):
         """使用预测模型预测能源需求"""
@@ -55,6 +108,9 @@ class IntegratedEnergySystem:
                 except:
                     # 方法3: 通过列表中转转换
                     features = np.array(features.tolist(), dtype=np.float32)
+        
+        # 调整特征维度
+        features = self.adapt_features(features)
         
         with torch.no_grad():
             # 确保输入是三维张量: [batch_size, seq_len, feature_dim]

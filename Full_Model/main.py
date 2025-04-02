@@ -9,6 +9,7 @@ if __name__ == "__main__":
     import pandas as pd
     import numpy as np
     import matplotlib.pyplot as plt
+    import os
     
     print("开始执行港口综合能源系统优化...")
     
@@ -22,21 +23,40 @@ if __name__ == "__main__":
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"使用设备: {device}")
 
-    # 加载最佳预测模型（EModel_FeatureWeight4）
+    # 检查预训练模型可用性
+    model_path = 'best_EModel_FeatureWeight4.pth'
+    
+    # 创建预测模型
     print("创建预测模型...")
-    best_model = EModel_FeatureWeight4(
-        feature_dim=len(feature_cols),
-        lstm_hidden_size=256,
-        lstm_num_layers=2
-    ).to(device)
+    if os.path.exists(model_path):
+        # 加载模型来获取正确的feature_dim
+        pretrained_model_dict = torch.load(model_path, map_location=device)
+        # 从预训练模型参数中获取特征维度
+        feature_dim_from_model = pretrained_model_dict['feature_importance'].size(0)
+        print(f"预训练模型特征维度: {feature_dim_from_model}")
+        
+        best_model = EModel_FeatureWeight4(
+            feature_dim=feature_dim_from_model,  # 使用预训练模型的特征维度
+            lstm_hidden_size=256,
+            lstm_num_layers=2
+        ).to(device)
+    else:
+        # 如果没有找到预训练模型，使用当前数据的特征维度
+        best_model = EModel_FeatureWeight4(
+            feature_dim=len(feature_cols),
+            lstm_hidden_size=256,
+            lstm_num_layers=2
+        ).to(device)
+        print(f"警告：未找到预训练模型，使用当前数据的特征维度: {len(feature_cols)}")
 
     # 加载训练好的模型权重
     print("加载模型权重...")
     try:
-        best_model.load_state_dict(torch.load('best_EModel_FeatureWeight4.pth', map_location=device, weights_only=True))
+        best_model.load_state_dict(torch.load(model_path, map_location=device))
         print("模型权重加载成功")
     except Exception as e:
         print(f"警告: 无法加载模型权重: {e}")
+        print("将使用未训练的模型继续运行，但结果可能不准确")
     
     # 生成示例电价数据
     print("生成电价数据...")

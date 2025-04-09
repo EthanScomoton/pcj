@@ -122,13 +122,21 @@ def convert_model_weights(pretrained_path, new_feature_dim, output_path=None, fe
             # 第一个全连接层的权重
             if new_feature_dim > orig_feature_dim:
                 # 扩展输入维度
-                orig_out_dim = param.size(0)
-                new_param = torch.zeros(orig_out_dim, new_feature_dim, dtype=param.dtype)
-                new_param[:, :orig_feature_dim] = param
+                orig_in_dim = param.size(1)   # 中间层维度
+                orig_out_dim = param.size(0)  # 输出特征维度
+            
+                # 正确处理第二层权重: [特征维度, 中间维度]
+                new_param = torch.zeros(new_feature_dim, orig_in_dim, dtype=param.dtype)
+            
+                # 复制共同部分
+                min_feature_dim = min(orig_out_dim, new_feature_dim)
+                new_param[:min_feature_dim, :] = param[:min_feature_dim, :]
+            
                 # 初始化新增加的权重
-                if new_feature_dim > orig_feature_dim:
+                if new_feature_dim > orig_out_dim:
                     nn_init = torch.nn.init.xavier_uniform_
-                    nn_init(new_param[:, orig_feature_dim:])
+                    nn_init(new_param[orig_out_dim:, :])
+                
                 converted_dict[name] = new_param
             else:
                 # 缩减输入维度
@@ -137,18 +145,13 @@ def convert_model_weights(pretrained_path, new_feature_dim, output_path=None, fe
         elif 'feature_gate.2.weight' in name:
             # 第二个全连接层的权重
             if new_feature_dim > orig_feature_dim:
-                # 扩展输出维度
-                orig_in_dim = param.size(1)
-                new_param = torch.zeros(new_feature_dim, orig_in_dim, dtype=param.dtype)
-                new_param[:orig_feature_dim, :] = param
-                # 初始化新增加的权重
-                if new_feature_dim > orig_feature_dim:
-                    nn_init = torch.nn.init.xavier_uniform_
-                    nn_init(new_param[orig_feature_dim:, :])
+                # 扩展输出维度的偏置
+                new_param = torch.zeros(new_feature_dim, dtype=param.dtype)
+                new_param[:orig_feature_dim] = param
                 converted_dict[name] = new_param
             else:
-                # 缩减输出维度
-                converted_dict[name] = param[:new_feature_dim, :]
+                # 缩减输出维度的偏置
+                converted_dict[name] = param[:new_feature_dim]
         
         elif 'feature_gate.0.bias' in name:
             # 第一层全连接层的偏置

@@ -119,74 +119,104 @@ def convert_model_weights(pretrained_path, new_feature_dim, output_path=None, fe
                 converted_dict[name] = param[:new_feature_dim]
         
         elif 'feature_gate.0.weight' in name:
-            # 第一个全连接层的权重
-            if new_feature_dim > orig_feature_dim:
-                # 扩展输入维度
-                orig_in_dim = param.size(1)   # 中间层维度
-                orig_out_dim = param.size(0)  # 输出特征维度
+            # 第一个全连接层的权重 - 注意中间层维度可能也不同
+            orig_out_dim = param.size(0)  # 中间层维度
+            orig_in_dim = param.size(1)   # 输入特征维度
             
-                # 正确处理第二层权重: [特征维度, 中间维度]
-                new_param = torch.zeros(new_feature_dim, orig_in_dim, dtype=param.dtype)
+            # 新模型中间层维度计算（保持与原始模型的中间层倍数关系）
+            new_mid_dim = (orig_out_dim * new_feature_dim) // orig_in_dim
             
-                # 复制共同部分
-                min_feature_dim = min(orig_out_dim, new_feature_dim)
-                new_param[:min_feature_dim, :] = param[:min_feature_dim, :]
+            # 创建新参数矩阵
+            new_param = torch.zeros(new_mid_dim, new_feature_dim, dtype=param.dtype)
             
-                # 初始化新增加的权重
-                if new_feature_dim > orig_out_dim:
-                    nn_init = torch.nn.init.xavier_uniform_
-                    nn_init(new_param[orig_out_dim:, :])
+            # 复制共同部分并缩放
+            if orig_in_dim <= new_feature_dim and orig_out_dim <= new_mid_dim:
+                # 扩展情况
+                new_param[:orig_out_dim, :orig_in_dim] = param
                 
-                converted_dict[name] = new_param
+                # 初始化新增部分
+                nn_init = torch.nn.init.xavier_uniform_
+                if orig_out_dim < new_mid_dim:
+                    nn_init(new_param[orig_out_dim:, :])
+                if orig_in_dim < new_feature_dim:
+                    nn_init(new_param[:, orig_in_dim:])
             else:
-                # 缩减输入维度
-                converted_dict[name] = param[:, :new_feature_dim]
-        
-        elif 'feature_gate.2.weight' in name:
-            # 第二个全连接层的权重
-            if new_feature_dim > orig_feature_dim:
-                # 扩展输出维度的偏置
-                new_param = torch.zeros(new_feature_dim, dtype=param.dtype)
-                new_param[:orig_feature_dim] = param
-                converted_dict[name] = new_param
-            else:
-                # 缩减输出维度的偏置
-                converted_dict[name] = param[:new_feature_dim]
-        
+                # 缩减情况
+                new_param = param[:new_mid_dim, :new_feature_dim]
+                
+            converted_dict[name] = new_param
+            
+            # 记录中间层维度供后续使用
+            new_middle_dim = new_mid_dim
+            
         elif 'feature_gate.0.bias' in name:
             # 第一层全连接层的偏置
-            if new_feature_dim > orig_feature_dim:
-                # 保持原有尺寸不变（因为这是输出维度）
-                converted_dict[name] = param
-            else:
-                converted_dict[name] = param
+            orig_dim = param.size(0)
+            
+            # 计算新的中间层维度（如果未定义，使用与原模型同样的增长率）
+            if 'new_middle_dim' not in locals():
+                new_middle_dim = (orig_dim * new_feature_dim) // orig_feature_dim
                 
+            # 创建新偏置
+            new_param = torch.zeros(new_middle_dim, dtype=param.dtype)
+            
+            # 复制共同部分
+            min_dim = min(orig_dim, new_middle_dim)
+            new_param[:min_dim] = param[:min_dim]
+            
+            converted_dict[name] = new_param
+            
+        elif 'feature_gate.2.weight' in name:
+            # 第二个全连接层的权重
+            orig_out_dim = param.size(0)  # 输出特征维度
+            orig_in_dim = param.size(1)   # 中间层维度
+            
+            # 使用前面计算的中间层维度
+            if 'new_middle_dim' not in locals():
+                new_middle_dim = (orig_in_dim * new_feature_dim) // orig_feature_dim
+                
+            # 创建新参数矩阵
+            new_param = torch.zeros(new_feature_dim, new_middle_dim, dtype=param.dtype)
+            
+            # 复制共同部分
+            min_out_dim = min(orig_out_dim, new_feature_dim)
+            min_in_dim = min(orig_in_dim, new_middle_dim)
+            new_param[:min_out_dim, :min_in_dim] = param[:min_out_dim, :min_in_dim]
+            
+            # 初始化新增部分
+            nn_init = torch.nn.init.xavier_uniform_
+            if min_out_dim < new_feature_dim:
+                nn_init(new_param[min_out_dim:, :])
+            if min_in_dim < new_middle_dim:
+                nn_init(new_param[:, min_in_dim:])
+                
+            converted_dict[name] = new_param
+            
         elif 'feature_gate.2.bias' in name:
             # 第二层全连接层的偏置
-            if new_feature_dim > orig_feature_dim:
-                # 扩展输出维度的偏置
-                new_param = torch.zeros(new_feature_dim, dtype=param.dtype)
-                new_param[:orig_feature_dim] = param
-                converted_dict[name] = new_param
-            else:
-                # 缩减输出维度的偏置
-                converted_dict[name] = param[:new_feature_dim]
+            new_param = torch.zeros(new_feature_dim, dtype=param.dtype)
+            min_dim = min(param.size(0), new_feature_dim)
+            new_param[:min_dim] = param[:min_dim]
+            converted_dict[name] = new_param
                 
         elif 'lstm.weight_ih_l0' in name or 'lstm.weight_ih_l0_reverse' in name:
             # LSTM输入权重
-            if new_feature_dim > orig_feature_dim:
-                # 扩展输入维度
-                lstm_out_dim = param.size(0)
-                new_param = torch.zeros(lstm_out_dim, new_feature_dim, dtype=param.dtype)
-                new_param[:, :orig_feature_dim] = param
-                # 初始化新增加的权重
-                if new_feature_dim > orig_feature_dim:
-                    nn_init = torch.nn.init.xavier_uniform_
-                    nn_init(new_param[:, orig_feature_dim:])
-                converted_dict[name] = new_param
-            else:
-                # 缩减输入维度
-                converted_dict[name] = param[:, :new_feature_dim]
+            orig_out_dim = param.size(0)  # LSTM隐藏维度*4
+            orig_in_dim = param.size(1)   # 输入特征维度
+            
+            # 创建新参数矩阵
+            new_param = torch.zeros(orig_out_dim, new_feature_dim, dtype=param.dtype)
+            
+            # 复制共同部分
+            min_in_dim = min(orig_in_dim, new_feature_dim)
+            new_param[:, :min_in_dim] = param[:, :min_in_dim]
+            
+            # 初始化新增部分
+            if min_in_dim < new_feature_dim:
+                nn_init = torch.nn.init.xavier_uniform_
+                nn_init(new_param[:, min_in_dim:])
+                
+            converted_dict[name] = new_param
                 
         else:
             # 其他层保持不变

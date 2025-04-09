@@ -89,12 +89,12 @@ class IntegratedEnergySystem:
             
         # 不应该到达这里
         return features
-        
+
     def predict_demand(self, features):
         """使用预测模型预测能源需求"""
         if self.prediction_model is None:
             raise ValueError("未提供预测模型")
-        
+    
         # 将 features 转换为 PyTorch 支持的浮点类型
         if isinstance(features, np.ndarray) and features.dtype == np.dtype('O'):
             try:
@@ -107,10 +107,10 @@ class IntegratedEnergySystem:
                 except:
                     # 方法3: 通过列表中转转换
                     features = np.array(features.tolist(), dtype=np.float32)
-        
+    
         # 调整特征维度
         features = self.adapt_features(features)
-        
+    
         with torch.no_grad():
             # 确保输入是三维张量: [batch_size, seq_len, feature_dim]
             # 如果是一维特征向量，添加batch和seq维度
@@ -121,35 +121,43 @@ class IntegratedEnergySystem:
             elif len(features.shape) == 2:
                 # 将二维特征转换为 [batch_size, 1, feature_dim]
                 features = features.reshape(features.shape[0], 1, -1)
-                
+            
             # 获取序列长度
             seq_len = features.shape[1]
-            
-            # 检查local attention是否需要调整序列长度
-            # 找出模型中local_attn_window_size的值
-            local_attn_window_size = 5  # 默认值
+        
+            # 重要修复: 首先确保序列长度匹配window_size (20)
+            window_size = 20  # 模型期望的窗口大小
+            if seq_len < window_size:
+                # 扩展序列到window_size
+                if seq_len == 1:
+                    # 如果只有一个时间步，简单复制
+                    features = np.repeat(features, window_size, axis=1)
+                else:
+                    # 否则，循环填充到window_size
+                    repeats_needed = int(np.ceil(window_size / seq_len))
+                    repeated = np.repeat(features, repeats_needed, axis=1)
+                    features = repeated[:, :window_size, :]
+                print(f"序列长度调整: 从{seq_len}扩展到{window_size}")
+                seq_len = window_size  # 更新序列长度
+        
+            # 然后检查local attention是否需要额外调整
             if hasattr(self.prediction_model, 'use_local_attn') and self.prediction_model.use_local_attn:
                 # 尝试从模型中获取window_size
+                local_attn_window_size = 5  # 默认值
                 if hasattr(self.prediction_model.temporal_attn, 'window_size'):
                     local_attn_window_size = self.prediction_model.temporal_attn.window_size
-                
-                # 如果序列长度不能被窗口大小整除，添加填充
-                if seq_len < local_attn_window_size:
-                    # 需要复制序列以达到窗口大小
-                    padding_len = local_attn_window_size - seq_len
-                    repeated = np.repeat(features, local_attn_window_size, axis=1)
-                    features = repeated[:, :local_attn_window_size, :]
-                    print(f"序列长度调整: 从{seq_len}扩展到{local_attn_window_size}")
-                elif seq_len % local_attn_window_size != 0:
+            
+                # 如果序列长度不能被local_attn_window_size整除，添加填充
+                if seq_len % local_attn_window_size != 0:
                     # 填充到窗口大小的整数倍
                     padding_len = local_attn_window_size - (seq_len % local_attn_window_size)
                     padding = np.repeat(features[:, -1:, :], padding_len, axis=1)
                     features = np.concatenate([features, padding], axis=1)
-                    print(f"序列长度调整: 从{seq_len}填充到{features.shape[1]}")
+                    print(f"Local attention序列长度调整: 从{seq_len}填充到{features.shape[1]}")
                 
             inputs = torch.tensor(features, dtype=torch.float32).to(device)
             outputs = self.prediction_model(inputs)
-        
+    
         return outputs.cpu().numpy()
     
     def simulate_operation(self, historic_data, time_steps, price_data=None):

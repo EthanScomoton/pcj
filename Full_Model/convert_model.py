@@ -7,11 +7,14 @@ from All_Models_EGrid_Paper import (
     EModel_FeatureWeight4,
     calculate_feature_importance
 )
+
 import torch
 import numpy as np
 import os
 
-def convert_model_weights(pretrained_path, new_feature_dim, output_path=None, feature_cols=None, data_df=None, target_col=None):
+def convert_model_weights(
+        pretrained_path, new_feature_dim, output_path=None, feature_cols=None, data_df=None, target_col=None
+        ):
     """
     将预训练模型权重转换为适应新特征维度的权重
     

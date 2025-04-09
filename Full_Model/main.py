@@ -15,13 +15,16 @@ if __name__ == "__main__":
     # 加载您的数据
     print("正在加载数据...")
     data_df = load_data()
+    data_df = data_df[data_df['E_grid'] > 0].copy()
     data_df, feature_cols, target_col = feature_engineering(data_df)
     
     # 修正可能的特征不一致问题
-    actual_feature_names = get_feature_names(data_df)
-    if len(feature_cols) != len(actual_feature_names):
-        print(f"警告: feature_cols长度({len(feature_cols)})与实际特征数量({len(actual_feature_names)})不一致")
-        print("使用实际特征名称进行后续处理")
+    actual_feature_names = [col for col in data_df.columns if col not in ['timestamp', target_col]]
+    print(f"数据加载完成: {len(data_df)}行, {len(actual_feature_names)}个特征列")
+
+    # 确保feature_cols与实际特征名称一致
+    if len(feature_cols) != len(actual_feature_names) or set(feature_cols) != set(actual_feature_names):
+        print(f"警告: feature_cols({len(feature_cols)})与实际特征列({len(actual_feature_names)})不一致，使用实际特征列")
         feature_cols = actual_feature_names
     
     print(f"数据加载完成，特征列数: {len(feature_cols)}")

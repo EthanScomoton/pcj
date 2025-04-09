@@ -26,7 +26,9 @@ def optimize_storage_size(demand_data, renewable_data, price_data = None, min_ca
     results = []
     
     # 创建一个共享的预测模型实例
-    feature_dim = len(demand_data.columns) - 1  # 排除timestamp列
+    feature_dim = len(demand_data.columns) - 2  # 排除timestamp列和目标列
+    print(f"使用特征维度: {feature_dim}")
+    
     prediction_model = EModel_FeatureWeight4(
         feature_dim=feature_dim,
         lstm_hidden_size=256,
@@ -35,9 +37,44 @@ def optimize_storage_size(demand_data, renewable_data, price_data = None, min_ca
     
     # 加载训练好的模型权重（如果有）
     try:
-        prediction_model.load_state_dict(torch.load('best_EModel_FeatureWeight4.pth', map_location=device, weights_only=True))
+        model_path = 'best_EModel_FeatureWeight4.pth'
+        if os.path.exists(model_path):
+            # 检查模型特征维度是否匹配
+            pretrained_dict = torch.load(model_path, map_location=device)
+            model_feature_dim = pretrained_dict['feature_importance'].size(0)
+            
+            if model_feature_dim == feature_dim:
+                # 特征维度匹配，直接加载
+                prediction_model.load_state_dict(pretrained_dict)
+                print(f"成功加载预训练模型，特征维度: {model_feature_dim}")
+            else:
+                # 特征维度不匹配，尝试转换模型
+                from convert_model import convert_model_weights
+                print(f"特征维度不匹配 (模型: {model_feature_dim}, 数据: {feature_dim})，尝试转换模型...")
+                
+                # 转换模型权重
+                try:
+                    converted_model = convert_model_weights(
+                        pretrained_path=model_path,
+                        new_feature_dim=feature_dim,
+                        output_path="current_EModel_FeatureWeight4.pth"
+                    )
+                    
+                    # 使用转换后的模型
+                    prediction_model = converted_model
+                    print("成功加载转换后的模型")
+                except Exception as e:
+                    print(f"模型转换失败: {e}")
+                    print("将使用未训练的模型继续运行")
+        else:
+            print(f"未找到预训练模型: {model_path}")
+            print("将使用未训练的模型继续运行")
+            
     except Exception as e:
         print(f"警告：无法加载预训练模型，使用未训练的模型: {e}")
+    
+    # 配置模型为评估模式
+    prediction_model.eval()
     
     for capacity in range(min_capacity, max_capacity + step, step):
         for power in range(min_power, max_power + power_step, power_step):
@@ -56,45 +93,81 @@ def optimize_storage_size(demand_data, renewable_data, price_data = None, min_ca
             )
             
             # 运行模拟
-            baseline_results = baseline_system.simulate_operation(
-                historic_data=demand_data,
-                time_steps=min(24*30, len(demand_data)),  # 1个月或全部数据
-                price_data=price_data
-            )
-            
-            system_results = system.simulate_operation(
-                historic_data=demand_data,
-                time_steps=min(24*30, len(demand_data)),  # 1个月或全部数据
-                price_data=price_data
-            )
-            
-            # 计算关键绩效指标
-            kpis = system.calculate_kpis(system_results, baseline_results)
-            
-            # 计算经济指标
-            # 假设储能成本为2000元/kWh和800元/kW
-            investment_cost = capacity * 2000 + power * 800
-            
-            economic_metrics = calculate_economic_metrics(
-                costs=[baseline_results['cost'].sum(), system_results['cost'].sum()],
-                investment_cost=investment_cost
-            )
-            
-            # 存储结果
-            results.append({
-                'capacity': capacity,
-                'power': power,
-                'npv': economic_metrics['NPV'],
-                'payback_period': economic_metrics['payback_period'],
-                'irr': economic_metrics['IRR'],
-                'annual_savings': economic_metrics['annual_savings'],
-                'peak_reduction': kpis['peak_reduction'],
-                'grid_energy_reduction': kpis['grid_energy_reduction'],
-                'self_consumption_rate': kpis['self_consumption_rate']
-            })
+            try:
+                # 减少模拟时间步数以加快优化过程
+                sim_time_steps = min(72, len(demand_data))  # 使用较短的时间段进行优化
+                
+                baseline_results = baseline_system.simulate_operation(
+                    historic_data=demand_data,
+                    time_steps=sim_time_steps,
+                    price_data=price_data
+                )
+                
+                system_results = system.simulate_operation(
+                    historic_data=demand_data,
+                    time_steps=sim_time_steps,
+                    price_data=price_data
+                )
+                
+                # 计算关键绩效指标
+                kpis = system.calculate_kpis(system_results, baseline_results)
+                
+                # 计算经济指标
+                # 假设储能成本为2000元/kWh和800元/kW
+                investment_cost = capacity * 2000 + power * 800
+                
+                economic_metrics = calculate_economic_metrics(
+                    costs=[baseline_results['cost'].sum(), system_results['cost'].sum()],
+                    investment_cost=investment_cost
+                )
+                
+                # 存储结果
+                results.append({
+                    'capacity': capacity,
+                    'power': power,
+                    'npv': economic_metrics['NPV'],
+                    'payback_period': economic_metrics['payback_period'],
+                    'irr': economic_metrics['IRR'],
+                    'annual_savings': economic_metrics['annual_savings'],
+                    'peak_reduction': kpis.get('peak_reduction', 0),
+                    'grid_energy_reduction': kpis.get('grid_energy_reduction', 0),
+                    'self_consumption_rate': kpis.get('self_consumption_rate', 0)
+                })
+                
+                print(f"完成配置评估: 容量={capacity}kWh, 功率={power}kW, NPV={economic_metrics['NPV']:.2f}")
+                
+            except Exception as e:
+                print(f"配置评估失败: 容量={capacity}kWh, 功率={power}kW, 错误: {e}")
+                # 添加默认的失败结果，以便优化可以继续
+                results.append({
+                    'capacity': capacity,
+                    'power': power,
+                    'npv': float('-inf'),  # 使用负无穷表示失败的配置
+                    'payback_period': float('inf'),
+                    'irr': None,
+                    'annual_savings': 0,
+                    'peak_reduction': 0,
+                    'grid_energy_reduction': 0,
+                    'self_consumption_rate': 0
+                })
     
-    # 寻找净现值最高的配置
-    best_config = max(results, key=lambda x: x['npv'])
+    # 筛选有效结果并寻找净现值最高的配置
+    valid_results = [r for r in results if r['npv'] != float('-inf')]
+    if valid_results:
+        best_config = max(valid_results, key=lambda x: x['npv'])
+    else:
+        # 如果没有有效结果，使用第一个结果作为最佳配置
+        best_config = results[0] if results else {
+            'capacity': min_capacity,
+            'power': min_power,
+            'npv': 0,
+            'payback_period': float('inf'),
+            'irr': None,
+            'annual_savings': 0,
+            'peak_reduction': 0,
+            'grid_energy_reduction': 0,
+            'self_consumption_rate': 0
+        }
     
     return {
         'all_results': results,

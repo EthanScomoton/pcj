@@ -5,7 +5,7 @@ from EF import print_feature_info, get_feature_names
 
 # 主函数 
 if __name__ == "__main__":
-    # 导入必要的库
+
     import torch
     import pandas as pd
     import os

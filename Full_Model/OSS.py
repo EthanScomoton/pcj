@@ -2,6 +2,7 @@ from IES import IntegratedEnergySystem
 from EF  import calculate_economic_metrics
 from All_Models_EGrid_Paper import (EModel_FeatureWeight4)
 import torch
+import os
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -35,7 +36,7 @@ def optimize_storage_size(demand_data, renewable_data, price_data = None, min_ca
         lstm_num_layers=2
     ).to(device)
     
-    # 加载训练好的模型权重（如果有）
+    # 加载训练好的模型权重
     try:
         model_path = 'best_EModel_FeatureWeight4.pth'
         if os.path.exists(model_path):

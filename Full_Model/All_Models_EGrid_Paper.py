@@ -1520,7 +1520,7 @@ def calculate_feature_importance(data_df, feature_cols, target_col):
         target_col: 目标变量列名称
         
     返回:
-        特征重要性权重（绝对值相关系数）numpy数组
+        特征重要性权重(绝对值相关系数)numpy数组
     """
     # 复制数据以避免修改原始数据
     df_encoded = data_df.copy()
@@ -1542,7 +1542,7 @@ def calculate_feature_importance(data_df, feature_cols, target_col):
         feature_importance[i] = abs(corr)
     
     # 确保没有零值（设置最小值为0.1）
-    feature_importance = np.maximum(feature_importance, 0.1)
+    feature_importance = np.maximum(feature_importance, 0.01)
     
     # 归一化，使最大值为1
     if np.max(feature_importance) > 0:

@@ -189,7 +189,7 @@ def visualize_optimization_results(results):
     df = pd.DataFrame(results['all_results'])
     
     # 创建数据透视表用于热图
-    npv_pivot = df.pivot(index = 'capacity', column = 'power', values = 'npv')
+    npv_pivot = df.pivot(index = 'capacity', columns = 'power', values = 'npv')
     payback_pivot = df.pivot(index = 'capacity', columns = 'power', values = 'payback_period')
     
     # 创建图表

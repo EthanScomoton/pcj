@@ -231,6 +231,7 @@ def visualize_optimization_results(results):
     print(f"容量: {best_capacity} kWh")
     print(f"功率: {best_power} kW")
     print(f"净现值(NPV): {results['best_config']['npv']:.2f} 元")
+    print(f"内部收益率(IRR): {results['best_config']['irr'] * 100:.2f}%")
     print(f"回收期: {results['best_config']['payback_period']:.2f} 年")
     print(f"内部收益率(IRR): {results['best_config']['irr']*100:.2f}%")
     print(f"年节省: {results['best_config']['annual_savings']:.2f} 元")

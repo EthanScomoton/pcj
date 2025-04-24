@@ -144,7 +144,7 @@ class PositionalEncoding(nn.Module):
     """
     def __init__(self, d_model, max_len = 5000):
         super(PositionalEncoding, self).__init__()
-        pe = torch.zeros(max_len, d_model)  # Shape: [max_len, d_model]
+        pe = torch.zeros(max_len, d_model, device=device)  # Shape: [max_len, d_model]
         position = torch.arange(0, max_len, dtype = torch.float32).unsqueeze(1)  # Shape: [max_len, 1]
         div_term = torch.exp(-(torch.arange(0, d_model, 2).float() * math.log(10000.0) / d_model))  # Shape: [d_model/2]
         pe[:, 0::2] = torch.sin(position * div_term)  # Sine for even indices
@@ -802,7 +802,7 @@ class EModel_FeatureWeight4(nn.Module):
             from local_attention.local_attention import LocalAttention
             self.temporal_attn = LocalAttention(
                 dim = 2 * lstm_hidden_size,
-                window_size = local_attn_window_size,   # 使用正确的参数名
+                window_size = local_attn_window_size,
                 causal = False
             )
         else:

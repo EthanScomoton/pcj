@@ -5,7 +5,8 @@
 from All_Models_EGrid_Paper import (
     load_data, feature_engineering, 
     EModel_FeatureWeight4,
-    calculate_feature_importance
+    calculate_feature_importance,
+    device
 )
 
 import torch
@@ -111,10 +112,10 @@ def convert_model_weights(
             if new_feature_dim > orig_feature_dim:
                 # 如果有新计算的特征重要性则使用它
                 if 'new_feature_importance' in locals() and len(new_feature_importance) == new_feature_dim:
-                    converted_dict[name] = torch.tensor(new_feature_importance, dtype=param.dtype)
+                    converted_dict[name] = torch.tensor(new_feature_importance, dtype=param.dtype, device=device)
                 else:
                     # 扩展特征维度：复制后补充1
-                    new_param = torch.ones(new_feature_dim, dtype=param.dtype)
+                    new_param = torch.ones(new_feature_dim, dtype=param.dtype, device=device)
                     new_param[:orig_feature_dim] = param
                     converted_dict[name] = new_param
             else:
@@ -130,7 +131,7 @@ def convert_model_weights(
             new_mid_dim = (orig_out_dim * new_feature_dim) // orig_in_dim
             
             # 创建新参数矩阵
-            new_param = torch.zeros(new_mid_dim, new_feature_dim, dtype=param.dtype)
+            new_param = torch.zeros(new_mid_dim, new_feature_dim, dtype=param.dtype, device=device)
             
             # 复制共同部分并缩放
             if orig_in_dim <= new_feature_dim and orig_out_dim <= new_mid_dim:
@@ -161,7 +162,7 @@ def convert_model_weights(
                 new_middle_dim = (orig_dim * new_feature_dim) // orig_feature_dim
                 
             # 创建新偏置
-            new_param = torch.zeros(new_middle_dim, dtype=param.dtype)
+            new_param = torch.zeros(new_middle_dim, dtype=param.dtype, device=device)
             
             # 复制共同部分
             min_dim = min(orig_dim, new_middle_dim)
@@ -179,7 +180,7 @@ def convert_model_weights(
                 new_middle_dim = (orig_in_dim * new_feature_dim) // orig_feature_dim
                 
             # 创建新参数矩阵
-            new_param = torch.zeros(new_feature_dim, new_middle_dim, dtype=param.dtype)
+            new_param = torch.zeros(new_feature_dim, new_middle_dim, dtype=param.dtype, device=device)
             
             # 复制共同部分
             min_out_dim = min(orig_out_dim, new_feature_dim)
@@ -197,7 +198,7 @@ def convert_model_weights(
             
         elif 'feature_gate.2.bias' in name:
             # 第二层全连接层的偏置
-            new_param = torch.zeros(new_feature_dim, dtype=param.dtype)
+            new_param = torch.zeros(new_feature_dim, dtype=param.dtype, device=device)
             min_dim = min(param.size(0), new_feature_dim)
             new_param[:min_dim] = param[:min_dim]
             converted_dict[name] = new_param
@@ -208,7 +209,7 @@ def convert_model_weights(
             orig_in_dim = param.size(1)   # 输入特征维度
             
             # 创建新参数矩阵
-            new_param = torch.zeros(orig_out_dim, new_feature_dim, dtype=param.dtype)
+            new_param = torch.zeros(orig_out_dim, new_feature_dim, dtype=param.dtype, device=device)
             
             # 复制共同部分
             min_in_dim = min(orig_in_dim, new_feature_dim)

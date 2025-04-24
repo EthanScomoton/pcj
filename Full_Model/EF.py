@@ -119,52 +119,57 @@ def get_renewable_forecast(df, start_index, n_steps):
 
 def calculate_economic_metrics(costs, investment_cost, discount_rate=0.05, lifetime=10):
     """
-    计算储能系统的经济指标
-    
-    参数:
-        costs: 时间序列成本数组
-        investment_cost: 初始投资成本
-        discount_rate: 年折现率
-        lifetime: 系统寿命(年)
-        
-    返回:
-        包含经济指标的字典
+    计算储能系统的经济指标，包括净现值(NPV)、回收期、内部收益率(IRR)等。
     """
     import numpy as np
-    
-    # 计算年节省
-    baseline_cost = costs[0]  # 假设第一个值为基准
-    annual_savings = baseline_cost - np.mean(costs[1:])
-    
-    # 计算净现值(NPV)
-    cash_flows = [-investment_cost]  # 初始投资
-    for year in range(1, lifetime + 1):
-        cash_flows.append(annual_savings)
-    
-    npv = 0
-    for t, cf in enumerate(cash_flows):
-        npv += cf / (1 + discount_rate) ** t
-    
-    # 计算回收期(简单)
+    # 计算年度成本节省
+    baseline_cost = costs[0]          # 基准方案总成本
+    system_cost = np.mean(costs[1:])  # 储能方案总成本（取平均值代表典型年）
+    annual_savings = baseline_cost - system_cost
+    # 构建现金流列表：第0年为-投资，其后每年为annual_savings
+    cash_flows = [-investment_cost] + [annual_savings] * lifetime
+    # 计算净现值 NPV
+    npv = sum(cf / ((1 + discount_rate) ** t) for t, cf in enumerate(cash_flows))
+    # 计算简单回收期
     payback_period = investment_cost / annual_savings if annual_savings > 0 else float('inf')
-    
-    # 计算内部收益率(IRR)
-    def irr_function(r, cash_flows):
-        return sum([cf / (1 + r) ** t for t, cf in enumerate(cash_flows)])
-    
-    # 二分查找IRR
+    # 定义内部收益率计算函数
+    def irr_function(r, flows):
+        return sum(cf / ((1 + r) ** t) for t, cf in enumerate(flows))
+    # 计算内部收益率 IRR
     irr = None
-    if cash_flows[0] < 0 and sum(cash_flows) > 0:  # 只有在可能有正IRR时
-        r_low, r_high = 0.0, 1.0
-        while r_high - r_low > 0.0001:
-            r_mid = (r_low + r_high) / 2
-            npv_mid = irr_function(r_mid, cash_flows)
-            if npv_mid > 0:
-                r_low = r_mid
-            else:
-                r_high = r_mid
-        irr = r_low
-    
+    if cash_flows[0] < 0:  # 存在初始投资
+        total = sum(cash_flows[1:])  # 总收益（不含初始投资）
+        if total > -cash_flows[0]:
+            # 项目净收益为正，存在正IRR，用二分查找0~1区间
+            r_low, r_high = 0.0, 1.0
+            while r_high - r_low > 1e-4:
+                r_mid = (r_low + r_high) / 2
+                npv_mid = irr_function(r_mid, cash_flows)
+                if npv_mid > 0:
+                    r_low = r_mid
+                else:
+                    r_high = r_mid
+            irr = r_low
+        elif abs(total + cash_flows[0]) < 1e-6:
+            # 项目刚好盈亏平衡，IRR = 0
+            irr = 0.0
+        elif annual_savings > 0:
+            # 项目净收益为负但有正向现金流，计算负IRR（在-0.99～0区间查找）
+            r_low, r_high = -0.99, 0.0
+            while r_high - r_low > 1e-4:
+                r_mid = (r_low + r_high) / 2
+                npv_mid = irr_function(r_mid, cash_flows)
+                if npv_mid > 0:
+                    # 折现率偏低（过于负），提高折现率
+                    r_low = r_mid
+                else:
+                    # 折现率偏高，降低折现率
+                    r_high = r_mid
+            irr = r_high
+        else:
+            # 无任何正收益，设定IRR为-100%
+            irr = -1.0
+    # 返回经济指标结果
     return {
         'NPV': npv,
         'payback_period': payback_period,

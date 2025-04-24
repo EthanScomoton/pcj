@@ -64,7 +64,7 @@ if __name__ == "__main__":
     # 如果预训练模型存在，尝试加载权重
     if os.path.exists(model_path):
         try:
-            pretrained_model_dict = torch.load(model_path, map_location=device)
+            pretrained_model_dict = torch.load(model_path, map_location=device, weights_only=True)
             # 从预训练模型参数中获取特征维度
             feature_dim_from_model = pretrained_model_dict['feature_importance'].size(0)
             print(f"预训练模型特征维度: {feature_dim_from_model}")
@@ -72,7 +72,7 @@ if __name__ == "__main__":
             # 检查特征维度是否匹配
             if feature_dim_from_model == feature_dim_to_use:
                 print("特征维度匹配，直接加载预训练模型权重")
-                best_model.load_state_dict(torch.load(model_path, map_location=device))
+                best_model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
                 print("模型权重加载成功")
             else:
                 print(f"特征维度不匹配 (预训练: {feature_dim_from_model}, 当前: {feature_dim_to_use}), 尝试转换模型...")
@@ -89,7 +89,7 @@ if __name__ == "__main__":
                 )
                 
                 # 加载转换后的模型
-                best_model.load_state_dict(torch.load("current_EModel_FeatureWeight4.pth", map_location=device))
+                best_model.load_state_dict(torch.load("current_EModel_FeatureWeight4.pth", map_location=device, weights_only=True))
                 print("转换后的模型加载成功")
         except Exception as e:
             print(f"警告: 无法加载模型权重: {e}")
@@ -144,7 +144,6 @@ if __name__ == "__main__":
     print("正在优化储能系统规模...")
     optimization_results = optimize_storage_size(
         demand_data=data_df,
-        renewable_data=data_df,  # 使用同一数据框，因为其中包含可再生能源数据
         price_data=price_df,
         min_capacity=1000,
         max_capacity=5000,

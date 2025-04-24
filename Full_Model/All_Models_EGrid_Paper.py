@@ -1534,10 +1534,16 @@ def calculate_feature_importance(data_df, feature_cols, target_col):
         if df_encoded[col].dtype == 'object':
             le = LabelEncoder()
             df_encoded[col] = le.fit_transform(df_encoded[col].astype(str))
-        
-        # 计算Pearson相关系数
-        corr = df_encoded[col].corr(df_encoded[target_col])
-        
+        # 安全计算Pearson相关系数: 跳过方差为零的特征，避免除以零
+        x = df_encoded[col]
+        y = df_encoded[target_col]
+        if x.std() == 0 or y.std() == 0:
+            corr = 0.0
+        else:
+            corr = x.corr(y)
+        # 处理NaN值
+        if pd.isna(corr):
+            corr = 0.0
         # 使用相关系数的绝对值作为重要性
         feature_importance[i] = abs(corr)
     

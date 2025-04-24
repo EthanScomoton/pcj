@@ -8,7 +8,7 @@ import numpy as np
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')  
 class IntegratedEnergySystem:
-    def __init__(self, bess_capacity_kwh, bess_power_kw, prediction_model=None):
+    def __init__(self, capacity_kwh, bess_power_kw, prediction_model=None):
         """
         港口综合能源系统
         
@@ -19,7 +19,6 @@ class IntegratedEnergySystem:
         """
         # 初始化组件
         self.bess = BatteryEnergyStorage(
-            capacity_kwh=bess_capacity_kwh, 
             max_power_kw=bess_power_kw
         )
         self.energy_optimizer = EnergyOptimizer(self.bess)

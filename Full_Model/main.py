@@ -19,7 +19,7 @@ if __name__ == "__main__":
     data_df, feature_cols, target_col = feature_engineering(data_df)
     
     # 修正可能的特征不一致问题
-    actual_feature_names = [col for col in data_df.columns if col not in ['timestamp', target_col]]
+    actual_feature_names = [col for col in data_df.columns if col not in ['timestamp', target_col]] - 3
     print(f"数据加载完成: {len(data_df)}行, {len(actual_feature_names)}个特征列")
 
     # 确保feature_cols与实际特征名称一致

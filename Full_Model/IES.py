@@ -19,6 +19,7 @@ class IntegratedEnergySystem:
         """
         # 初始化组件
         self.bess = BatteryEnergyStorage(
+            capacity_kwh=capacity_kwh,
             max_power_kw=bess_power_kw
         )
         self.energy_optimizer = EnergyOptimizer(self.bess)

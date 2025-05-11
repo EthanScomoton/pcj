@@ -1389,7 +1389,7 @@ def plot_Egrid_over_time(data_df):
     plt.tight_layout()
     plt.show()
 
-def plot_predictions_comparison(y_actual_real, predictions_dict):
+def plot_predictions_comparison(y_actual_real, predictions_dict, timestamps=None):
     plt.figure(figsize=(14, 6))
     x_axis = np.arange(len(y_actual_real))
     plt.plot(x_axis, y_actual_real, 'black', label='Actual', linewidth=5, alpha=0.8)

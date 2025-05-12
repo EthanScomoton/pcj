@@ -1268,17 +1268,17 @@ def plot_predictions_comparison(y_actual_real, predictions_dict, timestamps):
         x_axis = pd.to_datetime(timestamps)  
     else:
         x_axis = np.arange(len(y_actual_real))
-    plt.plot(x_axis, y_actual_real, 'black', label='Actual', linewidth=1, alpha=0.8)
+    plt.plot(x_axis, y_actual_real, 'black', label='Actual', linewidth=1.5, alpha=1)
     
     colors = ['lightgreen', 'lightblue']
     
     # 为每个模型的预测绘制曲线
     for i, (model_name, pred_values) in enumerate(predictions_dict.items()):
         color = colors[i % len(colors)]  
-        plt.plot(x_axis, pred_values, color=color, label=model_name, linewidth=0.8, linestyle='-', alpha=0.9)
+        plt.plot(x_axis, pred_values, color=color, label=model_name, linewidth=0.8, linestyle='-', alpha=1)
     
-    plt.xlabel('Timestamp')
-    plt.ylabel('E_grid Value (kW·h)')
+    plt.xlabel('Timestamp of TrainValue')
+    plt.ylabel('Grid Energy Compensation Value (kW·h)')
     plt.legend()
     plt.grid(True)
     plt.tight_layout()

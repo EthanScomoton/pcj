@@ -27,7 +27,7 @@ mpl.rcParams.update({
 })
 
 # Global hyperparametersP
-learning_rate     = 1e-3   # Learning rate
+learning_rate     = 1e-4   # Learning rate
 num_epochs        = 150    # Number of training epochs
 batch_size        = 128    # Batch size
 weight_decay      = 1e-4   # Weight decay

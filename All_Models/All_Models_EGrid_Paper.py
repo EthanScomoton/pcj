@@ -1392,7 +1392,7 @@ def plot_Egrid_over_time(data_df):
 def plot_predictions_comparison(y_actual_real, predictions_dict, timestamps=None):
     plt.figure(figsize=(14, 6))
     x_axis = np.arange(len(y_actual_real))
-    plt.plot(x_axis, y_actual_real, 'black', label='Actual', linewidth=5, alpha=0.8)
+    plt.plot(x_axis, y_actual_real, 'black', label='Actual', linewidth=2, alpha=0.8)
     
     # 使用固定的蓝色和红色而不是模型颜色字典
     colors = ['blue', 'red']
@@ -1400,7 +1400,7 @@ def plot_predictions_comparison(y_actual_real, predictions_dict, timestamps=None
     # 为每个模型的预测绘制曲线
     for i, (model_name, pred_values) in enumerate(predictions_dict.items()):
         color = colors[i % len(colors)]  # 循环使用颜色列表
-        plt.plot(x_axis, pred_values, color=color, label=model_name, linewidth=5, linestyle='--', alpha=0.9)
+        plt.plot(x_axis, pred_values, color=color, label=model_name, linewidth=2, linestyle='-', alpha=0.9)
     
     plt.xlabel('Timestamp')
     plt.ylabel('E_grid Value')

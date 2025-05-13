@@ -26,7 +26,7 @@ mpl.rcParams.update({
     'ytick.labelsize': 24     # y-axis tick label size
 })
 
-# Global hyperparametersP
+# Global hyperparameters
 learning_rate     = 1e-4   # Learning rate
 num_epochs        = 150    # Number of training epochs
 batch_size        = 128    # Batch size

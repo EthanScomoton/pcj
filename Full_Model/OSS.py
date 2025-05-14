@@ -43,7 +43,7 @@ def optimize_storage_size(demand_data, price_data = None, min_capacity = 100, ma
             # 检查模型特征维度是否匹配
             pretrained_dict = torch.load(model_path, map_location=device)
             model_feature_dim = pretrained_dict['feature_importance'].size(0)
-            
+             
             if model_feature_dim == feature_dim:
                 # 特征维度匹配，直接加载
                 prediction_model.load_state_dict(pretrained_dict)
@@ -51,8 +51,8 @@ def optimize_storage_size(demand_data, price_data = None, min_capacity = 100, ma
             else:
                 # 特征维度不匹配，尝试转换模型
                 from convert_model import convert_model_weights
-                print(f"特征维度不匹配 (模型: {model_feature_dim}, 数据: {feature_dim})，尝试转换模型...")
-                
+                print(f"特征维度不匹配 (模型: {model_feature_dim}, 当前: {feature_dim})，尝试转换模型...")
+                 
                 # 转换模型权重
                 try:
                     converted_model = convert_model_weights(
@@ -60,17 +60,17 @@ def optimize_storage_size(demand_data, price_data = None, min_capacity = 100, ma
                         new_feature_dim=feature_dim,
                         output_path="current_EModel_FeatureWeight4.pth"
                     )
-                    
-                    # 使用转换后的模型
+                     
+                    # 使用转换后的模型，确保模型在同一设备上
                     prediction_model = converted_model
+                    prediction_model = converted_model.to(device)
                     print("成功加载转换后的模型")
                 except Exception as e:
                     print(f"模型转换失败: {e}")
                     print("将使用未训练的模型继续运行")
         else:
-            print(f"未找到预训练模型: {model_path}")
-            print("将使用未训练的模型继续运行")
-            
+             print(f"未找到预训练模型: {model_path}")
+             print("将使用未训练的模型继续运行")
     except Exception as e:
         print(f"警告：无法加载预训练模型，使用未训练的模型: {e}")
     

@@ -125,8 +125,9 @@ class IntegratedEnergySystem:
             # 获取序列长度
             seq_len = features.shape[1]
         
-            # 重要修复: 首先确保序列长度匹配window_size (20)
-            window_size = 20  # 模型期望的窗口大小
+            # 1️⃣ 改为动态使用模型自身的 window_size，而不是写死 20
+            window_size = getattr(self.prediction_model, 'window_size', 20)
+
             if seq_len < window_size:
                 # 扩展序列到 window_size
                 if seq_len == 1:
@@ -196,7 +197,8 @@ class IntegratedEnergySystem:
                 pred = self.predict_demand(future_features)
                 predicted_demand.append(pred)
                 
-            predicted_demand = np.array(predicted_demand)
+            # 2️⃣ 保证是一维向量，避免形状 (24,1) 触发 cvxpy 维度冲突
+            predicted_demand = np.array(predicted_demand).flatten()
             
             # 获取可再生能源预测
             renewable_forecast = get_renewable_forecast(historic_data, t, 24)
@@ -223,19 +225,27 @@ class IntegratedEnergySystem:
                 grid_prices=grid_prices
             )
             
+            # 3️⃣ 若求解失败返回 None，则使用 0 功率回退策略
+            if energy_opt['status'] != 'optimal' or energy_opt['bess_charge'] is None:
+                bess_charge    = 0.0
+                bess_discharge = 0.0
+            else:
+                bess_charge    = energy_opt['bess_charge'][0]
+                bess_discharge = energy_opt['bess_discharge'][0]
+
             # 应用第一个时间步的决策
-            if energy_opt['bess_charge'][0] > 0:
+            if bess_charge > 0:
                 # 充电
-                actual_power = self.bess.charge(energy_opt['bess_charge'][0], time_step_hours)
+                actual_power = self.bess.charge(bess_charge, time_step_hours)
             else:
                 # 放电
-                actual_power = self.bess.discharge(energy_opt['bess_discharge'][0], time_step_hours)
+                actual_power = self.bess.discharge(bess_discharge, time_step_hours)
             
             # 记录实际结果
             actual_demand = historic_data.iloc[t]['E_grid']
             actual_renewable = renewable_forecast['pv'][0] + renewable_forecast['wind'][0]
             actual_grid_import = actual_demand - actual_renewable - (
-                actual_power if energy_opt['bess_discharge'][0] > 0 else -actual_power
+                actual_power if bess_discharge > 0 else -actual_power
             )
             
             # 计算成本
@@ -251,7 +261,7 @@ class IntegratedEnergySystem:
                 'predicted_demand': predicted_demand[0],
                 'renewable_generation': actual_renewable,
                 'grid_import': actual_grid_import,
-                'bess_power': actual_power if energy_opt['bess_discharge'][0] > 0 else -actual_power,
+                'bess_power': actual_power if bess_discharge > 0 else -actual_power,
                 'bess_soc': self.bess.get_soc(),
                 'cost': cost
             })

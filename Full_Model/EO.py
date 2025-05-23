@@ -74,6 +74,9 @@ class EnergyOptimizer:
                 grid_import[t] + renewable_gen[t] + bess_discharge[t] - bess_charge[t] == predicted_demand[t]
             )
             
+        # --- 前置：确保 predicted_demand 一维化，防止 (24,1) 维度问题 ---
+        predicted_demand = np.array(predicted_demand).flatten()
+
         # 目标函数: 最小化电网购电成本
         objective = cp.Minimize(cp.sum(cp.multiply(grid_import, grid_prices)))
         
@@ -81,8 +84,18 @@ class EnergyOptimizer:
         problem = cp.Problem(objective, constraints)
         problem.solve()
         
+        # 如果求解失败，返回全 0 策略，避免后续 None 抛错
         if problem.status != cp.OPTIMAL:
             print(f"警告: 问题状态为 {problem.status}")
+            zeros = np.zeros(self.horizon)
+            return {
+                'bess_charge': zeros,
+                'bess_discharge': zeros,
+                'grid_import': predicted_demand,  # 全部用电网满足
+                'soc_profile': np.repeat(self.bess.get_soc(), self.horizon + 1),
+                'total_cost': float('inf'),
+                'status': problem.status
+            }
         
         # 返回优化结果
         return {

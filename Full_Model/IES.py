@@ -128,16 +128,19 @@ class IntegratedEnergySystem:
             # 重要修复: 首先确保序列长度匹配window_size (20)
             window_size = 20  # 模型期望的窗口大小
             if seq_len < window_size:
-                # 扩展序列到window_size
+                # 扩展序列到 window_size
                 if seq_len == 1:
-                    # 如果只有一个时间步，简单复制
                     features = np.repeat(features, window_size, axis=1)
                 else:
-                    # 否则，循环填充到window_size
                     repeats_needed = int(np.ceil(window_size / seq_len))
-                    repeated = np.repeat(features, repeats_needed, axis=1)
-                    features = repeated[:, :window_size, :]
-                print(f"序列长度调整: 从{seq_len}扩展到{window_size}")
+                    repeated       = np.repeat(features, repeats_needed, axis=1)
+                    features       = repeated[:, :window_size, :]
+
+                # 仅首次打印提示，避免终端刷屏
+                if not hasattr(self, '_seq_warn_shown'):
+                    print(f"序列长度调整: 从 {seq_len} 扩展到 {window_size}（仅首次提示）")
+                    self._seq_warn_shown = True
+
                 seq_len = window_size  # 更新序列长度
         
             # 然后检查local attention是否需要额外调整
@@ -149,11 +152,15 @@ class IntegratedEnergySystem:
             
                 # 如果序列长度不能被local_attn_window_size整除，添加填充
                 if seq_len % local_attn_window_size != 0:
-                    # 填充到窗口大小的整数倍
                     padding_len = local_attn_window_size - (seq_len % local_attn_window_size)
-                    padding = np.repeat(features[:, -1:, :], padding_len, axis=1)
-                    features = np.concatenate([features, padding], axis=1)
-                    print(f"Local attention序列长度调整: 从{seq_len}填充到{features.shape[1]}")
+                    padding     = np.repeat(features[:, -1:, :], padding_len, axis=1)
+                    features    = np.concatenate([features, padding], axis=1)
+
+                    # 同样只提示一次
+                    if not hasattr(self, '_local_seq_warn_shown'):
+                        print(f"Local attention 序列长度调整: 从 {seq_len} "
+                              f"填充到 {features.shape[1]}（仅首次提示）")
+                        self._local_seq_warn_shown = True
                 
             inputs = torch.tensor(features, dtype=torch.float32).to(device)
             outputs = self.prediction_model(inputs)

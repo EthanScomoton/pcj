@@ -38,7 +38,7 @@ class EnergyOptimizer:
         # 定义优化变量
         bess_charge = cp.Variable(self.horizon, nonneg=True)  # 储能充电功率
         bess_discharge = cp.Variable(self.horizon, nonneg=True)  # 储能放电功率
-        grid_import = cp.Variable(self.horizon, nonneg=True)  # 从电网购电功率
+        grid_import = cp.Variable(self.horizon)               # 既可正也可负
         
         # 荷电状态演变
         soc = cp.Variable(self.horizon + 1)  # 包含初始和最终SOC
@@ -84,8 +84,8 @@ class EnergyOptimizer:
         problem = cp.Problem(objective, constraints)
         problem.solve()
         
-        # 如果求解失败，返回全 0 策略，避免后续 None 抛错
-        if problem.status != cp.OPTIMAL:
+        # NOTE: OPTIMAL_INACCURATE 也算可行
+        if problem.status not in [cp.OPTIMAL, cp.OPTIMAL_INACCURATE]:
             print(f"警告: 问题状态为 {problem.status}")
             zeros = np.zeros(self.horizon)
             return {

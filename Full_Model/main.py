@@ -39,7 +39,7 @@ if __name__ == "__main__":
     print("\n当前数据集的特征名称:")
     for i, col in enumerate(feature_cols):
         print(f"{i+1:2d}. {col}")
-
+    
     # 设置设备（GPU或CPU）
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"\n使用设备: {device}")

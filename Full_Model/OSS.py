@@ -6,7 +6,7 @@ import os
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-def optimize_storage_size(demand_data, price_data = None, min_capacity = 100, max_capacity = 2000, step = 100,min_power = 50, max_power = 500, power_step = 50):
+def optimize_storage_size(demand_data, price_data = None, min_capacity = 10000, max_capacity = 40000, step = 150,min_power = 5000, max_power = 20000, power_step = 100):
     """
     基于经济性指标寻找最优储能规模
     

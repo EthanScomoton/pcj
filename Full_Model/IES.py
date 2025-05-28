@@ -8,7 +8,7 @@ import numpy as np
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')  
 class IntegratedEnergySystem:
-    def __init__(self, capacity_kwh, bess_power_kw, prediction_model=None):
+    def __init__(self, capacity_kwh, bess_power_kw, prediction_model=None, verbose=True):
         """
         港口综合能源系统
         
@@ -27,7 +27,7 @@ class IntegratedEnergySystem:
         self.prediction_model = prediction_model
         
         # 检查模型的特征维度
-        if prediction_model is not None:
+        if prediction_model is not None and verbose:
             self.expected_feature_dim = prediction_model.feature_dim
             print(f"模型期望的特征维度: {self.expected_feature_dim}")
         else:
@@ -225,7 +225,7 @@ class IntegratedEnergySystem:
                 grid_prices=grid_prices
             )
             
-            # 3️⃣ 若求解失败返回 None，则使用 0 功率回退策略
+            # 若求解失败返回 None，则使用 0 功率回退策略
             if energy_opt['status'] != 'optimal' or energy_opt['bess_charge'] is None:
                 bess_charge    = 0.0
                 bess_discharge = 0.0

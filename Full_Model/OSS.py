@@ -27,7 +27,8 @@ def optimize_storage_size(demand_data, price_data = None, min_capacity = 100, ma
     results = []
     
     # 创建一个共享的预测模型实例
-    feature_dim = len(demand_data.columns) - 2  # 排除timestamp列和目标列
+    feature_cols = [c for c in demand_data.columns if c not in ['timestamp', 'E_grid', 'dayofweek', 'hour', 'month']]
+    feature_dim = len(feature_cols)
     print(f"使用特征维度: {feature_dim}")
     
     prediction_model = EModel_FeatureWeight4(

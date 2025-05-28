@@ -106,7 +106,10 @@ def feature_engineering(data_df):
     feature_columns = renewable_features + load_features + time_feature_cols  # All feature columns
     target_column   = 'E_grid'
     
+    data_df.drop(columns=['dayofweek', 'hour', 'month'], inplace=True, errors='ignore')
+    
     return data_df, feature_columns, target_column
+
 
 
 # 3. Sequence Construction Module

@@ -16,7 +16,8 @@ def extract_features(df, index):
         index = len(df) - 1
         
     # 提取所有特征列(除了timestamp和目标变量)
-    feature_cols = [col for col in df.columns if col not in ['timestamp', 'E_grid']]
+
+    feature_cols = [col for col in df.columns if col not in ['timestamp', 'E_grid', 'dayofweek', 'hour', 'month']]
     
     # 提取该行的特征
     features = df.iloc[index][feature_cols].values
@@ -33,7 +34,8 @@ def get_feature_names(df):
     返回:
         特征列名称列表
     """
-    feature_cols = [col for col in df.columns if col not in ['timestamp', 'E_grid']]
+    feature_cols = [col for col in df.columns if col not in ['timestamp', 'E_grid', 'dayofweek', 'hour', 'month']]
+    
     return feature_cols
 
 def get_feature_info(df):

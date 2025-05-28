@@ -1,7 +1,7 @@
 from OSS import optimize_storage_size, visualize_optimization_results
 from IES import IntegratedEnergySystem
 from All_Models_EGrid_Paper import (load_data, feature_engineering, EModel_FeatureWeight4, calculate_feature_importance)
-from EF import print_feature_info, get_feature_names
+from EF import print_feature_info
 from convert_model import convert_model_weights
 # 主函数 
 if __name__ == "__main__":

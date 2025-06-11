@@ -1488,19 +1488,26 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     # Feature engineering (without standardization to avoid data leakage)
     data_df, feature_cols, target_col = feature_engineering(data_df)
     
-    # 计算特征重要性
-    feature_importance = calculate_feature_importance(data_df, feature_cols, target_col)
+    # ------------- 计算特征重要性 -------------
+    pearson_importance = calculate_feature_importance(
+        data_df, feature_cols, target_col)
 
-    # 1) Pearson
-    pearson_importance = calculate_feature_importance(data_df, feature_cols, target_col)
+    mic_importance = calculate_feature_importance_mic(
+        data_df, feature_cols, target_col)
 
-    # 2) MIC
-    mic_importance = calculate_feature_importance_mic(data_df, feature_cols, target_col)
+    # 0.5*Pearson + 0.5*MIC 加权平均
+    combined_importance = 0.5 * pearson_importance + 0.5 * mic_importance
 
-    # 打印两种方法的对比
+    # 打印三列对比
     print("\n---------------- Pearson VS MIC 对比 ----------------")
-    for feat, p_val, m_val in zip(feature_cols, pearson_importance, mic_importance):
-        print(f"{feat:>25}: Pearson={p_val:.4f} | MIC={m_val:.4f}") 
+    for feat, p_val, m_val, c_val in zip(feature_cols,
+                                          pearson_importance,
+                                          mic_importance,
+                                          combined_importance):
+        print(f"{feat:>25}: Pearson={p_val:.4f} | MIC={m_val:.4f} | Combined={c_val:.4f}")
+
+    # 后续模型使用 combined_importance
+    feature_importance = combined_importance
 
     # Filter out small E_grid values
     data_df = data_df[data_df[target_col] > min_egrid_threshold].copy()
@@ -1593,7 +1600,7 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
         lstm_hidden_size  = 256, 
         lstm_num_layers   = 2,
         lstm_dropout      = 0.1,
-        feature_importance = feature_importance  # 使用计算的特征重要性
+        feature_importance = feature_importance  # 使用加权后的特征重要性
     ).to(device)
 
     model5 = EModel_FeatureWeight5(

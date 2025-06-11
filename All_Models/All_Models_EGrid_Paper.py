@@ -1421,7 +1421,7 @@ def calculate_feature_importance(data_df, feature_cols, target_col):
     importance_info = [(feature_cols[i], importance) for i, importance in enumerate(feature_importance)]
     importance_info.sort(key=lambda x: x[1], reverse=True)
     
-    print("\n基于Pearson相关系数的特征重要性：")
+    print("\n基于Pearson相关系数的特征对E_grid影响度（线性相关性）：")
     for feature, importance in importance_info:
         print(f"{feature}: {importance:.4f}")
     
@@ -1458,7 +1458,7 @@ def calculate_feature_importance_mic(data_df, feature_cols, target_col):
     # 输出排序结果
     ranking = sorted(zip(feature_cols, mic_importance),
                      key=lambda z: z[1], reverse=True)
-    print("\n基于 MIC 的特征重要性：")
+    print("\n基于MIC的特征对E_grid影响度（线性+非线性相关性）：")
     for feat, score in ranking:
         print(f"{feat}: {score:.4f}")
 
@@ -1499,12 +1499,22 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     combined_importance = 0.5 * pearson_importance + 0.5 * mic_importance
 
     # 打印三列对比
-    print("\n---------------- Pearson VS MIC 对比 ----------------")
+    print("\n========== 特征对 E_grid 的影响因子分析 ==========")
+    print("注：Pearson衡量线性相关性，MIC衡量线性+非线性相关性")
+    print("影响因子范围: 0~1 (越接近1表示该特征对E_grid影响越大)")
+    print("-" * 85)
+    print(f"{'特征名称':>25} | {'Pearson系数':>12} | {'MIC系数':>12} | {'综合影响因子':>12}")
+    print("-" * 85)
     for feat, p_val, m_val, c_val in zip(feature_cols,
                                           pearson_importance,
                                           mic_importance,
                                           combined_importance):
-        print(f"{feat:>25}: Pearson={p_val:.4f} | MIC={m_val:.4f} | Combined={c_val:.4f}")
+        # 处理NaN值的显示
+        p_str = f"{p_val:.4f}" if not np.isnan(p_val) else "N/A"
+        m_str = f"{m_val:.4f}" if not np.isnan(m_val) else "N/A"
+        c_str = f"{c_val:.4f}" if not np.isnan(c_val) else "N/A"
+        print(f"{feat:>25} | {p_str:>12} | {m_str:>12} | {c_str:>12}")
+    print("-" * 85)
 
     # 后续模型使用 combined_importance
     feature_importance = combined_importance

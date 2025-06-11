@@ -1427,6 +1427,42 @@ def calculate_feature_importance(data_df, feature_cols, target_col):
     
     return feature_importance
 
+# NEW: 基于 Maximum Information Coefficient (MIC) 的特征重要性计算
+# ------------------------------------------------------------------
+def calculate_feature_importance_mic(data_df, feature_cols, target_col):
+    """
+    使用 MIC 计算特征重要性，返回 0~1 归一化后的权重数组。
+    需要安装 minepy:  pip install minepy
+    """
+    from minepy import MINE
+    df_encoded = data_df.copy()
+    mic_importance = np.ones(len(feature_cols), dtype=np.float32)
+
+    mine = MINE(alpha=0.6, c=15)                 # 官方推荐参数
+    for i, col in enumerate(feature_cols):
+        # 类别型特征先标签编码
+        if df_encoded[col].dtype == 'object':
+            le = LabelEncoder()
+            df_encoded[col] = le.fit_transform(df_encoded[col].astype(str))
+
+        x = df_encoded[col].values
+        y = df_encoded[target_col].values
+
+        mine.compute_score(x, y)
+        mic_val = mine.mic()
+        mic_importance[i] = max(mic_val, 0.1)     # 最小 0.1，避免 0
+
+    # 归一化到 0~1
+    mic_importance /= mic_importance.max()
+
+    # 输出排序结果
+    ranking = sorted(zip(feature_cols, mic_importance),
+                     key=lambda z: z[1], reverse=True)
+    print("\n基于 MIC 的特征重要性：")
+    for feat, score in ranking:
+        print(f"{feat}: {score:.4f}")
+
+    return mic_importance
 
 # 8. Main Function
 def main(use_log_transform = True, min_egrid_threshold = 1.0):
@@ -1454,6 +1490,17 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     
     # 计算特征重要性
     feature_importance = calculate_feature_importance(data_df, feature_cols, target_col)
+
+    # 1) Pearson
+    pearson_importance = calculate_feature_importance(data_df, feature_cols, target_col)
+
+    # 2) MIC
+    mic_importance = calculate_feature_importance_mic(data_df, feature_cols, target_col)
+
+    # 打印两种方法的对比
+    print("\n---------------- Pearson VS MIC 对比 ----------------")
+    for feat, p_val, m_val in zip(feature_cols, pearson_importance, mic_importance):
+        print(f"{feat:>25}: Pearson={p_val:.4f} | MIC={m_val:.4f}") 
 
     # Filter out small E_grid values
     data_df = data_df[data_df[target_col] > min_egrid_threshold].copy()

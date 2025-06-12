@@ -1505,16 +1505,13 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     print("-" * 85)
     print(f"{'特征名称':>25} | {'Pearson系数':>12} | {'MIC系数':>12} | {'综合影响因子':>12}")
     print("-" * 85)
-    for feat, p_val, m_val, c_val in zip(feature_cols,
-                                          pearson_importance,
-                                          mic_importance,
-                                          combined_importance):
+    for feat, p_val, m_val, c_val in zip(feature_cols, pearson_importance, mic_importance, combined_importance):
         # 处理NaN值的显示
         p_str = f"{p_val:.4f}" if not np.isnan(p_val) else "N/A"
         m_str = f"{m_val:.4f}" if not np.isnan(m_val) else "N/A"
         c_str = f"{c_val:.4f}" if not np.isnan(c_val) else "N/A"
         print(f"{feat:>25} | {p_str:>12} | {m_str:>12} | {c_str:>12}")
-    print("-" * 85)
+    print("-" * 85) 
 
     # 后续模型使用 combined_importance
     feature_importance = combined_importance

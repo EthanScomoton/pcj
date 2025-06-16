@@ -1239,7 +1239,7 @@ def analyze_target_distribution(data_df, target_col):
     print(f"\n[Target Analysis] Basic statistics for '{target_col}':")
     print(data_df[target_col].describe())
 
-    plt.figure(figsize = (6, 4))
+    plt.figure(figsize = (6, 4)) 
     plt.hist(data_df[target_col], bins = 30, color = 'skyblue', edgecolor = 'black')
     plt.xlabel(target_col)
     plt.ylabel("Frequency")

@@ -1257,7 +1257,7 @@ def plot_Egrid_over_time(data_df):
     plt.figure(figsize = (10, 5))
     plt.plot(data_df['timestamp'], data_df['E_grid'], color = 'blue', marker = 'o', markersize = 3, linewidth = 1)
     plt.xlabel('Timestamp')
-    plt.ylabel('E_grid')
+    plt.ylabel('E_grid (kW·h)')
     plt.grid(True)
     plt.tight_layout()
     plt.show()
@@ -1427,7 +1427,7 @@ def calculate_feature_importance(data_df, feature_cols, target_col):
     
     return feature_importance
 
-# NEW: 基于 Maximum Information Coefficient (MIC) 的特征重要性计算
+# 基于 Maximum Information Coefficient (MIC) 的特征重要性计算
 # ------------------------------------------------------------------
 def calculate_feature_importance_mic(data_df, feature_cols, target_col):
     """
@@ -1463,6 +1463,101 @@ def calculate_feature_importance_mic(data_df, feature_cols, target_col):
         print(f"{feat}: {score:.4f}")
 
     return mic_importance
+
+def plot_predictions_overview_and_zoom(y_actual_real, predictions_dict, timestamps, zoom_days=10):
+    """
+    Plot two figures: (1) full-year overview of actual vs. predictions; (2) a zoomed-in
+    window covering the last ``zoom_days`` days to highlight short-term performance.
+
+     Parameters
+    ----------
+    y_actual_real : np.ndarray
+        Ground-truth values in original scale.
+    predictions_dict : Dict[str, np.ndarray]
+        Mapping of model name to its prediction array (same length as ``y_actual_real``).
+    timestamps : array-like
+        Corresponding timestamps (len == len(y_actual_real)).
+    zoom_days : int, default 10
+        Size of the zoom window in **days**.
+    """
+    # Convert timestamps to pandas DatetimeIndex for easy slicing
+    time_index = pd.to_datetime(timestamps)
+
+    # ------------------- 1. Full-year / full-range overview ------------------- #
+    plt.figure(figsize=(14, 6))
+    plt.plot(time_index, y_actual_real, label='Actual', color='black', linewidth=1.2)
+    colors = mpl.cm.tab10.colors  # Re-use matplotlib tab10 palette
+    for i, (model_name, preds) in enumerate(predictions_dict.items()):
+        plt.plot(time_index, preds, label=model_name, color=colors[i % len(colors)], linewidth=0.9, alpha=0.9)
+
+    plt.title('Full-range Prediction Overview')
+    plt.xlabel('Timestamp')
+    plt.ylabel('Grid Energy Compensation Value (kW·h)')
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.xticks(rotation=45)
+    plt.show()
+
+    # ------------------- 2. Zoomed-in window (last ``zoom_days``) ------------ #
+    if len(time_index) == 0:
+        return  # Safety guard
+
+    end_time = time_index.max()
+    start_time = end_time - pd.Timedelta(days=zoom_days)
+    zoom_mask = (time_index >= start_time) & (time_index <= end_time)
+
+    if zoom_mask.sum() < 2:
+        print(f"[Warning] Not enough samples to create a {zoom_days}-day zoomed plot.")
+        return
+
+    plt.figure(figsize=(14, 6))
+    plt.plot(time_index[zoom_mask], y_actual_real[zoom_mask], label='Actual', color='black', linewidth=1.5)
+    for i, (model_name, preds) in enumerate(predictions_dict.items()):
+        plt.plot(time_index[zoom_mask], preds[zoom_mask], label=model_name, color=colors[i % len(colors)], linewidth=1.2)
+
+    plt.title(f'Zoomed Prediction Details – Last {zoom_days} Days')
+    plt.xlabel('Timestamp')
+    plt.ylabel('Grid Energy Compensation Value (kW·h)')
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.xticks(rotation=45)
+    plt.show()
+
+
+def plot_value_and_error_histograms(y_actual_real, predictions_dict, bins=30):
+    """
+    Draw histograms of (1) actual value distribution and (2) prediction error distribution.
+
+    Prediction error is defined as ``prediction – actual``.
+    One histogram per model is overlayed for error distribution.
+    """
+    plt.figure(figsize=(14, 5))
+
+    # -------- Histogram of actual values -------- #
+    plt.subplot(1, 2, 1)
+    plt.hist(y_actual_real, bins=bins, color='skyblue', edgecolor='black')
+    plt.title('Distribution of Actual Grid Energy Values')
+    plt.xlabel('Grid Energy Compensation Value (kW·h)')
+    plt.ylabel('Frequency')
+    plt.grid(True, axis='y')
+
+    # -------- Histogram of prediction errors -------- #
+    plt.subplot(1, 2, 2)
+    colors = mpl.cm.tab10.colors
+    for i, (model_name, preds) in enumerate(predictions_dict.items()):
+        errors = preds - y_actual_real
+        plt.hist(errors, bins=bins, alpha=0.5, label=model_name, color=colors[i % len(colors)], edgecolor='black')
+
+    plt.title('Prediction Error Distribution')
+    plt.xlabel('Prediction Error (kW·h)')
+    plt.ylabel('Frequency')
+    plt.legend()
+    plt.grid(True, axis='y')
+
+    plt.tight_layout()
+    plt.show()
 
 # 8. Main Function
 def main(use_log_transform = True, min_egrid_threshold = 1.0):
@@ -1709,6 +1804,23 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
         lstm_num_layers   = 3
     ).to(device)
     best_model5.load_state_dict(torch.load('best_EModel_FeatureWeight5.pth', map_location=device, weights_only=True), strict=False)
+
+     # 使用 Model4 与其他模型对比，生成全长与缩放窗口图，以及分布直方图
+    primary_preds = {'Model4': preds4_real, 'Model5': preds5_real}
+
+    plot_predictions_overview_and_zoom(
+        y_actual_real = labels4_real,
+        predictions_dict = primary_preds,
+        timestamps = test_timestamps,
+        zoom_days = 10
+    )
+
+    plot_value_and_error_histograms(
+        y_actual_real = labels4_real,
+        predictions_dict = primary_preds,
+        bins = 30
+    )
+    print("[Info] Processing complete!")
 
     # Evaluate on test set (standardized domain)
     criterion_test = nn.SmoothL1Loss(beta = 1.0)

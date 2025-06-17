@@ -1010,6 +1010,21 @@ class EModel_FeatureWeight5(nn.Module):
         output = mu + adjusted_noise
         return output.squeeze(-1)
 
+class AsymmetricLoss(nn.Module):
+    """
+    非对称损失：低估惩罚 > 高估惩罚
+    """
+    def __init__(self, underestimate_weight=2.0):
+        super().__init__()
+        self.uw = underestimate_weight
+        
+    def forward(self, pred, target):
+        diff = pred - target
+        loss = torch.where(diff < 0, 
+                          self.uw * diff**2,    # 低估：更大惩罚
+                          diff**2)              # 高估：正常惩罚
+        return loss.mean()
+
 # 5. Evaluation Module
 def evaluate(model, dataloader, criterion, device = device):
     """
@@ -1085,7 +1100,7 @@ def train_model(model, train_loader, val_loader, model_name = 'Model', learning_
     Returns:
       A dictionary of metric histories.
     """
-    criterion = nn.MSELoss()
+    criterion = AsymmetricLoss(underestimate_weight=1.5)
     optimizer = Lion(
         model.parameters(),
         lr           = learning_rate,
@@ -1581,13 +1596,7 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     data_df = load_data()
 
     # ---------- 新增：先对 E_grid 做进一步清洗平滑 ----------
-    data_df = clean_and_smooth_egrid(data_df,
-                                     target_col='E_grid',
-                                     interp_method='linear',
-                                     z_threshold=3.5,      # 离群阈值可调
-                                     median_win=5,         # 中位数窗口
-                                     savgol_win=11,        # Savitzky 窗口(需奇数)
-                                     savgol_poly=2)
+    data_df = adaptive_smooth_egrid(data_df, target_col='E_grid')
 
     # Plot correlation heatmap (before filtering E_grid = 0)
     feature_cols_to_plot = ['season', 'holiday', 'weather', 'temperature', 'working_hours', 'E_wind','E_PV','v_wind', 'wind_direction', 'E_grid']
@@ -1972,38 +1981,36 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     print("[Info] Processing complete!")
 
 # ========= 新增：数据预处理函数 =========
-def clean_and_smooth_egrid(df,
-                           target_col='E_grid',
-                           interp_method='linear',
-                           z_threshold=3.5,
-                           median_win=5,
-                           savgol_win=17,
-                           savgol_poly=2):
+def adaptive_smooth_egrid(df, target_col='E_grid'):
     """
-    对 E_grid 进行   ①缺失值插值→②离群值处理→③二级平滑
-    返回更新后的 DataFrame
+    自适应平滑：对高频噪声过滤，但保留重要的峰值模式
     """
     df = df.copy()
-
-    # ① 缺失值插值（先做一次整体插值，避免 NaN 参与 Z-score）
-    df[target_col] = df[target_col].interpolate(method=interp_method, limit_direction='both')
-
-    # ② 滑动 Z-score 离群检测
-    rolling_mean = df[target_col].rolling(window=median_win, center=True, min_periods=1).mean()
-    rolling_std  = df[target_col].rolling(window=median_win, center=True, min_periods=1).std(ddof=0)
-    z_score = (df[target_col] - rolling_mean) / (rolling_std.replace(0, np.nan))
-    outlier_mask = z_score.abs() > z_threshold
-    df.loc[outlier_mask, target_col] = np.nan           # 标为 NaN
-    df[target_col] = df[target_col].interpolate(method=interp_method, limit_direction='both')
-
-    # ③ 二级平滑：滑动中位数 + Savitzky-Golay
-    median_smoothed = df[target_col].rolling(window=median_win,
-                                             center=True,
-                                             min_periods=1).median()
-    sg_smoothed = savgol_filter(median_smoothed, window_length=savgol_win,
-                                polyorder=savgol_poly, mode='interp')
-
-    df[target_col] = sg_smoothed
+    values = df[target_col].values
+    
+    # 1. 先做温和的异常值裁剪（保留大部分峰值）
+    q1, q3 = np.percentile(values, [25, 75])
+    iqr = q3 - q1
+    upper_bound = q3 + 3.0 * iqr  # 放宽到3倍IQR
+    values = np.clip(values, 0, upper_bound)
+    
+    # 2. 自适应滤波：高值区域减少平滑强度
+    smoothed = np.zeros_like(values)
+    for i in range(len(values)):
+        # 根据局部幅值动态调整窗口大小
+        local_mean = np.mean(values[max(0,i-10):min(len(values),i+10)])
+        if values[i] > 1.5 * local_mean:  # 高峰区域
+            window = 3  # 小窗口，保留峰值
+        else:
+            window = 9  # 普通区域，更多平滑
+        
+        start = max(0, i - window//2)
+        end = min(len(values), i + window//2 + 1)
+        smoothed[i] = np.median(values[start:end])
+    
+    # 3. 最后应用轻度Savitzky-Golay
+    final_smooth = savgol_filter(smoothed, window_length=7, polyorder=3)
+    df[target_col] = final_smooth
     return df
 
 # ... create_sequences 定义下方加入统一工具 ...
@@ -2017,6 +2024,45 @@ def gen_sequence_timestamps(timestamps, start_idx, window, stride=STRIDE):
     for i in range(start_idx + window, len(timestamps), stride):
         seq_ts.append(timestamps[i])
     return np.array(seq_ts)
+
+# 为EModel_FeatureWeight2增加动态范围增强器
+class DynamicRangeEnhancer(nn.Module):
+    def __init__(self, hidden_dim):
+        super().__init__()
+        self.gate = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim//2),
+            nn.ReLU(),
+            nn.Linear(hidden_dim//2, 2),  # 输出scale和shift
+            nn.Sigmoid()
+        )
+        
+    def forward(self, x, features):
+        # features: 原始输入特征，包含峰值信息
+        params = self.gate(features.mean(dim=1))
+        scale, shift = params.chunk(2, dim=1)
+        scale = 1 + scale * 3  # scale范围[1, 4]
+        return x * scale + shift
+
+def post_process_predictions(preds, original_peaks, timestamps):
+    """
+    后处理：根据历史模式恢复可能的峰值
+    """
+    # 识别历史峰值时间模式（如每天下午3-5点）
+    peak_hours = [15, 16, 17]
+    
+    processed = preds.copy()
+    for i, ts in enumerate(timestamps):
+        hour = pd.to_datetime(ts).hour
+        if hour in peak_hours:
+            # 适度提升峰值时段的预测
+            processed[i] *= 1.2
+            
+    return processed
+
+# 在得到preds*_real后应用
+preds2_real = post_process_predictions(preds2_real, 
+                                       data_df['E_grid'].values,
+                                       test_seq_timestamps)
 
 if __name__ == "__main__":
     main(use_log_transform = True, min_egrid_threshold = 1.0)

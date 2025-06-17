@@ -31,9 +31,9 @@ mpl.rcParams.update({
 
 # Global hyperparameters
 learning_rate     = 1e-4   # Learning rate
-num_epochs        = 150    # Number of training epochs
+num_epochs        = 80    # Number of training epochs
 batch_size        = 128    # Batch size
-weight_decay      = 1e-4   # Weight decay
+weight_decay      = 1e-6   # Weight decay
 patience          = 12     # Patience for early stopping
 num_workers       = 0      # Number of worker threads
 window_size       = 20     # Sequence window size
@@ -1655,7 +1655,12 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
 
     train_timestamps = timestamps_all[:train_size]
     val_timestamps   = timestamps_all[train_size : train_size + val_size]
-    test_timestamps = timestamps_all[train_size + val_size + window_size:]
+    test_seq_timestamps = gen_sequence_timestamps(
+        timestamps_all,             # 原始完整时间戳
+        start_idx = train_size + val_size,
+        window    = window_size,
+        stride    = STRIDE
+    )
 
     def piecewise_boxcox(y, split=1e5, lam=0.3):
         mask = y > split
@@ -1894,7 +1899,7 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     plot_predictions_overview_and_zoom(
         y_actual_real = labels4_real,
         predictions_dict = primary_preds,
-        timestamps = test_timestamps,
+        timestamps = test_seq_timestamps,
         zoom_days = 10
     )
 
@@ -1921,7 +1926,7 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     # Plot dataset time distribution
     plot_dataset_distribution(train_timestamps, 'Training Set')
     plot_dataset_distribution(val_timestamps, 'Validation Set')
-    plot_dataset_distribution(test_timestamps, 'Test Set')
+    plot_dataset_distribution(test_seq_timestamps, 'Test Set')
 
     # ----------------- 1) 五个模型整体对比 -----------------
     all_model_preds = {
@@ -1935,7 +1940,7 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     plot_predictions_overview_and_zoom(
         y_actual_real = labels4_real,      # 真实值
         predictions_dict = all_model_preds,
-        timestamps = test_timestamps,
+        timestamps = test_seq_timestamps,
         zoom_days = 10
     )
 
@@ -1954,7 +1959,7 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
         plot_predictions_comparison(
             y_actual_real = labels4_real,
             predictions_dict = {'Model4': preds4_real, m_name: m_preds},
-            timestamps = test_timestamps
+            timestamps = test_seq_timestamps
         )
 
     # ----------------- 3) 训练曲线 -----------------
@@ -1972,7 +1977,7 @@ def clean_and_smooth_egrid(df,
                            interp_method='linear',
                            z_threshold=3.5,
                            median_win=5,
-                           savgol_win=11,
+                           savgol_win=17,
                            savgol_poly=2):
     """
     对 E_grid 进行   ①缺失值插值→②离群值处理→③二级平滑
@@ -2000,6 +2005,18 @@ def clean_and_smooth_egrid(df,
 
     df[target_col] = sg_smoothed
     return df
+
+# ... create_sequences 定义下方加入统一工具 ...
+STRIDE = 5          # 与 create_sequences 保持一致
+
+def gen_sequence_timestamps(timestamps, start_idx, window, stride=STRIDE):
+    """
+    根据窗口和步长生成与 create_sequences 对齐的时间戳序列
+    """
+    seq_ts = []
+    for i in range(start_idx + window, len(timestamps), stride):
+        seq_ts.append(timestamps[i])
+    return np.array(seq_ts)
 
 if __name__ == "__main__":
     main(use_log_transform = True, min_egrid_threshold = 1.0)

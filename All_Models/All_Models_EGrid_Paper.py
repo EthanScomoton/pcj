@@ -1897,30 +1897,41 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     plot_dataset_distribution(val_timestamps, 'Validation Set')
     plot_dataset_distribution(test_timestamps, 'Test Set')
 
-    plot_predictions_comparison(
-        y_actual_real=labels4_real,
-        predictions_dict={'Model4': preds4_real, 'Model5': preds3_real},
-        timestamps=test_timestamps
+    # ----------------- 1) 五个模型整体对比 -----------------
+    all_model_preds = {
+        'Model1': preds1_real,
+        'Model2': preds2_real,
+        'Model3': preds3_real,
+        'Model4': preds4_real,
+        'Model5': preds5_real      # 修正：以前误用了 preds3_real
+    }
+
+    plot_predictions_overview_and_zoom(
+        y_actual_real = labels4_real,      # 真实值
+        predictions_dict = all_model_preds,
+        timestamps = test_timestamps,
+        zoom_days = 10
     )
 
-    plot_predictions_comparison(
-        y_actual_real=labels1_real,
-        predictions_dict={'Model1': preds1_real, 'Model4': preds4_real},
-        timestamps=test_timestamps
-    )
-    plot_predictions_comparison(
-        y_actual_real=labels2_real,
-        predictions_dict={'Model2': preds2_real, 'Model4': preds4_real},
-        timestamps=test_timestamps
+    plot_value_and_error_histograms(
+        y_actual_real = labels4_real,
+        predictions_dict = all_model_preds,
+        bins = 30
     )
 
-    plot_predictions_comparison(
-        y_actual_real=labels3_real,
-        predictions_dict={'Model3': preds3_real, 'Model4': preds4_real},
-        timestamps=test_timestamps
-    )
+    # ----------------- 2) 与 Model4 的两两对比 -----------------
+    # 可读性更高，用循环依次绘制
+    for m_name, m_preds in [('Model1', preds1_real),
+                            ('Model2', preds2_real),
+                            ('Model3', preds3_real),
+                            ('Model5', preds5_real)]:   # 追加 Model5
+        plot_predictions_comparison(
+            y_actual_real = labels4_real,
+            predictions_dict = {'Model4': preds4_real, m_name: m_preds},
+            timestamps = test_timestamps
+        )
 
-    # Plot training curves for various metrics
+    # ----------------- 3) 训练曲线 -----------------
     plot_training_curves_allmetrics(hist1, model_name = 'EModel_FeatureWeight1')
     plot_training_curves_allmetrics(hist2, model_name = 'EModel_FeatureWeight2')
     plot_training_curves_allmetrics(hist3, model_name = 'EModel_FeatureWeight3')

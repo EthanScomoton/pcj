@@ -8,7 +8,6 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import matplotlib.colors as mcolors
 import matplotlib as mpl
-from scipy.signal import savgol_filter
 
 from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader, TensorDataset
@@ -16,8 +15,6 @@ from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.metrics import mean_squared_error
 from torch.nn.utils import clip_grad_norm_
 from lion_pytorch import Lion
-from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
-from timm.models.layers import DropPath
  
 # Global style settings for plots
 mpl.rcParams.update({
@@ -30,10 +27,10 @@ mpl.rcParams.update({
 })
 
 # Global hyperparameters
-learning_rate     = 1e-3   # Learning rate
-num_epochs        = 80    # Number of training epochs
+learning_rate     = 1e-4   # Learning rate
+num_epochs        = 150    # Number of training epochs
 batch_size        = 128    # Batch size
-weight_decay      = 1e-5   # Weight decay
+weight_decay      = 1e-4   # Weight decay
 patience          = 12     # Patience for early stopping
 num_workers       = 0      # Number of worker threads
 window_size       = 20     # Sequence window size
@@ -109,13 +106,6 @@ def feature_engineering(data_df):
     feature_columns = renewable_features + load_features + time_feature_cols  # All feature columns
     target_column   = 'E_grid'
     
-    data_df['is_weekend']  = data_df['dayofweek'].isin([5,6]).astype(int)
-    data_df['quarter']     = data_df['timestamp'].dt.quarter
-    feature_columns += ['is_weekend', 'quarter']
-    
-    data_df['E_grid_diff'] = data_df['E_grid'].diff().fillna(0)
-    feature_columns += ['E_grid_diff']
-    
     return data_df, feature_columns, target_column
 
 
@@ -134,7 +124,7 @@ def create_sequences(X_data, y_data, window_size):
     """
     X_list, y_list = [], []
     num_samples = X_data.shape[0]  # Total number of samples
-    for i in range(0, num_samples - window_size, 5):  # Construct sequences using sliding window
+    for i in range(num_samples - window_size):  # Construct sequences using sliding window
         seq_x = X_data[i : i + window_size, :]  # Feature sequence for current window
         seq_y = y_data[i + window_size]           # Target value corresponding to the current window
         X_list.append(seq_x)
@@ -1010,21 +1000,6 @@ class EModel_FeatureWeight5(nn.Module):
         output = mu + adjusted_noise
         return output.squeeze(-1)
 
-class AsymmetricLoss(nn.Module):
-    """
-    非对称损失：低估惩罚 > 高估惩罚
-    """
-    def __init__(self, underestimate_weight=2.0):
-        super().__init__()
-        self.uw = underestimate_weight
-        
-    def forward(self, pred, target):
-        diff = pred - target
-        loss = torch.where(diff < 0, 
-                          self.uw * diff**2,    # 低估：更大惩罚
-                          diff**2)              # 高估：正常惩罚
-        return loss.mean()
-
 # 5. Evaluation Module
 def evaluate(model, dataloader, criterion, device = device):
     """
@@ -1100,7 +1075,7 @@ def train_model(model, train_loader, val_loader, model_name = 'Model', learning_
     Returns:
       A dictionary of metric histories.
     """
-    criterion = AsymmetricLoss(underestimate_weight=1.5)
+    criterion = nn.MSELoss()
     optimizer = Lion(
         model.parameters(),
         lr           = learning_rate,
@@ -1110,8 +1085,9 @@ def train_model(model, train_loader, val_loader, model_name = 'Model', learning_
     total_steps  = num_epochs * len(train_loader)
     warmup_steps = int(0.1 * total_steps)
 
-    scheduler = CosineAnnealingWarmRestarts(
-        optimizer, T_0=len(train_loader)*5, T_mult=2, eta_min=1e-6
+    scheduler = LambdaLR(optimizer, lambda step: 
+        min(step / warmup_steps, 1.0) if step < warmup_steps else 
+        max(0.0, 1 - (step - warmup_steps) / (total_steps - warmup_steps))
     )
     best_val_loss = float('inf')
     counter       = 0
@@ -1595,9 +1571,6 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     print("Loading raw data...")
     data_df = load_data()
 
-    # ---------- 新增：先对 E_grid 做进一步清洗平滑 ----------
-    data_df = adaptive_smooth_egrid(data_df, target_col='E_grid')
-
     # Plot correlation heatmap (before filtering E_grid = 0)
     feature_cols_to_plot = ['season', 'holiday', 'weather', 'temperature', 'working_hours', 'E_wind','E_PV','v_wind', 'wind_direction', 'E_grid']
     feature_cols_to_plot = [c for c in feature_cols_to_plot if c in data_df.columns] 
@@ -1664,20 +1637,7 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
 
     train_timestamps = timestamps_all[:train_size]
     val_timestamps   = timestamps_all[train_size : train_size + val_size]
-    test_seq_timestamps = gen_sequence_timestamps(
-        timestamps_all,             # 原始完整时间戳
-        start_idx = train_size + val_size,
-        window    = window_size,
-        stride    = STRIDE
-    )
-
-    def piecewise_boxcox(y, split=1e5, lam=0.3):
-        mask = y > split
-        y_new = y.copy()
-        y_new[mask]  = np.log1p(y_new[mask])
-        y_new[~mask] = np.sign(y_new[~mask]) * (np.abs(y_new[~mask])**lam - 1)/lam
-        return y_new
-    y_all_raw = piecewise_boxcox(y_all_raw)
+    test_timestamps = timestamps_all[train_size + val_size + window_size:]
 
     # Apply logarithmic transformation to target values if set
     if use_log_transform:
@@ -1908,7 +1868,7 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     plot_predictions_overview_and_zoom(
         y_actual_real = labels4_real,
         predictions_dict = primary_preds,
-        timestamps = test_seq_timestamps,
+        timestamps = test_timestamps,
         zoom_days = 10
     )
 
@@ -1935,7 +1895,7 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     # Plot dataset time distribution
     plot_dataset_distribution(train_timestamps, 'Training Set')
     plot_dataset_distribution(val_timestamps, 'Validation Set')
-    plot_dataset_distribution(test_seq_timestamps, 'Test Set')
+    plot_dataset_distribution(test_timestamps, 'Test Set')
 
     # ----------------- 1) 五个模型整体对比 -----------------
     all_model_preds = {
@@ -1943,13 +1903,13 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
         'Model2': preds2_real,
         'Model3': preds3_real,
         'Model4': preds4_real,
-        'Model5': preds5_real 
+        'Model5': preds5_real      # 修正：以前误用了 preds3_real
     }
 
     plot_predictions_overview_and_zoom(
         y_actual_real = labels4_real,      # 真实值
         predictions_dict = all_model_preds,
-        timestamps = test_seq_timestamps,
+        timestamps = test_timestamps,
         zoom_days = 10
     )
 
@@ -1964,11 +1924,11 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     for m_name, m_preds in [('Model1', preds1_real),
                             ('Model2', preds2_real),
                             ('Model3', preds3_real),
-                            ('Model5', preds5_real)]: 
+                            ('Model5', preds5_real)]:   # 追加 Model5
         plot_predictions_comparison(
             y_actual_real = labels4_real,
             predictions_dict = {'Model4': preds4_real, m_name: m_preds},
-            timestamps = test_seq_timestamps
+            timestamps = test_timestamps
         )
 
     # ----------------- 3) 训练曲线 -----------------
@@ -1979,90 +1939,6 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     plot_training_curves_allmetrics(hist5, model_name = 'EModel_FeatureWeight5')
 
     print("[Info] Processing complete!")
-
-# ========= 新增：数据预处理函数 =========
-def adaptive_smooth_egrid(df, target_col='E_grid'):
-    """
-    自适应平滑：对高频噪声过滤，但保留重要的峰值模式
-    """
-    df = df.copy()
-    values = df[target_col].values
-    
-    # 1. 先做温和的异常值裁剪（保留大部分峰值）
-    q1, q3 = np.percentile(values, [25, 75])
-    iqr = q3 - q1
-    upper_bound = q3 + 3.0 * iqr  # 放宽到3倍IQR
-    values = np.clip(values, 0, upper_bound)
-    
-    # 2. 自适应滤波：高值区域减少平滑强度
-    smoothed = np.zeros_like(values)
-    for i in range(len(values)):
-        # 根据局部幅值动态调整窗口大小
-        local_mean = np.mean(values[max(0,i-10):min(len(values),i+10)])
-        if values[i] > 1.5 * local_mean:  # 高峰区域
-            window = 3  # 小窗口，保留峰值
-        else:
-            window = 9  # 普通区域，更多平滑
-        
-        start = max(0, i - window//2)
-        end = min(len(values), i + window//2 + 1)
-        smoothed[i] = np.median(values[start:end])
-    
-    # 3. 最后应用轻度Savitzky-Golay
-    final_smooth = savgol_filter(smoothed, window_length=7, polyorder=3)
-    df[target_col] = final_smooth
-    return df
-
-# ... create_sequences 定义下方加入统一工具 ...
-STRIDE = 5          # 与 create_sequences 保持一致
-
-def gen_sequence_timestamps(timestamps, start_idx, window, stride=STRIDE):
-    """
-    根据窗口和步长生成与 create_sequences 对齐的时间戳序列
-    """
-    seq_ts = []
-    for i in range(start_idx + window, len(timestamps), stride):
-        seq_ts.append(timestamps[i])
-    return np.array(seq_ts)
-
-# 为EModel_FeatureWeight2增加动态范围增强器
-class DynamicRangeEnhancer(nn.Module):
-    def __init__(self, hidden_dim):
-        super().__init__()
-        self.gate = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim//2),
-            nn.ReLU(),
-            nn.Linear(hidden_dim//2, 2),  # 输出scale和shift
-            nn.Sigmoid()
-        )
-        
-    def forward(self, x, features):
-        # features: 原始输入特征，包含峰值信息
-        params = self.gate(features.mean(dim=1))
-        scale, shift = params.chunk(2, dim=1)
-        scale = 1 + scale * 3  # scale范围[1, 4]
-        return x * scale + shift
-
-def post_process_predictions(preds, original_peaks, timestamps):
-    """
-    后处理：根据历史模式恢复可能的峰值
-    """
-    # 识别历史峰值时间模式（如每天下午3-5点）
-    peak_hours = [15, 16, 17]
-    
-    processed = preds.copy()
-    for i, ts in enumerate(timestamps):
-        hour = pd.to_datetime(ts).hour
-        if hour in peak_hours:
-            # 适度提升峰值时段的预测
-            processed[i] *= 1.2
-            
-    return processed
-
-# 在得到preds*_real后应用
-preds2_real = post_process_predictions(preds2_real, 
-                                       data_df['E_grid'].values,
-                                       test_seq_timestamps)
 
 if __name__ == "__main__":
     main(use_log_transform = True, min_egrid_threshold = 1.0)

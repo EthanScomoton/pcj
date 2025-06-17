@@ -15,6 +15,7 @@ from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.metrics import mean_squared_error
 from torch.nn.utils import clip_grad_norm_
 from lion_pytorch import Lion
+import matplotlib.ticker as ticker  # 添加这行导入
  
 # Global style settings for plots
 mpl.rcParams.update({
@@ -1519,6 +1520,9 @@ def plot_predictions_overview_and_zoom(y_actual_real, predictions_dict, timestam
     plt.title(f'Zoomed Prediction Details – Last {zoom_days} Days')
     plt.xlabel('Timestamp')
     plt.ylabel('Grid Energy Compensation Value (kW·h)')
+
+    ax = plt.gca()
+    ax.yaxis.set_major_locator(ticker.MultipleLocator(20000))
     plt.legend()
     plt.grid(True)
     plt.tight_layout()

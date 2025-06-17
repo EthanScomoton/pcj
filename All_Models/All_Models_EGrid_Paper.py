@@ -16,6 +16,8 @@ from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.metrics import mean_squared_error
 from torch.nn.utils import clip_grad_norm_
 from lion_pytorch import Lion
+from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
+from timm.models.layers import DropPath
  
 # Global style settings for plots
 mpl.rcParams.update({
@@ -107,6 +109,13 @@ def feature_engineering(data_df):
     feature_columns = renewable_features + load_features + time_feature_cols  # All feature columns
     target_column   = 'E_grid'
     
+    data_df['is_weekend']  = data_df['dayofweek'].isin([5,6]).astype(int)
+    data_df['quarter']     = data_df['timestamp'].dt.quarter
+    feature_columns += ['is_weekend', 'quarter']
+    
+    data_df['E_grid_diff'] = data_df['E_grid'].diff().fillna(0)
+    feature_columns += ['E_grid_diff']
+    
     return data_df, feature_columns, target_column
 
 
@@ -125,7 +134,7 @@ def create_sequences(X_data, y_data, window_size):
     """
     X_list, y_list = [], []
     num_samples = X_data.shape[0]  # Total number of samples
-    for i in range(num_samples - window_size):  # Construct sequences using sliding window
+    for i in range(0, num_samples - window_size, 5):  # Construct sequences using sliding window
         seq_x = X_data[i : i + window_size, :]  # Feature sequence for current window
         seq_y = y_data[i + window_size]           # Target value corresponding to the current window
         X_list.append(seq_x)
@@ -1086,9 +1095,8 @@ def train_model(model, train_loader, val_loader, model_name = 'Model', learning_
     total_steps  = num_epochs * len(train_loader)
     warmup_steps = int(0.1 * total_steps)
 
-    scheduler = LambdaLR(optimizer, lambda step: 
-        min(step / warmup_steps, 1.0) if step < warmup_steps else 
-        max(0.0, 1 - (step - warmup_steps) / (total_steps - warmup_steps))
+    scheduler = CosineAnnealingWarmRestarts(
+        optimizer, T_0=len(train_loader)*5, T_mult=2, eta_min=1e-6
     )
     best_val_loss = float('inf')
     counter       = 0
@@ -1648,6 +1656,14 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     train_timestamps = timestamps_all[:train_size]
     val_timestamps   = timestamps_all[train_size : train_size + val_size]
     test_timestamps = timestamps_all[train_size + val_size + window_size:]
+
+    def piecewise_boxcox(y, split=1e5, lam=0.3):
+        mask = y > split
+        y_new = y.copy()
+        y_new[mask]  = np.log1p(y_new[mask])
+        y_new[~mask] = np.sign(y_new[~mask]) * (np.abs(y_new[~mask])**lam - 1)/lam
+        return y_new
+    y_all_raw = piecewise_boxcox(y_all_raw)
 
     # Apply logarithmic transformation to target values if set
     if use_log_transform:

@@ -1018,7 +1018,7 @@ def evaluate(model, dataloader, criterion, device = device):
 
     with torch.no_grad():
         for batch_inputs, batch_labels in dataloader:
-            batch_inputs  = batch_inputs.to(device)
+            batch_inputs  = batch_inputs.to(device)         
             batch_labels  = batch_labels.to(device)
 
             outputs = model(batch_inputs)
@@ -1805,23 +1805,6 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     ).to(device)
     best_model5.load_state_dict(torch.load('best_EModel_FeatureWeight5.pth', map_location=device, weights_only=True), strict=False)
 
-     # 使用 Model4 与其他模型对比，生成全长与缩放窗口图，以及分布直方图
-    primary_preds = {'Model4': preds4_real, 'Model5': preds5_real}
-
-    plot_predictions_overview_and_zoom(
-        y_actual_real = labels4_real,
-        predictions_dict = primary_preds,
-        timestamps = test_timestamps,
-        zoom_days = 10
-    )
-
-    plot_value_and_error_histograms(
-        y_actual_real = labels4_real,
-        predictions_dict = primary_preds,
-        bins = 30
-    )
-    print("[Info] Processing complete!")
-
     # Evaluate on test set (standardized domain)
     criterion_test = nn.SmoothL1Loss(beta = 1.0)
     (_, test_rmse1_std, test_mape1_std, test_r21_std, test_mse1_std, test_mae1_std, preds1_std, labels1_std) = evaluate(best_model1, test_loader, criterion_test)
@@ -1878,6 +1861,23 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     test_rmse3_real = np.sqrt(mean_squared_error(labels3_real, preds3_real))
     test_rmse4_real = np.sqrt(mean_squared_error(labels4_real, preds4_real))
     test_rmse5_real = np.sqrt(mean_squared_error(labels5_real, preds5_real))
+
+    # 使用 Model4 与其他模型对比，生成全长与缩放窗口图，以及分布直方图
+    primary_preds = {'Model4': preds4_real, 'Model5': preds5_real}
+
+    plot_predictions_overview_and_zoom(
+        y_actual_real = labels4_real,
+        predictions_dict = primary_preds,
+        timestamps = test_timestamps,
+        zoom_days = 10
+    )
+
+    plot_value_and_error_histograms(
+        y_actual_real = labels4_real,
+        predictions_dict = primary_preds,
+        bins = 30
+    )
+    print("[Info] Processing complete!")
 
     print("\n========== [Test Set Evaluation (Original Domain)] ==========")
     print(f"[EModel_FeatureWeight1] => RMSE (original): {test_rmse1_real:.2f}")

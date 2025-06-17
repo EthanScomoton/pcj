@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import matplotlib.colors as mcolors
 import matplotlib as mpl
+from scipy.signal import savgol_filter
 
 from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader, TensorDataset
@@ -1571,6 +1572,15 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     print("Loading raw data...")
     data_df = load_data()
 
+    # ---------- 新增：先对 E_grid 做进一步清洗平滑 ----------
+    data_df = clean_and_smooth_egrid(data_df,
+                                     target_col='E_grid',
+                                     interp_method='linear',
+                                     z_threshold=3.5,      # 离群阈值可调
+                                     median_win=5,         # 中位数窗口
+                                     savgol_win=11,        # Savitzky 窗口(需奇数)
+                                     savgol_poly=2)
+
     # Plot correlation heatmap (before filtering E_grid = 0)
     feature_cols_to_plot = ['season', 'holiday', 'weather', 'temperature', 'working_hours', 'E_wind','E_PV','v_wind', 'wind_direction', 'E_grid']
     feature_cols_to_plot = [c for c in feature_cols_to_plot if c in data_df.columns] 
@@ -1903,7 +1913,7 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
         'Model2': preds2_real,
         'Model3': preds3_real,
         'Model4': preds4_real,
-        'Model5': preds5_real      # 修正：以前误用了 preds3_real
+        'Model5': preds5_real 
     }
 
     plot_predictions_overview_and_zoom(
@@ -1924,7 +1934,7 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     for m_name, m_preds in [('Model1', preds1_real),
                             ('Model2', preds2_real),
                             ('Model3', preds3_real),
-                            ('Model5', preds5_real)]:   # 追加 Model5
+                            ('Model5', preds5_real)]: 
         plot_predictions_comparison(
             y_actual_real = labels4_real,
             predictions_dict = {'Model4': preds4_real, m_name: m_preds},
@@ -1939,6 +1949,41 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     plot_training_curves_allmetrics(hist5, model_name = 'EModel_FeatureWeight5')
 
     print("[Info] Processing complete!")
+
+# ========= 新增：数据预处理函数 =========
+def clean_and_smooth_egrid(df,
+                           target_col='E_grid',
+                           interp_method='linear',
+                           z_threshold=3.5,
+                           median_win=5,
+                           savgol_win=11,
+                           savgol_poly=2):
+    """
+    对 E_grid 进行   ①缺失值插值→②离群值处理→③二级平滑
+    返回更新后的 DataFrame
+    """
+    df = df.copy()
+
+    # ① 缺失值插值（先做一次整体插值，避免 NaN 参与 Z-score）
+    df[target_col] = df[target_col].interpolate(method=interp_method, limit_direction='both')
+
+    # ② 滑动 Z-score 离群检测
+    rolling_mean = df[target_col].rolling(window=median_win, center=True, min_periods=1).mean()
+    rolling_std  = df[target_col].rolling(window=median_win, center=True, min_periods=1).std(ddof=0)
+    z_score = (df[target_col] - rolling_mean) / (rolling_std.replace(0, np.nan))
+    outlier_mask = z_score.abs() > z_threshold
+    df.loc[outlier_mask, target_col] = np.nan           # 标为 NaN
+    df[target_col] = df[target_col].interpolate(method=interp_method, limit_direction='both')
+
+    # ③ 二级平滑：滑动中位数 + Savitzky-Golay
+    median_smoothed = df[target_col].rolling(window=median_win,
+                                             center=True,
+                                             min_periods=1).median()
+    sg_smoothed = savgol_filter(median_smoothed, window_length=savgol_win,
+                                polyorder=savgol_poly, mode='interp')
+
+    df[target_col] = sg_smoothed
+    return df
 
 if __name__ == "__main__":
     main(use_log_transform = True, min_egrid_threshold = 1.0)

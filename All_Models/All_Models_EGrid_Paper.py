@@ -1542,7 +1542,6 @@ def plot_value_and_error_histograms(y_actual_real, predictions_dict, bins=30):
     # -------- Histogram of actual values -------- #
     plt.subplot(1, 2, 1)
     plt.hist(y_actual_real, bins=bins, color='skyblue', edgecolor='black')
-    plt.title('Distribution of Actual Grid Energy Values')
     plt.xlabel('Grid Energy Compensation Value (kW·h)')
     plt.ylabel('Frequency')
     plt.grid(True, axis='y')

@@ -1563,6 +1563,60 @@ def plot_value_and_error_histograms(y_actual_real, predictions_dict, bins=30):
     plt.tight_layout()
     plt.show()
 
+def plot_error_max_curve(y_actual_real, predictions_dict, bins=30, smooth_sigma=1.0):
+    """
+    生成一张 **单独的** 图，展示“各模型预测误差直方图在每个 bin 的最大计数”
+    并对该离散序列做高斯平滑后得到的连续曲线。
+
+    参数
+    ----
+    y_actual_real : ndarray
+        真实值（已还原到原始尺度）。
+    predictions_dict : Dict[str, ndarray]
+        {模型名称: 预测值} 的映射。
+    bins : int, default 30
+        直方图分箱个数（需与原图保持一致）。
+    smooth_sigma : float, default 1.0
+        高斯平滑的 σ；设为 0 可关闭平滑。
+    """
+    import warnings
+    try:
+        from scipy.ndimage import gaussian_filter1d
+    except ImportError:
+        gaussian_filter1d = None
+        warnings.warn("scipy 未安装，将跳过平滑。如果需要平滑，请 `pip install scipy`")
+
+    # -------------- 1. 统计各模型误差直方图 -------------- #
+    hist_counts = []
+    bin_edges = None
+    for preds in predictions_dict.values():
+        errors = preds - y_actual_real
+        counts, edges = np.histogram(errors, bins=bins)
+        hist_counts.append(counts)
+        if bin_edges is None:
+            bin_edges = edges
+
+    hist_counts = np.stack(hist_counts, axis=0)             # shape: [num_model, bins]
+    max_counts  = hist_counts.max(axis=0)                   # 每个 bin 取最大计数
+    bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])    # bin 中心坐标
+
+    # -------------- 2. 可选高斯平滑 -------------- #
+    if gaussian_filter1d is not None and smooth_sigma > 0:
+        max_counts_smoothed = gaussian_filter1d(max_counts.astype(float), sigma=smooth_sigma)
+    else:
+        max_counts_smoothed = max_counts
+
+    # -------------- 3. 绘图 -------------- #
+    plt.figure(figsize=(10, 5))
+    plt.plot(bin_centers, max_counts_smoothed, color='red', linewidth=2.5)
+    plt.title('Smoothed Curve of Max Histogram Counts')
+    plt.xlabel('Prediction Error (kW·h)')
+    plt.ylabel('Max Frequency')
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show()
+
+
 # 8. Main Function
 def main(use_log_transform = True, min_egrid_threshold = 1.0):
     """
@@ -1881,6 +1935,13 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
         predictions_dict = primary_preds,
         bins = 30
     )
+
+    plot_error_max_curve(
+    y_actual_real = labels4_real,
+    predictions_dict = primary_preds,
+    bins = 30,
+    smooth_sigma = 1.0   # 可按需求调节平滑强度
+)
     print("[Info] Processing complete!")
 
     print("\n========== [Test Set Evaluation (Original Domain)] ==========")

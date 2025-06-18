@@ -1554,6 +1554,7 @@ def plot_value_and_error_histograms(y_actual_real, predictions_dict, bins=30):
         plt.hist(errors, bins=bins, alpha=0.5, label=model_name, color=colors[i % len(colors)], edgecolor='black')
 
     #plt.title('Prediction Error Distribution')
+    plt.xlim(-20000, 20000)
     plt.xlabel('Prediction Error (kW·h)')
     plt.ylabel('Frequency')
     plt.legend()
@@ -1610,6 +1611,7 @@ def plot_error_max_curve(y_actual_real,
 
     # -------- 3. 图形美化 -------- #
     #plt.title('Smoothed Histogram Curves of Prediction Errors')
+    plt.xlim(-20000, 20000)
     plt.xlabel('Prediction Error (kW·h)')
     plt.ylabel('Frequency')
     plt.legend()

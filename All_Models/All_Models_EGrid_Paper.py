@@ -1554,7 +1554,7 @@ def plot_value_and_error_histograms(y_actual_real, predictions_dict, bins=30):
         errors = preds - y_actual_real
         plt.hist(errors, bins=bins, alpha=0.5, label=model_name, color=colors[i % len(colors)], edgecolor='black')
 
-    plt.title('Prediction Error Distribution')
+    #plt.title('Prediction Error Distribution')
     plt.xlabel('Prediction Error (kW·h)')
     plt.ylabel('Frequency')
     plt.legend()
@@ -1579,13 +1579,8 @@ def plot_error_max_curve(y_actual_real, predictions_dict, bins=30, smooth_sigma=
     smooth_sigma : float, default 1.0
         高斯平滑的 σ；设为 0 可关闭平滑。
     """
-    import warnings
-    try:
-        from scipy.ndimage import gaussian_filter1d
-    except ImportError:
-        gaussian_filter1d = None
-        warnings.warn("scipy 未安装，将跳过平滑。如果需要平滑，请 `pip install scipy`")
 
+    from scipy.ndimage import gaussian_filter1d
     # -------------- 1. 统计各模型误差直方图 -------------- #
     hist_counts = []
     bin_edges = None
@@ -1609,7 +1604,6 @@ def plot_error_max_curve(y_actual_real, predictions_dict, bins=30, smooth_sigma=
     # -------------- 3. 绘图 -------------- #
     plt.figure(figsize=(10, 5))
     plt.plot(bin_centers, max_counts_smoothed, color='red', linewidth=2.5)
-    plt.title('Smoothed Curve of Max Histogram Counts')
     plt.xlabel('Prediction Error (kW·h)')
     plt.ylabel('Max Frequency')
     plt.grid(True)
@@ -1940,7 +1934,7 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     y_actual_real = labels4_real,
     predictions_dict = primary_preds,
     bins = 30,
-    smooth_sigma = 1.0   # 可按需求调节平滑强度
+    smooth_sigma = 1.0
 )
     print("[Info] Processing complete!")
 
@@ -1968,7 +1962,7 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
         'Model2': preds2_real,
         'Model3': preds3_real,
         'Model4': preds4_real,
-        'Model5': preds5_real      # 修正：以前误用了 preds3_real
+        'Model5': preds5_real
     }
 
     plot_predictions_overview_and_zoom(
@@ -1982,6 +1976,13 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
         y_actual_real = labels4_real,
         predictions_dict = all_model_preds,
         bins = 30
+    )
+
+    plot_error_max_curve(
+        y_actual_real = labels4_real,
+        predictions_dict = all_model_preds,
+        bins = 30,
+        smooth_sigma = 1.0
     )
 
     # ----------------- 2) 与 Model4 的两两对比 -----------------

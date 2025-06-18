@@ -1610,7 +1610,7 @@ def plot_error_max_curve(y_actual_real,
                  linewidth=2)
 
     # -------- 3. 图形美化 -------- #
-    plt.title('Smoothed Histogram Curves of Prediction Errors')
+    #plt.title('Smoothed Histogram Curves of Prediction Errors')
     plt.xlabel('Prediction Error (kW·h)')
     plt.ylabel('Frequency')
     plt.legend()

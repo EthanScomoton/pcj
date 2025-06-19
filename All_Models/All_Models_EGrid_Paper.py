@@ -1679,26 +1679,84 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     analyze_target_distribution(data_df, target_col)
     plot_Egrid_over_time(data_df)
 
-    # Split data into training, validation, and test sets by time series
-    X_all_raw = data_df[feature_cols].values
-    y_all_raw = data_df[target_col].values
-    timestamps_all = data_df['timestamp'].values
-
-    total_samples = len(data_df)
-    train_size = int(0.8 * total_samples)      # 80% for training
-    val_size   = int(0.1 * total_samples)        # 10% for validation
-    test_size  = total_samples - train_size - val_size  # Remaining for testing
-
-    X_train_raw = X_all_raw[:train_size]
-    y_train_raw = y_all_raw[:train_size]
-    X_val_raw   = X_all_raw[train_size : train_size + val_size]
-    y_val_raw   = y_all_raw[train_size : train_size + val_size]
-    X_test_raw  = X_all_raw[train_size + val_size:]
-    y_test_raw  = y_all_raw[train_size + val_size:]
-
-    train_timestamps = timestamps_all[:train_size]
-    val_timestamps   = timestamps_all[train_size : train_size + val_size]
-    test_timestamps = timestamps_all[train_size + val_size + window_size:]
+    # Split data into training, validation, and test sets by daily time points
+    # 按照每天5个时间点进行划分：3个训练，1个验证，1个测试
+    
+    # 首先，添加日期列（只包含年月日，不包含时间）
+    data_df['date'] = data_df['timestamp'].dt.date
+    
+    # 按日期分组，并验证每天是否有5个时间点
+    daily_groups = data_df.groupby('date')
+    
+    # 初始化列表来存储划分后的数据索引
+    train_indices = []
+    val_indices = []
+    test_indices = []
+    
+    # 统计信息
+    valid_days = 0
+    invalid_days = 0
+    
+    # 对每一天的数据进行划分
+    for date, group in daily_groups:
+        if len(group) == 5:
+            # 如果一天有5个时间点，按照固定顺序划分
+            # 前3个作为训练集，第4个作为验证集，第5个作为测试集
+            group_sorted = group.sort_values('timestamp')  # 确保按时间排序
+            indices = group_sorted.index.tolist()
+            train_indices.extend(indices[0:3])  # 前3个时间点
+            val_indices.extend([indices[3]])    # 第4个时间点
+            test_indices.extend([indices[4]])   # 第5个时间点
+            valid_days += 1
+        else:
+            # 如果不是5个时间点，打印警告并跳过这一天
+            print(f"Warning: Date {date} has {len(group)} data points instead of 5. Skipping this day.")
+            invalid_days += 1
+    
+    print(f"\n[Data Split Info] Valid days: {valid_days}, Invalid days: {invalid_days}")
+    print(f"[Data Split Info] Each valid day's 5 time points split as: 3 train, 1 val, 1 test")
+    
+    # 根据索引从原始dataframe中提取对应的数据
+    train_data = data_df.loc[train_indices].copy()
+    val_data = data_df.loc[val_indices].copy()
+    test_data = data_df.loc[test_indices].copy()
+    
+    # 按时间排序，保持时序性
+    train_data.sort_values('timestamp', inplace=True)
+    val_data.sort_values('timestamp', inplace=True)
+    test_data.sort_values('timestamp', inplace=True)
+    
+    # 重置索引以便后续处理
+    train_data.reset_index(drop=True, inplace=True)
+    val_data.reset_index(drop=True, inplace=True)
+    test_data.reset_index(drop=True, inplace=True)
+    
+    # 提取特征和目标值
+    X_train_raw = train_data[feature_cols].values
+    y_train_raw = train_data[target_col].values
+    X_val_raw = val_data[feature_cols].values
+    y_val_raw = val_data[target_col].values
+    X_test_raw = test_data[feature_cols].values
+    y_test_raw = test_data[target_col].values
+    
+    # 提取时间戳
+    train_timestamps = train_data['timestamp'].values
+    val_timestamps = val_data['timestamp'].values
+    # 注意：测试集时间戳需要考虑window_size的偏移，因为序列构建时会去掉前window_size个样本
+    test_timestamps_full = test_data['timestamp'].values
+    if len(test_timestamps_full) > window_size:
+        test_timestamps = test_timestamps_full[window_size:]
+    else:
+        test_timestamps = test_timestamps_full
+    
+    # 更新数据集大小
+    train_size = len(train_data)
+    val_size = len(val_data)
+    test_size = len(test_data)
+    total_samples = train_size + val_size + test_size
+    
+    print(f"[Data Split Result] Train: {train_size} samples, Val: {val_size} samples, Test: {test_size} samples")
+    print(f"[Data Split Ratio] Train: {train_size/total_samples:.1%}, Val: {val_size/total_samples:.1%}, Test: {test_size/total_samples:.1%}")
 
     # Apply logarithmic transformation to target values if set
     if use_log_transform:

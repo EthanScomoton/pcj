@@ -357,7 +357,7 @@ def calculate_total_energy(input_row):
     # 添加风向信息，假设风向均匀分布在0到360度之间
     wind_direction = np.random.uniform(0, 360, size=len(t))
     optimal_wind_direction = 180  # 假设最佳风向为180度
-
+ 
     v_in = 5
     v_rated = 8
     v_out = 12

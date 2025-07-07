@@ -562,7 +562,7 @@ class EModel_FeatureWeight3(nn.Module):
         # Learnable feature importance weights, initialized to 1
         self.feature_importance = nn.Parameter(torch.ones(feature_dim), requires_grad = True)
         
-        # Bidirectional GRU (替换LSTM)
+        # Bidirectional GRU 
         self.gru = nn.GRU(
             input_size    = feature_dim,
             hidden_size   = gru_hidden_size,  # 隐藏层大小为10

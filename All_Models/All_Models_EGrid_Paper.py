@@ -325,6 +325,9 @@ class EModel_FeatureWeight1(nn.Module):
         )
         self._init_lstm_weights()
         
+        # Global attention module
+        self.attention = Attention(input_dim = 2 * lstm_hidden_size)
+        
         # Fully connected layer for final prediction
         self.fc = nn.Sequential(
             nn.Linear(4 * lstm_hidden_size, 128),
@@ -655,72 +658,54 @@ class EModel_FeatureWeight4(nn.Module):
                  window_size = 20,
                  feature_importance = None
                 ):
-        super().__init__()
-        self.feature_dim  = feature_dim
-        self.window_size  = window_size
-        self.use_local_attn = use_local_attn
+        super(EModel_FeatureWeight4, self).__init__()
+        self.feature_dim = feature_dim
+        self.use_local_attn = use_local_attn  # 保存是否使用局部注意力的标识
+        self.window_size = window_size  # 保存窗口大小
         
-        if feature_importance is not None and len(feature_importance) == feature_dim:
-            fi = np.array(feature_importance, dtype=np.float32)
-            fi = fi / (fi.max() + 1e-6)          # 归一化到 0~1
-            self.feature_importance = nn.Parameter(torch.tensor(fi), requires_grad=True)
-        else:
-            self.feature_importance = nn.Parameter(torch.ones(feature_dim), requires_grad=True)
-
+        # Feature gating mechanism: fully connected layer + Sigmoid to compute feature weights
         self.feature_gate = nn.Sequential(
             nn.Linear(feature_dim, feature_dim * 2),
             nn.GELU(),
             nn.Linear(feature_dim * 2, feature_dim),
             nn.Sigmoid()
         )
-        # 可学习融合系数 α
-        self.alpha = nn.Parameter(torch.tensor(0.5))
-
-        # ---------------- 2) LSTM 及其归一化 ---------------- #
-        self.lstm = nn.LSTM(
-            input_size=feature_dim,
-            hidden_size=lstm_hidden_size,
-            num_layers=lstm_num_layers,
-            batch_first=True,
-            bidirectional=True,
-            dropout=lstm_dropout if lstm_num_layers > 1 else 0
-        )
-        self._init_lstm_weights()
-
-        self.lstm_norm    = nn.LayerNorm(2 * lstm_hidden_size)
-        self.lstm_dropout = nn.Dropout(0.1)
-
-        # ---------------- 3) Temporal / Feature Attention ---------------- #
+        
+        # Temporal attention: choose between local or global (MLP) attention
         if use_local_attn:
             from local_attention.local_attention import LocalAttention
             self.temporal_attn = LocalAttention(
-                dim=2 * lstm_hidden_size,
-                window_size=local_attn_window_size,
-                causal=False
+                dim = 2 * lstm_hidden_size,
+                window_size = local_attn_window_size,   # 使用正确的参数名
+                causal = False
             )
         else:
-            self.temporal_attn = Attention(input_dim=2 * lstm_hidden_size)
-
+            self.temporal_attn = Attention(input_dim = 2 * lstm_hidden_size)
+        
+        # Feature attention layer: aggregate LSTM output over feature dimensions
         self.feature_attn = nn.Sequential(
             nn.Linear(self.window_size, self.window_size * 2),
             nn.GELU(),
             nn.LayerNorm(self.window_size * 2),
-            nn.Linear(self.window_size * 2, 1)   # 输出 raw score
+            nn.Linear(self.window_size * 2, 1),
+            nn.Sigmoid()
         )
+        # Feature projection layer
         self.feature_proj = nn.Sequential(
             nn.Linear(2 * lstm_hidden_size, 2 * lstm_hidden_size),
             nn.LayerNorm(2 * lstm_hidden_size),
             nn.GELU()
         )
-
-        # ---------------- 4) Output head ---------------- #
-        self.fc = nn.Sequential(
-            nn.Linear(4 * lstm_hidden_size, 256),
-            nn.LayerNorm(256), nn.GELU(), nn.Dropout(0.1),
-            nn.Linear(256, 128),
-            nn.LayerNorm(128), nn.GELU(), nn.Dropout(0.1),
-            nn.Linear(128, 2)
-        )
+        
+        # 初始化特征重要性权重，如果提供了特征重要性，则使用它
+        if feature_importance is not None and len(feature_importance) == feature_dim:
+            self.feature_importance = nn.Parameter(torch.tensor(feature_importance, dtype=torch.float32), requires_grad=True)
+        else:
+            self.feature_importance = nn.Parameter(torch.ones(feature_dim), requires_grad=True)
+        
+        # LSTM 输出层归一化与 Dropout
+        self.lstm_norm = nn.LayerNorm(2 * lstm_hidden_size)
+        self.lstm_dropout = nn.Dropout(0.1)
       
         # Bidirectional LSTM
         self.lstm = nn.LSTM(
@@ -763,37 +748,45 @@ class EModel_FeatureWeight4(nn.Module):
                 n = param.size(0)
                 param.data[(n // 4):(n // 2)].fill_(1.0)  # Set forget gate bias to 1
 
-    def forward(self, x):                     # x: [B, T, F]
-        # --------- 1) 动态特征加权 --------- #
-        gate    = self.feature_gate(x.mean(dim=1))          # [B, F]
-        x_base  = x * self.feature_importance.view(1, 1, -1)
-        x_gate  = x_base * gate.unsqueeze(1)
-        x       = (1 - self.alpha) * x_base + self.alpha * x_gate
+    def forward(self, x):
+        """
+        Parameters:
+          x: Input tensor with shape [batch_size, seq_len, feature_dim]
+        Returns:
+          Predicted output with shape [batch_size]
+        """
+        # Apply dynamic feature weighting
+        gate = self.feature_gate(x.mean(dim = 1))
+        x = x * gate.unsqueeze(1)
 
-        # --------- 2) Bi-LSTM --------- #
-        lstm_out, _ = self.lstm(x)                          # [B, T, 2H]
-        lstm_out    = self.lstm_norm(self.lstm_dropout(lstm_out))
-
-        # --------- 3) Temporal attention --------- #
+        # Process with LSTM to obtain bidirectional output
+        lstm_out, _ = self.lstm(x)
+        
+        # Temporal attention:
         if self.use_local_attn:
-            temporal = self.temporal_attn(lstm_out, lstm_out, lstm_out).sum(dim=1)
+            # 调用LocalAttention，将query, key, value均设置为lstm_out
+            temporal = self.temporal_attn(lstm_out, lstm_out, lstm_out)
+            # 聚合沿时间步（例如使用求和或者平均），使得维度变为二维
+            temporal = temporal.sum(dim=1)
+            # 如果希望归一化，可以改为：temporal = temporal.mean(dim=1)
         else:
-            temporal = self.temporal_attn(lstm_out)         # MLP-Attention
+            temporal = self.temporal_attn(lstm_out)
+        
+        # Feature attention over the feature dimensions
+        feature_raw = self.feature_attn(lstm_out.transpose(1, 2))
+        feature_raw = feature_raw.squeeze(-1)
+        feature = self.feature_proj(feature_raw)
 
-        # --------- 4) Feature attention (softmax over T) --------- #
-        scores  = self.feature_attn(lstm_out.transpose(1, 2)).squeeze(-1)   # [B, 2H]
-        weights = torch.softmax(scores, dim=-1)                             # 归一化
-        feature = (lstm_out * weights.unsqueeze(1)).sum(dim=1)              # 加权求和
-        feature = self.feature_proj(feature)
-
-        # --------- 5) 输出层 --------- #
-        combined = torch.cat([temporal, feature], dim=1)
-        mu, logvar = torch.chunk(self.fc(combined), 2, dim=1)
-
-        # Reparameterization (保留可学习方差)
-        eps   = torch.randn_like(mu)
-        noise = eps * torch.exp(0.5 * logvar)
-        return (mu + noise).squeeze(-1)
+        # Concatenate the two branches
+        combined = torch.cat([temporal, feature], dim = 1)
+        output = self.fc(combined)
+        mu, logvar = torch.chunk(output, 2, dim = 1)
+        
+        # Reparameterization trick with noise
+        noise = 0.1 * torch.randn_like(mu, device = x.device) * torch.exp(0.5 * logvar)
+        output = mu + noise
+        
+        return output.squeeze(-1)
 
 class EModel_FeatureWeight5(nn.Module):
     def __init__(self,

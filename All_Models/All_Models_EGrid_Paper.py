@@ -1506,7 +1506,6 @@ def plot_predictions_overview_and_zoom(y_actual_real, predictions_dict, timestam
         plt.plot(time_index, preds, label=model_name,
                  color=color, linewidth=0.9, alpha=0.9)
 
-    plt.title('Full-range Prediction Overview')
     plt.xlabel('Timestamp')
     plt.ylabel('Grid Energy Compensation Value (kW·h)')
     plt.legend()
@@ -2028,11 +2027,23 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     # 使用 Model4 与其他模型对比，生成全长与缩放窗口图，以及分布直方图
     primary_preds = {'Model4': preds4_real, 'Model5': preds5_real}
 
-    plot_predictions_overview_and_zoom(
+    # 绘制两个时间段的图表（所有模型）
+    plot_predictions_date_range(
         y_actual_real = labels4_real,
-        predictions_dict = primary_preds,
+        predictions_dict = all_model_preds,
         timestamps = test_timestamps,
-        zoom_days = 10
+        start_date = '2024-11-25',
+        end_date = '2024-12-13',
+        title = 'Part 1 - All Models'
+    ) 
+
+    plot_predictions_date_range(
+        y_actual_real = labels4_real,
+        predictions_dict = all_model_preds,
+        timestamps = test_timestamps,
+        start_date = '2024-12-13',
+        end_date = '2025-01-01',
+        title = 'Part 2 - All Models'
     )
 
     # 绘制两个时间段的图表

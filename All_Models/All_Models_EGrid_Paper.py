@@ -1469,81 +1469,6 @@ def calculate_feature_importance_mic(data_df, feature_cols, target_col):
 
     return mic_importance
 
-def plot_predictions_overview_and_zoom(y_actual_real, predictions_dict, timestamps, zoom_days=10):
-    """
-    Plot two figures: (1) full-year overview of actual vs. predictions; (2) a zoomed-in
-    window covering the last ``zoom_days`` days to highlight short-term performance.
-
-     Parameters
-    ----------
-    y_actual_real : np.ndarray
-        Ground-truth values in original scale.
-    predictions_dict : Dict[str, np.ndarray]
-        Mapping of model name to its prediction array (same length as ``y_actual_real``).
-    timestamps : array-like
-        Corresponding timestamps (len == len(y_actual_real)).
-    zoom_days : int, default 10
-        Size of the zoom window in **days**.
-    """
-    # Convert timestamps to pandas DatetimeIndex for easy slicing
-    time_index = pd.to_datetime(timestamps)
-
-    # 自定义模型颜色映射（由浅到深的蓝色 + 红色）
-    model_colors = {
-        'Model1': '#ADD8E6',   # light blue
-        'Model2': '#6495ED',   # cornflower blue
-        'Model3': '#1E90FF',   # dodger blue
-        'Model5': '#00008B',   # dark blue
-        'Model4': 'red'
-    }
-
-    # ------------------- 1. Full-range overview ------------------- #
-    plt.figure(figsize=(14, 6))
-    plt.plot(time_index, y_actual_real, label='Actual', color='black', linewidth=1.2)
-
-    for model_name, preds in predictions_dict.items():
-        color = model_colors.get(model_name, '#808080')  # 默认灰色
-        plt.plot(time_index, preds, label=model_name,
-                 color=color, linewidth=0.9, alpha=0.9)
-
-    plt.xlabel('Timestamp')
-    plt.ylabel('Grid Energy Compensation Value (kW·h)')
-    plt.legend()
-    plt.grid(True)
-    plt.tight_layout()
-    plt.xticks(rotation=45)
-    plt.show()
-
-    # ------------------- 2. Zoomed-in window (last ``zoom_days``) ------------ #
-    if len(time_index) == 0:
-        return  # Safety guard
-    colors = mpl.cm.tab10.colors  # Re-use matplotlib tab10 palette
-    end_time = time_index.max()
-    start_time = end_time - pd.Timedelta(days=zoom_days)
-    zoom_mask = (time_index >= start_time) & (time_index <= end_time)
-
-    if zoom_mask.sum() < 2:
-        print(f"[Warning] Not enough samples to create a {zoom_days}-day zoomed plot.")
-        return
-
-    plt.figure(figsize=(14, 6))
-    plt.plot(time_index[zoom_mask], y_actual_real[zoom_mask],
-             label='Actual', color='black', linewidth=1.5)
-
-    for model_name, preds in predictions_dict.items():
-        color = model_colors.get(model_name, '#808080')
-        plt.plot(time_index[zoom_mask], preds[zoom_mask], label=model_name, color=color, linewidth=1.2)
-
-    plt.xlabel('Timestamp')
-    plt.ylabel('Grid Energy Compensation Value (kW·h)')
-
-    ax = plt.gca()
-    ax.yaxis.set_major_locator(ticker.MultipleLocator(20000))
-    plt.legend()
-    plt.grid(True)
-    plt.tight_layout()
-    plt.xticks(rotation=45)
-    plt.show()
 
 def plot_predictions_date_range(y_actual_real, predictions_dict, timestamps, start_date, end_date, title=""):
     """
@@ -2027,25 +1952,6 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     # 使用 Model4 与其他模型对比，生成全长与缩放窗口图，以及分布直方图
     primary_preds = {'Model4': preds4_real, 'Model5': preds5_real}
 
-    # 绘制两个时间段的图表（所有模型）
-    plot_predictions_date_range(
-        y_actual_real = labels4_real,
-        predictions_dict = all_model_preds,
-        timestamps = test_timestamps,
-        start_date = '2024-11-25',
-        end_date = '2024-12-13',
-        title = 'Part 1 - All Models'
-    ) 
-
-    plot_predictions_date_range(
-        y_actual_real = labels4_real,
-        predictions_dict = all_model_preds,
-        timestamps = test_timestamps,
-        start_date = '2024-12-13',
-        end_date = '2025-01-01',
-        title = 'Part 2 - All Models'
-    )
-
     # 绘制两个时间段的图表
     plot_predictions_date_range(
         y_actual_real = labels4_real,
@@ -2063,6 +1969,23 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
         start_date = '2024-12-13',
         end_date = '2025-01-01',
         title = 'Part 2'
+    )
+
+    # 绘制两个时间段的图表（所有模型）
+    plot_predictions_date_range(
+        y_actual_real = labels4_real,
+        predictions_dict = all_model_preds,
+        timestamps = test_timestamps,
+        start_date = '2024-11-25',
+        end_date = '2024-12-13'
+    )
+
+    plot_predictions_date_range(
+        y_actual_real = labels4_real,
+        predictions_dict = all_model_preds,
+        timestamps = test_timestamps,
+        start_date = '2024-12-13',
+        end_date = '2025-01-01'
     )
 
     plot_error_max_curve(
@@ -2099,13 +2022,6 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
         'Model4': preds4_real,
         'Model5': preds5_real
     }
-
-    plot_predictions_overview_and_zoom(
-        y_actual_real = labels4_real,      # 真实值
-        predictions_dict = all_model_preds,
-        timestamps = test_timestamps,
-        zoom_days = 10
-    )
 
     plot_value_and_error_histograms(
         y_actual_real = labels4_real,

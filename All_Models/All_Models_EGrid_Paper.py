@@ -1502,7 +1502,7 @@ def plot_predictions_date_range(y_actual_real, predictions_dict, timestamps, sta
         'Model2': '--',
         'Model3': '-.',
         'Model5': ':',
-        'Model4': '(0, (3, 1, 1, 1))'
+        'Model4': (0, (3, 1, 1, 1))
     }
     # Create mask for date range
     start = pd.to_datetime(start_date)

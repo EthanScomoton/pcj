@@ -1603,25 +1603,20 @@ def plot_error_max_curve(y_actual_real,
 
     # -------- 2. 绘制顺滑曲线 -------- #
     plt.figure(figsize=(10, 5))
-
-    # 统一颜色 & 不同形状的标记
-    line_color = 'black'        # black
-    marker_styles = ['^', 's', 'o', 'h', 'p']  # 三角、方块、圆、六边形、五边形
-    markersize_val = 10           # 放大标记尺寸
-
+    colors = mpl.cm.tab10.colors
+    line_styles = ['-', '--', '-.', ':',(0, (3, 1, 1, 1))]
+    marker_styles = ['^', 's', 'o', 'h', 'p']
     for i, (model_name, counts) in enumerate(model_curves.items()):
         curve = (gaussian_filter1d(counts.astype(float), sigma=smooth_sigma)
                  if smooth_sigma > 0 else counts)
-
-        plt.plot(
-            bin_centers,
-            curve,
-            label=model_name,
-            color=line_color,
-            linewidth=2,
-            marker=marker_styles[i % len(marker_styles)],
-            markersize=markersize_val
-        )
+        plt.plot(bin_centers,
+                 curve,
+                 label=model_name,
+                 color=colors[i % len(colors)],
+                 linewidth=2,  
+                 marker=marker_styles[i % len(marker_styles)],
+                 linestyle=line_styles[i % len(line_styles)],
+                 markersize = 10)
 
     # -------- 3. 图形美化 -------- #
     #plt.title('Smoothed Histogram Curves of Prediction Errors')

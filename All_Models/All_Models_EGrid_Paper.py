@@ -1372,11 +1372,9 @@ def plot_dataset_distribution(timestamps, title):
     - Plot the time distribution of the dataset based on timestamps.
     Parameters:
       timestamps: Timestamps of the dataset
-      title: Title for the plot
     """
     plt.figure(figsize = (10, 4))
     plt.hist(pd.to_datetime(timestamps), bins = 50, color = 'skyblue', edgecolor = 'black')
-    plt.title(f'{title} - Time Distribution')
     plt.xlabel('Timestamp')
     plt.ylabel('Count')
     plt.grid(axis = 'y')
@@ -1486,8 +1484,6 @@ def plot_predictions_date_range(y_actual_real, predictions_dict, timestamps, sta
         Start date in format 'YYYY-MM-DD'
     end_date : str
         End date in format 'YYYY-MM-DD'
-    title : str
-        Optional title suffix for the plot
     """
     # Convert timestamps to pandas DatetimeIndex
     time_index = pd.to_datetime(timestamps)
@@ -1520,11 +1516,6 @@ def plot_predictions_date_range(y_actual_real, predictions_dict, timestamps, sta
         plt.plot(time_index[mask], preds[mask], 
                  label=model_name, color=color, linewidth=1.2, alpha=0.9)
     
-    plot_title = f'Prediction Comparison ({start_date} to {end_date})'
-    if title:
-        plot_title += f' - {title}'
-    
-    plt.title(plot_title)
     plt.xlabel('Timestamp')
     plt.ylabel('Grid Energy Compensation Value (kW·h)')
     plt.legend()
@@ -1561,7 +1552,6 @@ def plot_value_and_error_histograms(y_actual_real, predictions_dict, bins=30):
         errors = preds - y_actual_real
         plt.hist(errors, bins=bins, alpha=0.5, label=model_name, color=colors[i % len(colors)], edgecolor='black')
 
-    #plt.title('Prediction Error Distribution')
     plt.xlim(-20000, 20000)
     plt.xlabel('Prediction Error (kW·h)')
     plt.ylabel('Frequency')
@@ -1966,8 +1956,7 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
         predictions_dict = primary_preds,
         timestamps = test_timestamps,
         start_date = '2024-11-25',
-        end_date = '2024-12-13',
-        title = 'Part 1'
+        end_date = '2024-12-13'
     )
 
     plot_predictions_date_range(
@@ -1975,8 +1964,7 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
         predictions_dict = primary_preds,
         timestamps = test_timestamps,
         start_date = '2024-12-13',
-        end_date = '2025-01-01',
-        title = 'Part 2'
+        end_date = '2025-01-01'
     )
 
     # 绘制两个时间段的图表（所有模型）

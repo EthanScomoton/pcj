@@ -1611,7 +1611,9 @@ def plot_error_max_curve(y_actual_real,
                  curve,
                  label=model_name,
                  color=colors[i % len(colors)],
-                 linewidth=2)
+                 linewidth=2,  #update the marker size
+                 marker='o',
+                 markersize = 5)
 
     # -------- 3. 图形美化 -------- #
     #plt.title('Smoothed Histogram Curves of Prediction Errors')

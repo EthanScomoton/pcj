@@ -1535,7 +1535,6 @@ def plot_predictions_overview_and_zoom(y_actual_real, predictions_dict, timestam
         color = model_colors.get(model_name, '#808080')
         plt.plot(time_index[zoom_mask], preds[zoom_mask], label=model_name, color=color, linewidth=1.2)
 
-    plt.title(f'Zoomed Prediction Details – Last {zoom_days} Days')
     plt.xlabel('Timestamp')
     plt.ylabel('Grid Energy Compensation Value (kW·h)')
 
@@ -1547,6 +1546,73 @@ def plot_predictions_overview_and_zoom(y_actual_real, predictions_dict, timestam
     plt.xticks(rotation=45)
     plt.show()
 
+def plot_predictions_date_range(y_actual_real, predictions_dict, timestamps, start_date, end_date, title=""):
+    """
+    Plot predictions for a specific date range.
+    
+    Parameters
+    ----------
+    y_actual_real : np.ndarray
+        Ground-truth values in original scale.
+    predictions_dict : Dict[str, np.ndarray]
+        Mapping of model name to its prediction array.
+    timestamps : array-like
+        Corresponding timestamps.
+    start_date : str
+        Start date in format 'YYYY-MM-DD'
+    end_date : str
+        End date in format 'YYYY-MM-DD'
+    title : str
+        Optional title suffix for the plot
+    """
+    # Convert timestamps to pandas DatetimeIndex
+    time_index = pd.to_datetime(timestamps)
+    
+    # 自定义模型颜色映射（由浅到深的蓝色 + 红色）
+    model_colors = {
+        'Model1': '#ADD8E6',   # light blue
+        'Model2': '#6495ED',   # cornflower blue
+        'Model3': '#1E90FF',   # dodger blue
+        'Model5': '#00008B',   # dark blue
+        'Model4': 'red'
+    }
+    
+    # Create mask for date range
+    start = pd.to_datetime(start_date)
+    end = pd.to_datetime(end_date)
+    mask = (time_index >= start) & (time_index <= end)
+    
+    if mask.sum() < 2:
+        print(f"[Warning] Not enough samples in date range {start_date} to {end_date}")
+        return
+    
+    # Plot
+    plt.figure(figsize=(14, 6))
+    plt.plot(time_index[mask], y_actual_real[mask], 
+             label='Actual', color='black', linewidth=1.5)
+    
+    for model_name, preds in predictions_dict.items():
+        color = model_colors.get(model_name, '#808080')
+        plt.plot(time_index[mask], preds[mask], 
+                 label=model_name, color=color, linewidth=1.2, alpha=0.9)
+    
+    plot_title = f'Prediction Comparison ({start_date} to {end_date})'
+    if title:
+        plot_title += f' - {title}'
+    
+    plt.title(plot_title)
+    plt.xlabel('Timestamp')
+    plt.ylabel('Grid Energy Compensation Value (kW·h)')
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.xticks(rotation=45)
+    
+    # Add y-axis major locator for better readability
+    ax = plt.gca()
+    ax.yaxis.set_major_locator(ticker.MultipleLocator(20000))
+    
+    plt.show()
 
 def plot_value_and_error_histograms(y_actual_real, predictions_dict, bins=30):
     """
@@ -1967,6 +2033,25 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
         predictions_dict = primary_preds,
         timestamps = test_timestamps,
         zoom_days = 10
+    )
+
+    # 绘制两个时间段的图表
+    plot_predictions_date_range(
+        y_actual_real = labels4_real,
+        predictions_dict = primary_preds,
+        timestamps = test_timestamps,
+        start_date = '2024-11-25',
+        end_date = '2024-12-13',
+        title = 'Part 1'
+    )
+
+    plot_predictions_date_range(
+        y_actual_real = labels4_real,
+        predictions_dict = primary_preds,
+        timestamps = test_timestamps,
+        start_date = '2024-12-13',
+        end_date = '2025-01-01',
+        title = 'Part 2'
     )
 
     plot_error_max_curve(

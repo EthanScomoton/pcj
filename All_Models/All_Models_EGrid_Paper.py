@@ -1469,105 +1469,118 @@ def calculate_feature_importance_mic(data_df, feature_cols, target_col):
 
     return mic_importance
 
-def plot_predictions_overview_and_zoom(y_actual_real, predictions_dict, timestamps, zoom_days=10):
+def plot_predictions_overview_and_zoom(
+    y_actual_real,
+    predictions_dict,
+    timestamps,
+    zoom_days: int = 10
+):
     """
-    Plot two figures: (1) full-year overview of actual vs. predictions; (2) a zoomed-in
-    window covering the last ``zoom_days`` days to highlight short-term performance.
+    绘制两组图形：
+      ① 按日期拆分的双视图  
+         - 子图 A：2024-11-25 – 2024-12-12  
+         - 子图 B：2024-12-13 – 2025-01-01
+      ② 最近 ``zoom_days`` 天的缩放视图，便于观测短期表现
 
-     Parameters
+    Parameters
     ----------
     y_actual_real : np.ndarray
         Ground-truth values in original scale.
     predictions_dict : Dict[str, np.ndarray]
-        Mapping of model name to its prediction array (same length as ``y_actual_real``).
+        {'model1': ndarray, ..., 'model5': ndarray}，长度与 y_actual_real 一致。
     timestamps : array-like
-        Corresponding timestamps (len == len(y_actual_real)).
+        与 y_actual_real 对齐的时间索引。
     zoom_days : int, default 10
-        Size of the zoom window in **days**.
+        缩放窗口大小（单位：天）。
     """
-    # Convert timestamps to pandas DatetimeIndex for easy slicing
+    # ── 0. 输入检查 ───────────────────────────────────────────
     time_index = pd.to_datetime(timestamps)
+    if len(time_index) != len(y_actual_real):
+        raise ValueError("timestamps 与 y_actual_real 长度不一致")
 
-    # ------------------- 1. Full-year / full-range overview ------------------- #
-    # 颜色映射
-    model_color_map = {
-        'Model1': '#b3d1ff',   # 浅蓝
-        'Model2': '#7fb0ff',   # 中浅蓝
-        'Model3': '#4d90ff',   # 中蓝
-        'Model5': '#0d47a1',   # 深蓝
-        'Model4': '#ff0000'    # 红
+    # ── 1. 颜色映射 ───────────────────────────────────────────
+    blues = mpl.cm.Blues(np.linspace(0.45, 0.95, 4))   # 浅→深
+    color_map = {
+        "model1": blues[0],
+        "model2": blues[1],
+        "model3": blues[2],
+        "model5": blues[3],
+        "model4": "red",
     }
-    truth_color = '#1f77b4'     # 真值蓝
+    actual_color = "blue"
 
-    line_styles = ['-', '--', '-.', ':', (0, (3, 1, 1, 1))]
+    # ── 2. 绘图辅助函数 ───────────────────────────────────────
+    def _plot_range(ax, mask, title_suffix: str):
+        ax.plot(time_index[mask],
+                y_actual_real[mask],
+                label="Actual",
+                color=actual_color,
+                linewidth=1.5)
 
-    # 构造两个时间段
-    segments = [
-        ('2024-11-25', '2024-12-13', 'Prediction Overview – 2024-11-25 ⟶ 2024-12-13'),
-        ('2024-12-13', '2025-01-01', 'Prediction Overview – 2024-12-13 ⟶ 2025-01-01')
-    ]
+        for model in ["model1", "model2", "model3", "model4", "model5"]:
+            if model in predictions_dict:
+                ax.plot(time_index[mask],
+                        predictions_dict[model][mask],
+                        label=model,
+                        color=color_map[model],
+                        linewidth=1.0,
+                        alpha=0.9)
 
-    for (start_day, end_day, seg_title) in enumerate(segments):
-        seg_start = pd.Timestamp(start_day)
-        seg_end   = pd.Timestamp(end_day)
+        ax.set_title(f"Prediction Overview {title_suffix}")
+        ax.set_xlabel("Timestamp")
+        ax.set_ylabel("Grid Energy Compensation Value (kW·h)")
+        ax.legend()
+        ax.grid(True)
+        ax.xaxis.set_major_locator(ticker.AutoLocator())
+        for label in ax.get_xticklabels():
+            label.set_rotation(45)
+            label.set_ha("right")
+        ax.margins(x=0)
 
-        seg_mask = (time_index >= seg_start) & (time_index <= seg_end)
-        if seg_mask.sum() < 2:
-            continue   # 安全检查：样本不足时跳过
+    # ── 3. 双子图（两段日期）───────────────────────────────────
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 10), sharey=True)
 
-        plt.figure(figsize=(14, 6))
-        # 真值
-        plt.plot(time_index[seg_mask],
-                 y_actual_real[seg_mask],
-                 label='Actual',
-                 color=truth_color,
-                 linewidth=2)
+    mask1 = (time_index >= "2024-11-25") & (time_index < "2024-12-13")
+    _plot_range(ax1, mask1, "(2024-11-25 – 2024-12-12)")
 
-        # 各模型
-        for i, (model_name, preds) in enumerate(predictions_dict.items()):
-            plt.plot(time_index[seg_mask],
-                     preds[seg_mask],
-                     label=model_name,
-                     color=model_color_map.get(model_name, '#333333'),
-                     linewidth=1.8,
-                     linestyle=line_styles[i % len(line_styles)])
+    mask2 = (time_index >= "2024-12-13") & (time_index <= "2025-01-01")
+    _plot_range(ax2, mask2, "(2024-12-13 – 2025-01-01)")
 
-        plt.title(seg_title)
-        plt.xlabel('Timestamp')
-        plt.ylabel('Grid Energy Compensation Value (kW·h)')
-        plt.legend()
-        plt.grid(True)
-        plt.tight_layout()
-        plt.xticks(rotation=45)
-        plt.show()
+    plt.tight_layout()
+    plt.show()
 
-    # ------------------- 2. Zoomed-in window (last ``zoom_days``) ------------ #
-    if len(time_index) == 0:
-        return  # Safety guard
-    colors = mpl.cm.tab10.colors  # Re-use matplotlib tab10 palette
-    end_time = time_index.max()
+    # ── 4. 缩放视图（最近 zoom_days 天）────────────────────────
+    end_time   = time_index.max()
     start_time = end_time - pd.Timedelta(days=zoom_days)
-    zoom_mask = (time_index >= start_time) & (time_index <= end_time)
+    zoom_mask  = (time_index >= start_time) & (time_index <= end_time)
 
     if zoom_mask.sum() < 2:
-        print(f"[Warning] Not enough samples to create a {zoom_days}-day zoomed plot.")
+        print(f"[Warning] 样本不足，无法绘制最近 {zoom_days} 天缩放图。")
         return
 
     plt.figure(figsize=(14, 6))
-    plt.plot(time_index[zoom_mask], y_actual_real[zoom_mask], label='Actual', color='black', linewidth=1.5)
-    for i, (model_name, preds) in enumerate(predictions_dict.items()):
-        plt.plot(time_index[zoom_mask], preds[zoom_mask], label=model_name, color=colors[i % len(colors)], linewidth=1.2)
+    plt.plot(time_index[zoom_mask],
+             y_actual_real[zoom_mask],
+             label="Actual",
+             color=actual_color,
+             linewidth=1.5)
+
+    for model in ["model1", "model2", "model3", "model4", "model5"]:
+        if model in predictions_dict:
+            plt.plot(time_index[zoom_mask],
+                     predictions_dict[model][zoom_mask],
+                     label=model,
+                     color=color_map[model],
+                     linewidth=1.2)
 
     plt.title(f'Zoomed Prediction Details – Last {zoom_days} Days')
     plt.xlabel('Timestamp')
     plt.ylabel('Grid Energy Compensation Value (kW·h)')
-
-    ax = plt.gca()
-    ax.yaxis.set_major_locator(ticker.MultipleLocator(20000))
+    plt.gca().yaxis.set_major_locator(ticker.AutoLocator())
     plt.legend()
     plt.grid(True)
     plt.tight_layout()
-    plt.xticks(rotation=45)
+    plt.xticks(rotation=45, ha="right")
     plt.show()
 
 

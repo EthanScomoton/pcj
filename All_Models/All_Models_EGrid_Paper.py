@@ -1497,6 +1497,13 @@ def plot_predictions_date_range(y_actual_real, predictions_dict, timestamps, sta
         'Model4': 'red'
     }
     
+    model_styles = {
+        'Model1': '-',
+        'Model2': '--',
+        'Model3': '-.',
+        'Model5': ':',
+        'Model4': '(0, (3, 1, 1, 1))'
+    }
     # Create mask for date range
     start = pd.to_datetime(start_date)
     end = pd.to_datetime(end_date)
@@ -1513,8 +1520,9 @@ def plot_predictions_date_range(y_actual_real, predictions_dict, timestamps, sta
     
     for model_name, preds in predictions_dict.items():
         color = model_colors.get(model_name, '#808080')
+        ls = model_styles.get(model_name, '-')
         plt.plot(time_index[mask], preds[mask], 
-                 label=model_name, color=color, linewidth=1.2, alpha=0.9)
+                 label=model_name, color=color, linewidth=1.8, alpha=1, linestyle=ls)
     
     plt.xlabel('Timestamp')
     plt.ylabel('Grid Energy Compensation Value (kW·h)')

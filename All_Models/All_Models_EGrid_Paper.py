@@ -1605,7 +1605,7 @@ def plot_error_max_curve(y_actual_real,
     plt.figure(figsize=(10, 5))
 
     # 统一颜色 & 不同形状的标记
-    line_color = '#1f77b4'        # 深蓝色（Matplotlib 默认第一色）
+    line_color = 'black'        # black
     marker_styles = ['^', 's', 'o', 'h', 'p']  # 三角、方块、圆、六边形、五边形
     markersize_val = 10           # 放大标记尺寸
 

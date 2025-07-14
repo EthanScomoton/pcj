@@ -1949,6 +1949,14 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
             bins = 30
         )
 
+    all_model_preds = {
+        'Model1': preds1_real,
+        'Model2': preds2_real,
+        'Model3': preds3_real,
+        'Model4': preds4_real,
+        'Model5': preds5_real
+    }
+
     # 使用 Model4 与其他模型对比，生成全长与缩放窗口图，以及分布直方图
     primary_preds = {'Model4': preds4_real, 'Model5': preds5_real}
 
@@ -2015,13 +2023,6 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     plot_dataset_distribution(test_timestamps, 'Test Set')
 
     # ----------------- 1) 五个模型整体对比 -----------------
-    all_model_preds = {
-        'Model1': preds1_real,
-        'Model2': preds2_real,
-        'Model3': preds3_real,
-        'Model4': preds4_real,
-        'Model5': preds5_real
-    }
 
     plot_value_and_error_histograms(
         y_actual_real = labels4_real,

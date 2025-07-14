@@ -1489,25 +1489,62 @@ def plot_predictions_overview_and_zoom(y_actual_real, predictions_dict, timestam
     time_index = pd.to_datetime(timestamps)
 
     # ------------------- 1. Full-year / full-range overview ------------------- #
-    plt.figure(figsize=(14, 6))
-    plt.plot(time_index, y_actual_real, label='Actual', color='black', linewidth=1.2)
-    colors = mpl.cm.tab10.colors  # Re-use matplotlib tab10 palette
-    for i, (model_name, preds) in enumerate(predictions_dict.items()):
-        plt.plot(time_index, preds, label=model_name, color=colors[i % len(colors)], linewidth=0.9, alpha=0.9)
+    # 颜色映射
+    model_color_map = {
+        'Model1': '#b3d1ff',   # 浅蓝
+        'Model2': '#7fb0ff',   # 中浅蓝
+        'Model3': '#4d90ff',   # 中蓝
+        'Model5': '#0d47a1',   # 深蓝
+        'Model4': '#ff0000'    # 红
+    }
+    truth_color = '#1f77b4'     # 真值蓝
 
-    plt.title('Full-range Prediction Overview')
-    plt.xlabel('Timestamp')
-    plt.ylabel('Grid Energy Compensation Value (kW·h)')
-    plt.legend()
-    plt.grid(True)
-    plt.tight_layout()
-    plt.xticks(rotation=45)
-    plt.show()
+    line_styles = ['-', '--', '-.', ':', (0, (3, 1, 1, 1))]
+
+    # 构造两个时间段
+    segments = [
+        ('2024-11-25', '2024-12-13', 'Prediction Overview – 2024-11-25 ⟶ 2024-12-13'),
+        ('2024-12-13', '2025-01-01', 'Prediction Overview – 2024-12-13 ⟶ 2025-01-01')
+    ]
+
+    for (start_day, end_day, seg_title) in enumerate(segments):
+        seg_start = pd.Timestamp(start_day)
+        seg_end   = pd.Timestamp(end_day)
+
+        seg_mask = (time_index >= seg_start) & (time_index <= seg_end)
+        if seg_mask.sum() < 2:
+            continue   # 安全检查：样本不足时跳过
+
+        plt.figure(figsize=(14, 6))
+        # 真值
+        plt.plot(time_index[seg_mask],
+                 y_actual_real[seg_mask],
+                 label='Actual',
+                 color=truth_color,
+                 linewidth=2)
+
+        # 各模型
+        for i, (model_name, preds) in enumerate(predictions_dict.items()):
+            plt.plot(time_index[seg_mask],
+                     preds[seg_mask],
+                     label=model_name,
+                     color=model_color_map.get(model_name, '#333333'),
+                     linewidth=1.8,
+                     linestyle=line_styles[i % len(line_styles)])
+
+        plt.title(seg_title)
+        plt.xlabel('Timestamp')
+        plt.ylabel('Grid Energy Compensation Value (kW·h)')
+        plt.legend()
+        plt.grid(True)
+        plt.tight_layout()
+        plt.xticks(rotation=45)
+        plt.show()
 
     # ------------------- 2. Zoomed-in window (last ``zoom_days``) ------------ #
     if len(time_index) == 0:
         return  # Safety guard
-
+    colors = mpl.cm.tab10.colors  # Re-use matplotlib tab10 palette
     end_time = time_index.max()
     start_time = end_time - pd.Timedelta(days=zoom_days)
     zoom_mask = (time_index >= start_time) & (time_index <= end_time)

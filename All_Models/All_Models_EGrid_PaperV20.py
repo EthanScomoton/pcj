@@ -524,7 +524,7 @@ class EModel_FeatureWeight3(nn.Module):
     """
     def __init__(self, 
                  feature_dim, 
-                 gru_hidden_size = 128, 
+                 gru_hidden_size = 256, 
                  gru_num_layers = 2, 
                  gru_dropout = 0.2,
                  use_local_attn = True,
@@ -651,7 +651,7 @@ class EModel_FeatureWeight4(nn.Module):
     def __init__(self, 
                  feature_dim, 
                  lstm_hidden_size = 256, 
-                 lstm_num_layers = 2, 
+                 lstm_num_layers = 4, 
                  lstm_dropout = 0.1,
                  use_local_attn = True,
                  local_attn_window_size = 10,
@@ -1627,7 +1627,7 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
 
     model3 = EModel_FeatureWeight3(
         feature_dim       = feature_dim,
-        gru_hidden_size   = 128,  # 固定为10个隐藏层节点
+        gru_hidden_size   =256, 
         gru_num_layers    = 2, 
         gru_dropout       = 0.2,
         use_local_attn    = True,
@@ -1637,7 +1637,7 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     model4 = EModel_FeatureWeight4(
         feature_dim       = feature_dim,
         lstm_hidden_size  = 256, 
-        lstm_num_layers   = 2,
+        lstm_num_layers   = 4,
         lstm_dropout      = 0.1,
         feature_importance = feature_importance  # 使用加权后的特征重要性
     ).to(device)
@@ -1723,7 +1723,7 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
 
     best_model3 = EModel_FeatureWeight3(
         feature_dim       = feature_dim,
-        gru_hidden_size   = 128,  # 固定为10个隐藏层节点
+        gru_hidden_size   = 256,  
         gru_num_layers    = 2
     ).to(device)
     best_model3.load_state_dict(torch.load('best_EModel_FeatureWeight3.pth', map_location=device, weights_only=True), strict=False)
@@ -1731,7 +1731,7 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     best_model4 = EModel_FeatureWeight4(
         feature_dim       = feature_dim,
         lstm_hidden_size  = 256, 
-        lstm_num_layers   = 2
+        lstm_num_layers   = 4
     ).to(device)
     best_model4.load_state_dict(torch.load('best_EModel_FeatureWeight4.pth', map_location=device, weights_only=True), strict=False)
 

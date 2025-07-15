@@ -1833,7 +1833,7 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     for m_name, m_preds in [('Model1', preds1_real),
                            ('Model2', preds2_real),
                            ('Model3', preds3_real),
-                           ('Model5', preds5_real)]:
+                           ('Model4', preds4_real)]:
         pair_preds = {'Model5': preds5_real, m_name: m_preds}
         
         plot_value_and_error_histograms(

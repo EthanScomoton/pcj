@@ -1640,7 +1640,7 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
         lstm_num_layers   = 3,
         lstm_dropout      = 0.1,
         use_local_attn    = True,
-        local_attn_window_size = 10
+        local_attn_window_size = 10,
         feature_importance = feature_importance  # 使用加权后的特征重要性
     ).to(device)
 

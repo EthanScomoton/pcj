@@ -280,7 +280,7 @@ class EModel_FeatureWeight1(nn.Module):
                  lstm_num_layers = 2, 
                  lstm_dropout = 0.2,
                  use_local_attn = False,
-                 local_attn_window_size = 10
+                 local_attn_window_size = 5
                 ):
         super(EModel_FeatureWeight1, self).__init__()
         self.feature_dim = feature_dim
@@ -528,7 +528,7 @@ class EModel_FeatureWeight3(nn.Module):
                  gru_num_layers = 2, 
                  gru_dropout = 0.2,
                  use_local_attn = True,
-                 local_attn_window_size = 10
+                 local_attn_window_size = 5
                 ):
         super(EModel_FeatureWeight3, self).__init__()
         self.feature_dim = feature_dim
@@ -651,7 +651,7 @@ class EModel_FeatureWeight4(nn.Module):
     def __init__(self, 
                  feature_dim, 
                  lstm_hidden_size = 256, 
-                 lstm_num_layers = 3, 
+                 lstm_num_layers = 2, 
                  lstm_dropout = 0.1,
                  use_local_attn = True,
                  local_attn_window_size = 10,
@@ -788,7 +788,7 @@ class EModel_FeatureWeight4(nn.Module):
         
         return output.squeeze(-1)
 
-class EModel_FeatureWeight0(nn.Module):
+class EModel_FeatureWeight5(nn.Module):
 
     def __init__(self,
                  feature_dim,
@@ -860,7 +860,6 @@ class EModel_FeatureWeight0(nn.Module):
         noise   = 0.1 * torch.randn_like(mu) * torch.exp(0.5 * logvar)
         output  = mu + noise
         return output.squeeze(-1)
-    
 
 # 5. Evaluation Module
 def evaluate(model, dataloader, criterion, device = device):
@@ -1347,19 +1346,19 @@ def plot_predictions_date_range(y_actual_real, predictions_dict, timestamps, sta
     
     # 自定义模型颜色映射（由浅到深的蓝色 + 红色）
     model_colors = {
-        'Model4': '#00008B',   # dark blue
         'Model1': '#ADD8E6',   # light blue
         'Model2': '#6495ED',   # cornflower blue
         'Model3': '#1E90FF',   # dodger blue
-        'Model0': 'red'
+        'Model5': '#00008B',   # dark blue
+        'Model4': 'red'
     }
     
     model_styles = {
-        'Model4': ':',
         'Model1': '-',
         'Model2': '--',
         'Model3': '-.',
-        'Model0': (0, (3, 1, 1, 1))
+        'Model5': ':',
+        'Model4': (0, (3, 1, 1, 1))
     }
     # Create mask for date range
     start = pd.to_datetime(start_date)
@@ -1480,7 +1479,7 @@ def plot_error_max_curve(y_actual_real,
     # -------- 3. 图形美化 -------- #
     #plt.title('Smoothed Histogram Curves of Prediction Errors')
     plt.xlim(-20000, 20000)
-    plt.xlabel('Prediction Error of Model and Actual(kW·h)')
+    plt.xlabel('Prediction Error (kW·h)')
     plt.ylabel('Frequency')
     plt.legend()
     plt.grid(True)
@@ -1603,14 +1602,6 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
 
     # Build models
     feature_dim = X_train_seq.shape[-1]
-
-    model0 = EModel_FeatureWeight0(
-        feature_dim       = feature_dim,
-        lstm_hidden_size  = 256, 
-        lstm_num_layers   = 2,
-        lstm_dropout      = 0.2
-    ).to(device)
-
     model1 = EModel_FeatureWeight1(
         feature_dim       = feature_dim,
         lstm_hidden_size  = 256, 
@@ -1627,34 +1618,28 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
 
     model3 = EModel_FeatureWeight3(
         feature_dim       = feature_dim,
-        gru_hidden_size   =128, 
+        gru_hidden_size   = 128,  # 固定为10个隐藏层节点
         gru_num_layers    = 2, 
         gru_dropout       = 0.2,
         use_local_attn    = True,
-        local_attn_window_size = 10
+        local_attn_window_size = 5
     ).to(device)
 
     model4 = EModel_FeatureWeight4(
         feature_dim       = feature_dim,
         lstm_hidden_size  = 256, 
-        lstm_num_layers   = 3,
+        lstm_num_layers   = 2,
         lstm_dropout      = 0.1,
-        use_local_attn    = True,
-        local_attn_window_size = 10,
         feature_importance = feature_importance  # 使用加权后的特征重要性
     ).to(device)
 
-    # Train Model: EModel_FeatureWeight0
-    print("\n========== Training Model: 0 ==========")
-    hist0 = train_model(
-        model         = model0,
-        train_loader  = train_loader,
-        val_loader    = val_loader,
-        model_name    = 'EModel_FeatureWeight0',
-        learning_rate = learning_rate,
-        weight_decay  = weight_decay,
-        num_epochs    = num_epochs
-    )
+    model5 = EModel_FeatureWeight5(
+        feature_dim       = feature_dim,
+        lstm_hidden_size  = 256, 
+        lstm_num_layers   = 3,
+        lstm_dropout      = 0.1
+    ).to(device)
+
     # Train Model: EModel_FeatureWeight1
     print("\n========== Training Model: 1 ==========")
     hist1 = train_model(
@@ -1700,15 +1685,19 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
         weight_decay  = weight_decay,
         num_epochs    = num_epochs
     )
+    # Train Model: EModel_FeatureWeight5
+    print("\n========== Training Model: 5 ==========")
+    hist5 = train_model(
+        model         = model5,
+        train_loader  = train_loader,
+        val_loader    = val_loader,
+        model_name    = 'EModel_FeatureWeight5',
+        learning_rate = learning_rate,
+        weight_decay  = weight_decay,
+        num_epochs    = num_epochs
+    )
 
     # 修改加载模型部分的代码
-    best_model0 = EModel_FeatureWeight0(
-        feature_dim       = feature_dim,
-        lstm_hidden_size  = 256, 
-        lstm_num_layers   = 2
-    ).to(device)
-    best_model0.load_state_dict(torch.load('best_EModel_FeatureWeight0.pth', map_location=device, weights_only=True), strict=False)
-
     best_model1 = EModel_FeatureWeight1(
         feature_dim       = feature_dim,
         lstm_hidden_size  = 256, 
@@ -1725,7 +1714,7 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
 
     best_model3 = EModel_FeatureWeight3(
         feature_dim       = feature_dim,
-        gru_hidden_size   = 128,  
+        gru_hidden_size   = 128,  # 固定为10个隐藏层节点
         gru_num_layers    = 2
     ).to(device)
     best_model3.load_state_dict(torch.load('best_EModel_FeatureWeight3.pth', map_location=device, weights_only=True), strict=False)
@@ -1733,97 +1722,101 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     best_model4 = EModel_FeatureWeight4(
         feature_dim       = feature_dim,
         lstm_hidden_size  = 256, 
-        lstm_num_layers   = 3
+        lstm_num_layers   = 2
     ).to(device)
     best_model4.load_state_dict(torch.load('best_EModel_FeatureWeight4.pth', map_location=device, weights_only=True), strict=False)
 
+    best_model5 = EModel_FeatureWeight5(
+        feature_dim       = feature_dim,
+        lstm_hidden_size  = 256, 
+        lstm_num_layers   = 3
+    ).to(device)
+    best_model5.load_state_dict(torch.load('best_EModel_FeatureWeight5.pth', map_location=device, weights_only=True), strict=False)
+
     # Evaluate on test set (standardized domain)
     criterion_test = nn.SmoothL1Loss(beta = 1.0)
-    (_, test_rmse0_std, test_mape0_std, test_r20_std, test_mse0_std, test_mae0_std, preds0_std, labels0_std) = evaluate(best_model0, test_loader, criterion_test)
     (_, test_rmse1_std, test_mape1_std, test_r21_std, test_mse1_std, test_mae1_std, preds1_std, labels1_std) = evaluate(best_model1, test_loader, criterion_test)
     (_, test_rmse2_std, test_mape2_std, test_r22_std, test_mse2_std, test_mae2_std, preds2_std, labels2_std) = evaluate(best_model2, test_loader, criterion_test)
     (_, test_rmse3_std, test_mape3_std, test_r23_std, test_mse3_std, test_mae3_std, preds3_std, labels3_std) = evaluate(best_model3, test_loader, criterion_test)
     (_, test_rmse4_std, test_mape4_std, test_r24_std, test_mse4_std, test_mae4_std, preds4_std, labels4_std) = evaluate(best_model4, test_loader, criterion_test)
+    (_, test_rmse5_std, test_mape5_std, test_r25_std, test_mse5_std, test_mae5_std, preds5_std, labels5_std) = evaluate(best_model5, test_loader, criterion_test)
 
     print("\n========== [Test Set Evaluation (Standardized Domain)] ==========")
-    print(f"[EModel_FeatureWeight0]  RMSE: {test_rmse0_std:.4f}, MAPE: {test_mape0_std:.2f}%, R²: {test_r20_std:.4f}, mse: {test_mse0_std:.2f}%, MAE: {test_mae0_std:.4f}")
     print(f"[EModel_FeatureWeight1]  RMSE: {test_rmse1_std:.4f}, MAPE: {test_mape1_std:.2f}%, R²: {test_r21_std:.4f}, mse: {test_mse1_std:.2f}%, MAE: {test_mae1_std:.4f}")
     print(f"[EModel_FeatureWeight2]  RMSE: {test_rmse2_std:.4f}, MAPE: {test_mape2_std:.2f}%, R²: {test_r22_std:.4f}, mse: {test_mse2_std:.2f}%, MAE: {test_mae2_std:.4f}")
     print(f"[EModel_FeatureWeight3]  RMSE: {test_rmse3_std:.4f}, MAPE: {test_mape3_std:.2f}%, R²: {test_r23_std:.4f}, mse: {test_mse3_std:.2f}%, MAE: {test_mae3_std:.4f}")
     print(f"[EModel_FeatureWeight4]  RMSE: {test_rmse4_std:.4f}, MAPE: {test_mape4_std:.2f}%, R²: {test_r24_std:.4f}, mse: {test_mse4_std:.2f}%, MAE: {test_mae4_std:.4f}")
+    print(f"[EModel_FeatureWeight5]  RMSE: {test_rmse5_std:.4f}, MAPE: {test_mape5_std:.2f}%, R²: {test_r25_std:.4f}, mse: {test_mse5_std:.2f}%, MAE: {test_mae5_std:.4f}")
 
     # Inverse standardization and (optionally) inverse logarithmic transformation
-    preds0_real_std = scaler_y.inverse_transform(preds0_std.reshape(-1, 1)).ravel()
     preds1_real_std = scaler_y.inverse_transform(preds1_std.reshape(-1, 1)).ravel()
     preds2_real_std = scaler_y.inverse_transform(preds2_std.reshape(-1, 1)).ravel()
     preds3_real_std = scaler_y.inverse_transform(preds3_std.reshape(-1, 1)).ravel()
     preds4_real_std = scaler_y.inverse_transform(preds4_std.reshape(-1, 1)).ravel()
-    labels0_real_std = scaler_y.inverse_transform(labels0_std.reshape(-1, 1)).ravel()
+    preds5_real_std = scaler_y.inverse_transform(preds5_std.reshape(-1, 1)).ravel()
     labels1_real_std = scaler_y.inverse_transform(labels1_std.reshape(-1, 1)).ravel()
     labels2_real_std = scaler_y.inverse_transform(labels2_std.reshape(-1, 1)).ravel()
     labels3_real_std = scaler_y.inverse_transform(labels3_std.reshape(-1, 1)).ravel()
     labels4_real_std = scaler_y.inverse_transform(labels4_std.reshape(-1, 1)).ravel()
+    labels5_real_std = scaler_y.inverse_transform(labels5_std.reshape(-1, 1)).ravel()
 
     if use_log_transform:
-        preds0_real = np.expm1(preds0_real_std)
         preds1_real = np.expm1(preds1_real_std)
         preds2_real = np.expm1(preds2_real_std)
         preds3_real = np.expm1(preds3_real_std)
         preds4_real = np.expm1(preds4_real_std)
-        labels0_real = np.expm1(labels0_real_std)
+        preds5_real = np.expm1(preds5_real_std)
         labels1_real = np.expm1(labels1_real_std)
         labels2_real = np.expm1(labels2_real_std)
         labels3_real = np.expm1(labels3_real_std)
         labels4_real = np.expm1(labels4_real_std)
+        labels5_real = np.expm1(labels5_real_std)
     else:
-        preds0_real = preds0_real_std
         preds1_real = preds1_real_std
         preds2_real = preds2_real_std
         preds3_real = preds3_real_std
         preds4_real = preds4_real_std
-        labels0_real = labels0_real_std
+        preds5_real = preds5_real_std
         labels1_real = labels1_real_std
         labels2_real = labels2_real_std
         labels3_real = labels3_real_std
         labels4_real = labels4_real_std
+        labels5_real = labels5_real_std
 
     # Compute RMSE in original domain
-    test_rmse0_real = np.sqrt(mean_squared_error(labels0_real, preds0_real))
     test_rmse1_real = np.sqrt(mean_squared_error(labels1_real, preds1_real))
     test_rmse2_real = np.sqrt(mean_squared_error(labels2_real, preds2_real))
     test_rmse3_real = np.sqrt(mean_squared_error(labels3_real, preds3_real))
     test_rmse4_real = np.sqrt(mean_squared_error(labels4_real, preds4_real))
+    test_rmse5_real = np.sqrt(mean_squared_error(labels5_real, preds5_real))
 
-    # 使用 Model0 与其他模型对比，生成全长与缩放窗口图，以及分布直方图
-    for m_name, m_preds in [
-        ('Model0', preds0_real),
-        ('Model1', preds1_real),
-        ('Model2', preds2_real),
-        ('Model3', preds3_real),
-        ('Model4', preds4_real)
-    ]:
-        pair_preds = {'Model0': preds0_real, m_name: m_preds}
+    # 使用 Model4 与其他模型对比，生成全长与缩放窗口图，以及分布直方图
+    for m_name, m_preds in [('Model1', preds1_real),
+                           ('Model2', preds2_real),
+                           ('Model3', preds3_real),
+                           ('Model5', preds5_real)]:
+        pair_preds = {'Model4': preds4_real, m_name: m_preds}
         
         plot_value_and_error_histograms(
-            y_actual_real = labels0_real,
+            y_actual_real = labels4_real,
             predictions_dict = pair_preds,
             bins = 30
         )
 
     all_model_preds = {
-        'Model0': preds0_real,
         'Model1': preds1_real,
         'Model2': preds2_real,
         'Model3': preds3_real,
-        'Model4': preds4_real
+        'Model4': preds4_real,
+        'Model5': preds5_real
     }
 
-    # 使用 Model0 与其他模型对比，生成全长与缩放窗口图，以及分布直方图
-    primary_preds = {'Model0': preds0_real, 'Model0': preds0_real}
+    # 使用 Model4 与其他模型对比，生成全长与缩放窗口图，以及分布直方图
+    primary_preds = {'Model4': preds4_real, 'Model5': preds5_real}
 
     # 绘制两个时间段的图表
     plot_predictions_date_range(
-        y_actual_real = labels0_real,
+        y_actual_real = labels4_real,
         predictions_dict = primary_preds,
         timestamps = test_timestamps,
         start_date = '2024-11-25',
@@ -1831,7 +1824,7 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     )
 
     plot_predictions_date_range(
-        y_actual_real = labels0_real,
+        y_actual_real = labels4_real,
         predictions_dict = primary_preds,
         timestamps = test_timestamps,
         start_date = '2024-12-13',
@@ -1840,7 +1833,7 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
 
     # 绘制两个时间段的图表（所有模型）
     plot_predictions_date_range(
-        y_actual_real = labels0_real,
+        y_actual_real = labels4_real,
         predictions_dict = all_model_preds,
         timestamps = test_timestamps,
         start_date = '2024-11-25',
@@ -1848,7 +1841,7 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     )
 
     plot_predictions_date_range(
-        y_actual_real = labels0_real,
+        y_actual_real = labels4_real,
         predictions_dict = all_model_preds,
         timestamps = test_timestamps,
         start_date = '2024-12-13',
@@ -1856,7 +1849,7 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     )
 
     plot_error_max_curve(
-        y_actual_real = labels0_real,
+        y_actual_real = labels4_real,
         predictions_dict = primary_preds,
         bins = 30,
         smooth_sigma = 1.0
@@ -1864,11 +1857,11 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     print("[Info] Processing complete!")
 
     print("\n========== [Test Set Evaluation (Original Domain)] ==========")
-    print(f"[EModel_FeatureWeight0] => RMSE (original): {test_rmse0_real:.2f}")
     print(f"[EModel_FeatureWeight1] => RMSE (original): {test_rmse1_real:.2f}")
     print(f"[EModel_FeatureWeight2] => RMSE (original): {test_rmse2_real:.2f}")
     print(f"[EModel_FeatureWeight3] => RMSE (original): {test_rmse3_real:.2f}")
     print(f"[EModel_FeatureWeight4] => RMSE (original): {test_rmse4_real:.2f}")
+    print(f"[EModel_FeatureWeight5] => RMSE (original): {test_rmse5_real:.2f}")
 
     # Dataset statistics
     print(f"\n[Dataset Statistics] Total samples: {total_samples}")
@@ -1884,13 +1877,13 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     # ----------------- 1) 五个模型整体对比 -----------------
 
     plot_value_and_error_histograms(
-        y_actual_real = labels0_real,
+        y_actual_real = labels4_real,
         predictions_dict = all_model_preds,
         bins = 30
     )
 
     plot_error_max_curve(
-        y_actual_real = labels0_real,
+        y_actual_real = labels4_real,
         predictions_dict = all_model_preds,  # 或 primary_preds
         bins = 30,
         smooth_sigma = 1.0
@@ -1898,25 +1891,22 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
 
     # ----------------- 2) 与 Model4 的两两对比 -----------------
     # 可读性更高，用循环依次绘制
-    for m_name, m_preds in [
-                            ('Model0', preds0_real),
-                            ('Model1', preds1_real),
+    for m_name, m_preds in [('Model1', preds1_real),
                             ('Model2', preds2_real),
                             ('Model3', preds3_real),
-                            ('Model4', preds4_real)
-                            ]:   # 追加 Model0
+                            ('Model5', preds5_real)]:   # 追加 Model5
         plot_predictions_comparison(
-            y_actual_real = labels0_real,
-            predictions_dict = {'Model0': preds0_real, m_name: m_preds},
+            y_actual_real = labels4_real,
+            predictions_dict = {'Model4': preds4_real, m_name: m_preds},
             timestamps = test_timestamps
         )
 
     # ----------------- 3) 训练曲线 -----------------
-    plot_training_curves_allmetrics(hist0, model_name = 'EModel_FeatureWeight0')
     plot_training_curves_allmetrics(hist1, model_name = 'EModel_FeatureWeight1')
     plot_training_curves_allmetrics(hist2, model_name = 'EModel_FeatureWeight2')
     plot_training_curves_allmetrics(hist3, model_name = 'EModel_FeatureWeight3')
     plot_training_curves_allmetrics(hist4, model_name = 'EModel_FeatureWeight4')
+    plot_training_curves_allmetrics(hist5, model_name = 'EModel_FeatureWeight5')
 
     print("[Info] Processing complete!")
 

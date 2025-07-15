@@ -1324,7 +1324,7 @@ def calculate_feature_importance_mic(data_df, feature_cols, target_col):
     return mic_importance
 
 
-def plot_predictions_date_range(y_actual_real, predictions_dict, timestamps, start_date, end_date, title=""):
+def plot_predictions_date_range(y_actual_real, predictions_dict, timestamps, start_date, end_date):
     """
     Plot predictions for a specific date range.
     
@@ -1411,15 +1411,65 @@ def plot_value_and_error_histograms(y_actual_real, predictions_dict, bins=30):
 
     # -------- Histogram of prediction errors -------- #
     plt.subplot(1, 2, 2)
-    colors = mpl.cm.tab10.colors
-    for i, (model_name, preds) in enumerate(predictions_dict.items()):
-        errors = preds - y_actual_real
-        plt.hist(errors, bins=bins, alpha=0.5, label=model_name, color=colors[i % len(colors)], edgecolor='black')
+    
+    # 定义模型的颜色和透明度设置
+    model_settings = {
+        'Model1': {'color': '#ADD8E6', 'alpha': 0.35},  # 浅蓝色，低透明度
+        'Model2': {'color': '#87CEEB', 'alpha': 0.35},  # 天蓝色，低透明度
+        'Model3': {'color': '#98D8C8', 'alpha': 0.35},  # 薄荷绿，低透明度
+        'Model4': {'color': '#FF4500', 'alpha': 0.85},  # 深橙红色，高透明度
+        'Model5': {'color': '#0000CD', 'alpha': 0.85}   # 深蓝色，高透明度
+    }
+    
+    # 在绘图前先拼接所有误差，得到统一边界
+    all_errors = np.concatenate([
+        preds - y_actual_real for preds in predictions_dict.values()
+    ])
+    bin_edges = np.histogram_bin_edges(all_errors, bins=bins)  # 使用统一的bin边界
+    
+    # 先绘制非重点模型（保证它们在底层）
+    for model_name, preds in predictions_dict.items():
+        if model_name not in ['Model4', 'Model5']:
+            errors = preds - y_actual_real
+            settings = model_settings.get(model_name, {'color': '#C0C0C0', 'alpha': 0.3})
+            plt.hist(errors,
+                     bins=bin_edges,
+                     alpha=settings['alpha'],
+                     label=model_name,
+                     color=settings['color'],
+                     edgecolor='gray',
+                     linewidth=0.5)
+    
+    # 再绘制重点模型（保证它们在顶层）
+    for model_name, preds in predictions_dict.items():
+        if model_name in ['Model4', 'Model5']:
+            errors = preds - y_actual_real
+            settings = model_settings.get(model_name)
+            plt.hist(errors,
+                     bins=bin_edges,
+                     alpha=settings['alpha'],
+                     label=model_name,
+                     color=settings['color'],
+                     edgecolor='black',
+                     linewidth=1.2)
 
     plt.xlim(-20000, 20000)
-    plt.xlabel('Prediction Error (kW·h)')
+    plt.xlabel('Prediction Error of Model and Actual Value(kW·h)')
     plt.ylabel('Frequency')
-    plt.legend()
+    
+    # 调整图例顺序，让重点模型在前
+    handles, labels = plt.gca().get_legend_handles_labels()
+    order = []
+    # 先添加Model4和Model5
+    for i, label in enumerate(labels):
+        if label in ['Model4', 'Model5']:
+            order.append(i)
+    # 再添加其他模型
+    for i, label in enumerate(labels):
+        if label not in ['Model4', 'Model5']:
+            order.append(i)
+    
+    plt.legend([handles[idx] for idx in order], [labels[idx] for idx in order])
     plt.grid(True, axis='y')
 
     plt.tight_layout()
@@ -1479,7 +1529,7 @@ def plot_error_max_curve(y_actual_real,
     # -------- 3. 图形美化 -------- #
     #plt.title('Smoothed Histogram Curves of Prediction Errors')
     plt.xlim(-20000, 20000)
-    plt.xlabel('Prediction Error (kW·h)')
+    plt.xlabel('Prediction Error of Model and Actual Value(kW·h)')
     plt.ylabel('Frequency')
     plt.legend()
     plt.grid(True)

@@ -1794,31 +1794,28 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
 
     # 使用 Model0 与其他模型对比，生成全长与缩放窗口图，以及分布直方图
     for m_name, m_preds in [
-        ('Model0', preds0_real),
         ('Model1', preds1_real),
         ('Model2', preds2_real),
         ('Model3', preds3_real),
         ('Model4', preds4_real)
     ]:
-        pair_preds = {'Model0': preds4_real, m_name: m_preds}
+        pair_preds = {'Model0': preds0_real, m_name: m_preds}
         
         plot_value_and_error_histograms(
-            y_actual_real = labels4_real,
+            y_actual_real = labels0_real,
             predictions_dict = pair_preds,
             bins = 30
         )
 
     all_model_preds = {
-        'Model0': preds0_real,
         'Model1': preds1_real,
         'Model2': preds2_real,
         'Model3': preds3_real,
         'Model4': preds4_real
-        
     }
 
     # 使用 Model0 与其他模型对比，生成全长与缩放窗口图，以及分布直方图
-    primary_preds = {'Model0': preds4_real, 'Model0': preds0_real}
+    primary_preds = {'Model0': preds0_real, 'Model0': preds0_real}
 
     # 绘制两个时间段的图表
     plot_predictions_date_range(

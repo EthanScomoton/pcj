@@ -276,8 +276,8 @@ class EModel_FeatureWeight1(nn.Module):
     """
     def __init__(self, 
                  feature_dim, 
-                 lstm_hidden_size = 256, 
-                 lstm_num_layers = 2, 
+                 lstm_hidden_size = 512, 
+                 lstm_num_layers = 3, 
                  lstm_dropout = 0.2,
                  use_local_attn = False,
                  local_attn_window_size = 5
@@ -1613,8 +1613,8 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
 
     model1 = EModel_FeatureWeight1(
         feature_dim       = feature_dim,
-        lstm_hidden_size  = 256, 
-        lstm_num_layers   = 2,
+        lstm_hidden_size  = 512, 
+        lstm_num_layers   = 3,
         lstm_dropout      = 0.2
     ).to(device)
     
@@ -1709,8 +1709,8 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
 
     best_model1 = EModel_FeatureWeight1(
         feature_dim       = feature_dim,
-        lstm_hidden_size  = 256, 
-        lstm_num_layers   = 2
+        lstm_hidden_size  = 512, 
+        lstm_num_layers   = 3
     ).to(device)
     best_model1.load_state_dict(torch.load('best_EModel_FeatureWeight1.pth', map_location=device, weights_only=True), strict=False)
 

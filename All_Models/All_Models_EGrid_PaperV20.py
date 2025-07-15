@@ -654,7 +654,7 @@ class EModel_FeatureWeight4(nn.Module):
                  lstm_num_layers = 3, 
                  lstm_dropout = 0.05,
                  use_local_attn = True,
-                 local_attn_window_size = 15,
+                 local_attn_window_size = 20,
                  window_size = 20,
                  feature_importance = None
                 ):

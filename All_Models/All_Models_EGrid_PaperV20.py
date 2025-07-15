@@ -1438,21 +1438,30 @@ def plot_value_and_error_histograms(y_actual_real, predictions_dict, bins=30):
 
     # -------- Histogram of prediction errors -------- #
     plt.subplot(1, 2, 2)
-    colors = mpl.cm.tab10.colors
     
-    # 在绘图前先拼接所有误差，得到统一边界
-    all_errors = np.concatenate([
-        preds - y_actual_real for preds in predictions_dict.values()
-    ])
-    bin_edges = np.histogram_bin_edges(all_errors, bins=bins)  # 使用统一的bin边界
+    # 固定的模型颜色映射
+    model_colors = {
+        'Model1': '#1f77b4',  # 蓝色
+        'Model2': '#ff7f0e',  # 橙色  
+        'Model3': '#2ca02c',  # 绿色
+        'Model4': '#d62728',  # 红色
+        'Model5': '#9467bd',  # 紫色
+    }
     
-    for i, (model_name, preds) in enumerate(predictions_dict.items()):
+    # 使用固定的bin边界范围，确保所有图表一致
+    # 基于xlim(-20000, 20000)设置固定的bin边界
+    bin_edges = np.linspace(-20000, 20000, bins + 1)
+    
+    for model_name, preds in predictions_dict.items():
         errors = preds - y_actual_real
+        # 使用固定的颜色映射，如果模型名不在映射中，使用默认颜色
+        color = model_colors.get(model_name, '#808080')  # 灰色作为默认
+        
         plt.hist(errors,
-                 bins=bin_edges,        # 关键：固定 bin
+                 bins=bin_edges,        # 使用固定的bin边界
                  alpha=0.5,
                  label=model_name,
-                 color=colors[i % len(colors)],
+                 color=color,
                  edgecolor='black')
 
     plt.xlim(-20000, 20000)

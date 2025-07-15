@@ -28,7 +28,7 @@ mpl.rcParams.update({
 })
 
 # Global hyperparameters
-learning_rate     = 5e-5   # Learning rate
+learning_rate     = 1e-4   # Learning rate
 num_epochs        = 150    # Number of training epochs
 batch_size        = 128    # Batch size
 weight_decay      = 1e-4   # Weight decay
@@ -280,7 +280,7 @@ class EModel_FeatureWeight1(nn.Module):
                  lstm_num_layers = 2, 
                  lstm_dropout = 0.2,
                  use_local_attn = False,
-                 local_attn_window_size = 5
+                 local_attn_window_size = 10
                 ):
         super(EModel_FeatureWeight1, self).__init__()
         self.feature_dim = feature_dim
@@ -528,7 +528,7 @@ class EModel_FeatureWeight3(nn.Module):
                  gru_num_layers = 2, 
                  gru_dropout = 0.2,
                  use_local_attn = True,
-                 local_attn_window_size = 5
+                 local_attn_window_size = 10
                 ):
         super(EModel_FeatureWeight3, self).__init__()
         self.feature_dim = feature_dim
@@ -654,7 +654,7 @@ class EModel_FeatureWeight4(nn.Module):
                  lstm_num_layers = 3, 
                  lstm_dropout = 0.1,
                  use_local_attn = True,
-                 local_attn_window_size = 5,
+                 local_attn_window_size = 10,
                  window_size = 20,
                  feature_importance = None
                 ):
@@ -1631,7 +1631,7 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
         gru_num_layers    = 2, 
         gru_dropout       = 0.2,
         use_local_attn    = True,
-        local_attn_window_size = 5
+        local_attn_window_size = 10
     ).to(device)
 
     model4 = EModel_FeatureWeight4(
@@ -1639,6 +1639,8 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
         lstm_hidden_size  = 256, 
         lstm_num_layers   = 3,
         lstm_dropout      = 0.1,
+        use_local_attn    = True,
+        local_attn_window_size = 10
         feature_importance = feature_importance  # 使用加权后的特征重要性
     ).to(device)
 

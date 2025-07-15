@@ -798,7 +798,7 @@ class EModel_FeatureWeight5(nn.Module):
                  lstm_dropout=0.2, 
                 ):
         # ------- 修正父类调用名称 ------- #
-        super(EModel_FeatureWeight0, self).__init__()
+        super(EModel_FeatureWeight5, self).__init__()
 
         self.feature_dim = feature_dim
 

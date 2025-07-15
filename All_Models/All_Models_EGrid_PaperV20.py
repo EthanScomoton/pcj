@@ -1349,8 +1349,8 @@ def plot_predictions_date_range(y_actual_real, predictions_dict, timestamps, sta
         'Model1': {'color': '#B0C4DE', 'alpha': 0.7, 'linewidth': 1.2, 'linestyle': '-'},      # 浅钢蓝色，低透明度
         'Model2': {'color': '#87CEEB', 'alpha': 0.7, 'linewidth': 1.2, 'linestyle': '--'},     # 天蓝色，低透明度
         'Model3': {'color': '#ADD8E6', 'alpha': 0.7, 'linewidth': 1.2, 'linestyle': '-.'},     # 浅蓝色，低透明度
-        'Model4': {'color': '#DC143C', 'alpha': 1.0, 'linewidth': 1.9, 'linestyle': '-'},      # 深红色，完全不透明
-        'Model5': {'color': '#00008B', 'alpha': 1.0, 'linewidth': 1.9, 'linestyle': ':'}       # 深蓝色，完全不透明
+        'Model4': {'color': '#00008B', 'alpha': 1.0, 'linewidth': 1.9, 'linestyle': '-'},      # 深红色，完全不透明
+        'Model5': {'color': '#DC143C', 'alpha': 1.0, 'linewidth': 1.9, 'linestyle': ':'}       # 深蓝色，完全不透明
     }
     
     # Create mask for date range

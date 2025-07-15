@@ -793,9 +793,9 @@ class EModel_FeatureWeight5(nn.Module):
     def __init__(self,
                  feature_dim,
                  window_size=window_size,          # 序列窗口长度
-                 lstm_hidden_size=256,
+                 lstm_hidden_size=128,
                  lstm_num_layers=2,
-                 lstm_dropout=0.2, 
+                 lstm_dropout=0.1, 
                 ):
         # ------- 修正父类调用名称 ------- #
         super(EModel_FeatureWeight5, self).__init__()
@@ -1635,8 +1635,8 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
 
     model5 = EModel_FeatureWeight5(
         feature_dim       = feature_dim,
-        lstm_hidden_size  = 256, 
-        lstm_num_layers   = 3,
+        lstm_hidden_size  = 128, 
+        lstm_num_layers   = 2,
         lstm_dropout      = 0.1
     ).to(device)
 
@@ -1728,8 +1728,8 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
 
     best_model5 = EModel_FeatureWeight5(
         feature_dim       = feature_dim,
-        lstm_hidden_size  = 256, 
-        lstm_num_layers   = 3
+        lstm_hidden_size  = 128, 
+        lstm_num_layers   = 2
     ).to(device)
     best_model5.load_state_dict(torch.load('best_EModel_FeatureWeight5.pth', map_location=device, weights_only=True), strict=False)
 

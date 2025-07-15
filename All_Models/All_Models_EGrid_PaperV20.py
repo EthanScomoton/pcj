@@ -204,7 +204,7 @@ class CNN_FeatureGate(nn.Module):
         # First convolutional layer: kernel_size=3, filters=4
         self.conv1 = nn.Conv1d(
             in_channels=feature_dim, 
-            out_channels=4, 
+            out_channels=8, 
             kernel_size=3, 
             padding=1  # Zero padding
         )
@@ -215,7 +215,7 @@ class CNN_FeatureGate(nn.Module):
         # Second convolutional layer: kernel_size=3, filters=8
         self.conv2 = nn.Conv1d(
             in_channels=4, 
-            out_channels=8, 
+            out_channels=16, 
             kernel_size=3, 
             padding=1  # Zero padding
         )
@@ -793,16 +793,16 @@ class EModel_FeatureWeight0(nn.Module):
     def __init__(self,
                  feature_dim,
                  window_size=window_size,          # 序列窗口长度
-                 lstm_hidden_size=256,
-                 lstm_num_layers=3,
-                 lstm_dropout=0.1, 
+                 lstm_hidden_size=512,
+                 lstm_num_layers=4,
+                 lstm_dropout=0.2, 
                 ):
         # ------- 修正父类调用名称 ------- #
         super(EModel_FeatureWeight0, self).__init__()
 
         self.feature_dim = feature_dim
 
-        # 1) CNN-FeatureGate（保持不变）
+        # 1) CNN-FeatureGate
         self.feature_gate = CNN_FeatureGate(feature_dim, window_size)
 
         # 2) MLP-Attention
@@ -1606,9 +1606,9 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
 
     model0 = EModel_FeatureWeight0(
         feature_dim       = feature_dim,
-        lstm_hidden_size  = 256, 
-        lstm_num_layers   = 3,
-        lstm_dropout      = 0.1
+        lstm_hidden_size  = 512, 
+        lstm_num_layers   = 4,
+        lstm_dropout      = 0.2
     ).to(device)
 
     model1 = EModel_FeatureWeight1(
@@ -1702,8 +1702,8 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     # 修改加载模型部分的代码
     best_model0 = EModel_FeatureWeight0(
         feature_dim       = feature_dim,
-        lstm_hidden_size  = 256, 
-        lstm_num_layers   = 3
+        lstm_hidden_size  = 512, 
+        lstm_num_layers   = 4
     ).to(device)
     best_model0.load_state_dict(torch.load('best_EModel_FeatureWeight0.pth', map_location=device, weights_only=True), strict=False)
 

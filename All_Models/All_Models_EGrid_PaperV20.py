@@ -15,15 +15,16 @@ from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.metrics import mean_squared_error
 from torch.nn.utils import clip_grad_norm_
 from lion_pytorch import Lion
+import matplotlib.ticker as ticker 
  
 # Global style settings for plots
 mpl.rcParams.update({
     'font.family': 'Times New Roman',
-    'font.size': 22,          # Global default font size
-    'axes.labelsize': 22,     # Axis label font size
-    'axes.titlesize': 24,     # Chart title font size
-    'xtick.labelsize': 20,    # x-axis tick label size
-    'ytick.labelsize': 20     # y-axis tick label size
+    'font.size': 26,          # Global default font size
+    'axes.labelsize': 26,     # Axis label font size
+    'axes.titlesize': 28,     # Chart title font size
+    'xtick.labelsize': 24,    # x-axis tick label size
+    'ytick.labelsize': 24     # y-axis tick label size
 })
 
 # Global hyperparameters
@@ -36,8 +37,8 @@ num_workers       = 0      # Number of worker threads
 window_size       = 20     # Sequence window size
 
 # Set random seed and device
-torch.manual_seed(42)       # Random seed = 42
-np.random.seed(42)          # Random seed = 42
+torch.manual_seed(42)
+np.random.seed(42)
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')  
 
 
@@ -194,6 +195,74 @@ class Attention(nn.Module):
         weighted = x * attn_weights            # Element-wise weighting
         return torch.sum(weighted, dim = 1)    # Aggregate to shape [batch_size, input_dim]
 
+class CNN_FeatureGate(nn.Module):
+    """
+    CNN-based feature gating mechanism to replace the simple feature gate in EModel_FeatureWeight2
+    """
+    def __init__(self, feature_dim, seq_len):
+        super(CNN_FeatureGate, self).__init__()
+        # First convolutional layer: kernel_size=3, filters=4
+        self.conv1 = nn.Conv1d(
+            in_channels=feature_dim, 
+            out_channels=4, 
+            kernel_size=3, 
+            padding=1  # Zero padding
+        )
+        
+        # First max pooling layer
+        self.pool1 = nn.MaxPool1d(kernel_size=2, stride=2)
+        
+        # Second convolutional layer: kernel_size=3, filters=8
+        self.conv2 = nn.Conv1d(
+            in_channels=4, 
+            out_channels=8, 
+            kernel_size=3, 
+            padding=1  # Zero padding
+        )
+        
+        # Second max pooling layer
+        self.pool2 = nn.MaxPool1d(kernel_size=2, stride=2)
+        
+        # Calculate flattened size after convolutions and pooling
+        self.flattened_size = 8 * (seq_len // 4)
+        
+        # Fully connected hidden layer with 10 units
+        self.fc1 = nn.Linear(self.flattened_size, 10)
+        
+        # Output layer to generate feature weights
+        self.fc2 = nn.Linear(10, feature_dim)
+        
+        # Activation functions
+        self.relu = nn.ReLU()
+        self.sigmoid = nn.Sigmoid()
+    
+    def forward(self, x):
+        """
+        Parameters:
+          x: Input tensor with shape [batch_size, seq_len, feature_dim]
+        Returns:
+          Feature weights with shape [batch_size, feature_dim]
+        """
+        # Transpose for 1D convolution: [batch_size, feature_dim, seq_len]
+        x = x.permute(0, 2, 1)
+        
+        # First conv + activation + pool
+        x = self.relu(self.conv1(x))
+        x = self.pool1(x)
+        
+        # Second conv + activation + pool
+        x = self.relu(self.conv2(x))
+        x = self.pool2(x)
+        
+        # Flatten the output
+        x = x.view(x.size(0), -1)
+        
+        # Apply fully connected layers
+        x = self.relu(self.fc1(x))
+        x = self.sigmoid(self.fc2(x))
+        
+        return x
+
 class EModel_FeatureWeight1(nn.Module):
     """
     [Model 1: LSTM-based Model with Feature Weighting]
@@ -207,7 +276,7 @@ class EModel_FeatureWeight1(nn.Module):
     """
     def __init__(self, 
                  feature_dim, 
-                 lstm_hidden_size = 128, 
+                 lstm_hidden_size = 256, 
                  lstm_num_layers = 2, 
                  lstm_dropout = 0.2,
                  use_local_attn = False,
@@ -323,208 +392,80 @@ class EModel_FeatureWeight1(nn.Module):
     
 class EModel_FeatureWeight2(nn.Module):
     """
-    [Model 1: LSTM-based Model with Feature Weighting]
+    Modified version of EModel_FeatureWeight2 with CNN-based feature gating
+    
     Parameters:
       - feature_dim: Input feature dimension
+      - window_size: Sequence window size (needed for CNN)
       - lstm_hidden_size: LSTM hidden size
       - lstm_num_layers: Number of LSTM layers
       - lstm_dropout: LSTM dropout probability
-      - use_local_attn: Whether to use local attention 
+      - use_local_attn: Whether to use local attention
       - local_attn_window_size: Window size for local attention
     """
-    def __init__(self, 
-                 feature_dim, 
-                 lstm_hidden_size = 128, 
-                 lstm_num_layers = 2, 
-                 lstm_dropout = 0.2,
-                 use_local_attn = True,
-                 local_attn_window_size = 5
+    def __init__(self,
+                 feature_dim,
+                 window_size=window_size,  # Using global window_size
+                 lstm_hidden_size=256,
+                 lstm_num_layers=2,
+                 lstm_dropout=0.2,
+                 use_local_attn=True,
+                 local_attn_window_size=5
                 ):
         super(EModel_FeatureWeight2, self).__init__()
         self.feature_dim = feature_dim
-        self.use_local_attn = use_local_attn  # 保存是否使用局部注意力的标识
+        self.use_local_attn = use_local_attn
         
-        # Feature gating mechanism: fully connected layer + Sigmoid to compute feature weights
-        self.feature_gate = nn.Sequential(
-            nn.Linear(feature_dim, feature_dim),
-            nn.Sigmoid()
-        )
+        # Replace feature gating with CNN-based mechanism
+        self.feature_gate = CNN_FeatureGate(feature_dim, window_size)
         
-        # Temporal attention: choose between local or global (MLP) attention
+        # Temporal attention: choose between local or global attention
         if use_local_attn:
             from local_attention.local_attention import LocalAttention
             self.temporal_attn = LocalAttention(
-                dim = 2 * lstm_hidden_size,
-                window_size = local_attn_window_size,   # 使用正确的参数名
-                causal = False
+                dim=2 * lstm_hidden_size,
+                window_size=local_attn_window_size,
+                causal=False
             )
         else:
-            self.temporal_attn = Attention(input_dim = 2 * lstm_hidden_size)
+            self.temporal_attn = Attention(input_dim=2 * lstm_hidden_size)
         
-        # Feature attention layer: aggregate LSTM output over feature dimensions
+        # Feature attention layer
         self.feature_attn = nn.Sequential(
             nn.Linear(window_size, 1),
             nn.Sigmoid()
         )
+        
         # Feature projection layer
         self.feature_proj = nn.Linear(2 * lstm_hidden_size, 2 * lstm_hidden_size)
         
-        # Learnable feature importance weights, initialized to 1
-        self.feature_importance = nn.Parameter(torch.ones(feature_dim), requires_grad = True)
+        # Learnable feature importance weights
+        self.feature_importance = nn.Parameter(torch.ones(feature_dim), requires_grad=True)
         
         # Bidirectional LSTM
         self.lstm = nn.LSTM(
-            input_size    = feature_dim,
-            hidden_size   = lstm_hidden_size,
-            num_layers    = lstm_num_layers,
-            batch_first   = True,
-            bidirectional = True,
-            dropout       = lstm_dropout if lstm_num_layers > 1 else 0
+            input_size=feature_dim,
+            hidden_size=lstm_hidden_size,
+            num_layers=lstm_num_layers,
+            batch_first=True,
+            bidirectional=True,
+            dropout=lstm_dropout if lstm_num_layers > 1 else 0
         )
         self._init_lstm_weights()
         
         # Global attention module
-        self.attention = Attention(input_dim = 2 * lstm_hidden_size)
+        self.attention = Attention(input_dim=2 * lstm_hidden_size)
         
         # Fully connected layer for final prediction
         self.fc = nn.Sequential(
             nn.Linear(4 * lstm_hidden_size, 128),
             nn.ReLU(),
             nn.Dropout(0.1),
-            nn.Linear(128, 2)  # 输出两个值: mu 和 logvar
+            nn.Linear(128, 2)  # Output mu and logvar
         )
-
-    def _init_lstm_weights(self):
-        """
-        [LSTM Weight Initialization]
-        """
-        for name, param in self.lstm.named_parameters():
-            if 'weight_ih' in name:
-                nn.init.xavier_uniform_(param.data)
-            elif 'weight_hh' in name:
-                nn.init.orthogonal_(param.data)
-            elif 'bias' in name:
-                param.data.fill_(0)
-                n = param.size(0)
-                param.data[(n // 4):(n // 2)].fill_(1.0)  # Set forget gate bias to 1
-
-    def forward(self, x):
-        """
-        Parameters:
-          x: Input tensor with shape [batch_size, seq_len, feature_dim]
-        Returns:
-          Predicted output with shape [batch_size]
-        """
-        # Apply dynamic feature weighting
-        gate = self.feature_gate(x.mean(dim = 1))
-        x = x * gate.unsqueeze(1)
-
-        # Process with LSTM to obtain bidirectional output
-        lstm_out, _ = self.lstm(x)
-        
-        # Temporal attention:
-        if self.use_local_attn:
-            # 调用LocalAttention，将query, key, value均设置为lstm_out
-            temporal = self.temporal_attn(lstm_out, lstm_out, lstm_out)
-            # 聚合沿时间步（例如使用求和或者平均），使得维度变为二维
-            temporal = temporal.sum(dim=1)
-            # 如果希望归一化，可以改为：temporal = temporal.mean(dim=1)
-        else:
-            temporal = self.temporal_attn(lstm_out)
-        
-        # Feature attention over the feature dimensions
-        feature_raw = self.feature_attn(lstm_out.transpose(1, 2))
-        feature_raw = feature_raw.squeeze(-1)
-        feature = self.feature_proj(feature_raw)
-
-        # Concatenate the two branches
-        combined = torch.cat([temporal, feature], dim = 1)
-        output = self.fc(combined)
-        mu, logvar = torch.chunk(output, 2, dim = 1)
-        
-        # Reparameterization trick with noise
-        noise = 0.1 * torch.randn_like(mu, device = x.device) * torch.exp(0.5 * logvar)
-        output = mu + noise
-        
-        return output.squeeze(-1)
     
-class EModel_FeatureWeight21(nn.Module):
-    """
-    [Model 1: LSTM-based Model with Feature Weighting]
-    Parameters:
-      - feature_dim: Input feature dimension
-      - lstm_hidden_size: LSTM hidden size
-      - lstm_num_layers: Number of LSTM layers
-      - lstm_dropout: LSTM dropout probability
-      - use_local_attn: Whether to use local attention 
-      - local_attn_window_size: Window size for local attention
-    """
-    def __init__(self, 
-                 feature_dim, 
-                 lstm_hidden_size = 256, 
-                 lstm_num_layers = 4, 
-                 lstm_dropout = 0.2,
-                 use_local_attn = True,
-                 local_attn_window_size = 5
-                ):
-        super(EModel_FeatureWeight21, self).__init__()
-        self.feature_dim = feature_dim
-        self.use_local_attn = use_local_attn  # 保存是否使用局部注意力的标识
-        
-        # Feature gating mechanism: fully connected layer + Sigmoid to compute feature weights
-        self.feature_gate = nn.Sequential(
-            nn.Linear(feature_dim, feature_dim),
-            nn.Sigmoid()
-        )
-        
-        # Temporal attention: choose between local or global (MLP) attention
-        if use_local_attn:
-            from local_attention.local_attention import LocalAttention
-            self.temporal_attn = LocalAttention(
-                dim = 2 * lstm_hidden_size,
-                window_size = local_attn_window_size,   # 使用正确的参数名
-                causal = False
-            )
-        else:
-            self.temporal_attn = Attention(input_dim = 2 * lstm_hidden_size)
-        
-        # Feature attention layer: aggregate LSTM output over feature dimensions
-        self.feature_attn = nn.Sequential(
-            nn.Linear(window_size, 1),
-            nn.Sigmoid()
-        )
-        # Feature projection layer
-        self.feature_proj = nn.Linear(2 * lstm_hidden_size, 2 * lstm_hidden_size)
-        
-        # Learnable feature importance weights, initialized to 1
-        self.feature_importance = nn.Parameter(torch.ones(feature_dim), requires_grad = True)
-        
-        # Bidirectional LSTM
-        self.lstm = nn.LSTM(
-            input_size    = feature_dim,
-            hidden_size   = lstm_hidden_size,
-            num_layers    = lstm_num_layers,
-            batch_first   = True,
-            bidirectional = True,
-            dropout       = lstm_dropout if lstm_num_layers > 1 else 0
-        )
-        self._init_lstm_weights()
-        
-        # Global attention module
-        self.attention = Attention(input_dim = 2 * lstm_hidden_size)
-        
-        # Fully connected layer for final prediction
-        self.fc = nn.Sequential(
-            nn.Linear(4 * lstm_hidden_size, 128),
-            nn.ReLU(),
-            nn.Dropout(0.1),
-            nn.Linear(128, 2)  # 输出两个值: mu 和 logvar
-        )
-
     def _init_lstm_weights(self):
-        """
-        [LSTM Weight Initialization]
-        """
+        """LSTM Weight Initialization"""
         for name, param in self.lstm.named_parameters():
             if 'weight_ih' in name:
                 nn.init.xavier_uniform_(param.data)
@@ -534,7 +475,7 @@ class EModel_FeatureWeight21(nn.Module):
                 param.data.fill_(0)
                 n = param.size(0)
                 param.data[(n // 4):(n // 2)].fill_(1.0)  # Set forget gate bias to 1
-
+    
     def forward(self, x):
         """
         Parameters:
@@ -542,54 +483,50 @@ class EModel_FeatureWeight21(nn.Module):
         Returns:
           Predicted output with shape [batch_size]
         """
-        # Apply dynamic feature weighting
-        gate = self.feature_gate(x.mean(dim = 1))
+        # Apply CNN-based feature gating
+        gate = self.feature_gate(x)
         x = x * gate.unsqueeze(1)
-
-        # Process with LSTM to obtain bidirectional output
+        
+        # Process with LSTM
         lstm_out, _ = self.lstm(x)
         
-        # Temporal attention:
+        # Temporal attention
         if self.use_local_attn:
-            # 调用LocalAttention，将query, key, value均设置为lstm_out
             temporal = self.temporal_attn(lstm_out, lstm_out, lstm_out)
-            # 聚合沿时间步（例如使用求和或者平均），使得维度变为二维
-            temporal = temporal.sum(dim=1)
-            # 如果希望归一化，可以改为：temporal = temporal.mean(dim=1)
+            temporal = temporal.sum(dim=1)  # Aggregate along time steps
         else:
             temporal = self.temporal_attn(lstm_out)
         
-        # Feature attention over the feature dimensions
+        # Feature attention
         feature_raw = self.feature_attn(lstm_out.transpose(1, 2))
         feature_raw = feature_raw.squeeze(-1)
         feature = self.feature_proj(feature_raw)
-
-        # Concatenate the two branches
-        combined = torch.cat([temporal, feature], dim = 1)
+        
+        # Concatenate branches
+        combined = torch.cat([temporal, feature], dim=1)
         output = self.fc(combined)
-        mu, logvar = torch.chunk(output, 2, dim = 1)
+        mu, logvar = torch.chunk(output, 2, dim=1)
         
         # Reparameterization trick with noise
-        noise = 0.1 * torch.randn_like(mu, device = x.device) * torch.exp(0.5 * logvar)
+        noise = 0.1 * torch.randn_like(mu, device=x.device) * torch.exp(0.5 * logvar)
         output = mu + noise
-        
         return output.squeeze(-1)
     
 class EModel_FeatureWeight3(nn.Module):
     """
     Parameters:
       - feature_dim: Input feature dimension
-      - lstm_hidden_size: LSTM hidden size
-      - lstm_num_layers: Number of LSTM layers
-      - lstm_dropout: LSTM dropout probability
+      - gru_hidden_size: GRU hidden size (固定为10)
+      - gru_num_layers: Number of GRU layers
+      - gru_dropout: GRU dropout probability
       - use_local_attn: Whether to use local attention 
       - local_attn_window_size: Window size for local attention
     """
     def __init__(self, 
                  feature_dim, 
-                 lstm_hidden_size = 256, 
-                 lstm_num_layers = 4, 
-                 lstm_dropout = 0.2,
+                 gru_hidden_size = 128, 
+                 gru_num_layers = 2, 
+                 gru_dropout = 0.2,
                  use_local_attn = True,
                  local_attn_window_size = 5
                 ):
@@ -607,59 +544,57 @@ class EModel_FeatureWeight3(nn.Module):
         if use_local_attn:
             from local_attention.local_attention import LocalAttention
             self.temporal_attn = LocalAttention(
-                dim = 2 * lstm_hidden_size,
+                dim = 2 * gru_hidden_size,  # 双向GRU，隐藏层大小*2
                 window_size = local_attn_window_size,   # 使用正确的参数名
                 causal = False
             )
         else:
-            self.temporal_attn = Attention(input_dim = 2 * lstm_hidden_size)
+            self.temporal_attn = Attention(input_dim = 2 * gru_hidden_size)  # 双向GRU，隐藏层大小*2
         
-        # Feature attention layer: aggregate LSTM output over feature dimensions
+        # Feature attention layer: aggregate GRU output over feature dimensions
         self.feature_attn = nn.Sequential(
             nn.Linear(window_size, 1),
             nn.Sigmoid()
         )
         # Feature projection layer
-        self.feature_proj = nn.Linear(2 * lstm_hidden_size, 2 * lstm_hidden_size)
+        self.feature_proj = nn.Linear(2 * gru_hidden_size, 2 * gru_hidden_size)  # 双向GRU，隐藏层大小*2
         
         # Learnable feature importance weights, initialized to 1
         self.feature_importance = nn.Parameter(torch.ones(feature_dim), requires_grad = True)
         
-        # Bidirectional LSTM
-        self.lstm = nn.LSTM(
+        # Bidirectional GRU 
+        self.gru = nn.GRU(
             input_size    = feature_dim,
-            hidden_size   = lstm_hidden_size,
-            num_layers    = lstm_num_layers,
+            hidden_size   = gru_hidden_size,  # 隐藏层大小为10
+            num_layers    = gru_num_layers,
             batch_first   = True,
             bidirectional = True,
-            dropout       = lstm_dropout if lstm_num_layers > 1 else 0
+            dropout       = gru_dropout if gru_num_layers > 1 else 0
         )
-        self._init_lstm_weights()
+        self._init_gru_weights()  # 初始化GRU权重
         
         # Global attention module
-        self.attention = Attention(input_dim = 2 * lstm_hidden_size)
+        self.attention = Attention(input_dim = 2 * gru_hidden_size)  # 双向GRU，隐藏层大小*2
         
         # Fully connected layer for final prediction
         self.fc = nn.Sequential(
-            nn.Linear(4 * lstm_hidden_size, 128),
+            nn.Linear(4 * gru_hidden_size, 128),  # 因为将两个大小为2*gru_hidden_size的特征连接在一起
             nn.ReLU(),
             nn.Dropout(0.1),
             nn.Linear(128, 2)  # 输出两个值: mu 和 logvar
         )
 
-    def _init_lstm_weights(self):
+    def _init_gru_weights(self):
         """
-        [LSTM Weight Initialization]
+        [GRU Weight Initialization]
         """
-        for name, param in self.lstm.named_parameters():
+        for name, param in self.gru.named_parameters():
             if 'weight_ih' in name:
                 nn.init.xavier_uniform_(param.data)
             elif 'weight_hh' in name:
                 nn.init.orthogonal_(param.data)
             elif 'bias' in name:
                 param.data.fill_(0)
-                n = param.size(0)
-                param.data[(n // 4):(n // 2)].fill_(1.0)  # Set forget gate bias to 1
 
     def forward(self, x):
         """
@@ -672,21 +607,21 @@ class EModel_FeatureWeight3(nn.Module):
         gate = self.feature_gate(x.mean(dim = 1))
         x = x * gate.unsqueeze(1)
 
-        # Process with LSTM to obtain bidirectional output
-        lstm_out, _ = self.lstm(x)
+        # Process with GRU to obtain bidirectional output (替换LSTM)
+        gru_out, _ = self.gru(x)
         
         # Temporal attention:
         if self.use_local_attn:
-            # 调用LocalAttention，将query, key, value均设置为lstm_out
-            temporal = self.temporal_attn(lstm_out, lstm_out, lstm_out)
+            # 调用LocalAttention，将query, key, value均设置为gru_out
+            temporal = self.temporal_attn(gru_out, gru_out, gru_out)
             # 聚合沿时间步（例如使用求和或者平均），使得维度变为二维
             temporal = temporal.sum(dim=1)
             # 如果希望归一化，可以改为：temporal = temporal.mean(dim=1)
         else:
-            temporal = self.temporal_attn(lstm_out)
+            temporal = self.temporal_attn(gru_out)
         
         # Feature attention over the feature dimensions
-        feature_raw = self.feature_attn(lstm_out.transpose(1, 2))
+        feature_raw = self.feature_attn(gru_out.transpose(1, 2))
         feature_raw = feature_raw.squeeze(-1)
         feature = self.feature_proj(feature_raw)
 
@@ -703,7 +638,7 @@ class EModel_FeatureWeight3(nn.Module):
     
 class EModel_FeatureWeight4(nn.Module):
     """
-    [Model 1: LSTM-based Model with Feature Weighting]
+    [Model 4: LSTM-based Model with Feature Weighting]
     Parameters:
       - feature_dim: Input feature dimension
       - lstm_hidden_size: LSTM hidden size
@@ -711,22 +646,28 @@ class EModel_FeatureWeight4(nn.Module):
       - lstm_dropout: LSTM dropout probability
       - use_local_attn: Whether to use local attention 
       - local_attn_window_size: Window size for local attention
+      - window_size: Window size for feature attention
     """
     def __init__(self, 
                  feature_dim, 
                  lstm_hidden_size = 256, 
-                 lstm_num_layers = 3, 
+                 lstm_num_layers = 2, 
                  lstm_dropout = 0.1,
                  use_local_attn = True,
-                 local_attn_window_size = 5
+                 local_attn_window_size = 10,
+                 window_size = 20,
+                 feature_importance = None
                 ):
         super(EModel_FeatureWeight4, self).__init__()
         self.feature_dim = feature_dim
         self.use_local_attn = use_local_attn  # 保存是否使用局部注意力的标识
+        self.window_size = window_size  # 保存窗口大小
         
         # Feature gating mechanism: fully connected layer + Sigmoid to compute feature weights
         self.feature_gate = nn.Sequential(
-            nn.Linear(feature_dim, feature_dim),
+            nn.Linear(feature_dim, feature_dim * 2),
+            nn.GELU(),
+            nn.Linear(feature_dim * 2, feature_dim),
             nn.Sigmoid()
         )
         
@@ -743,15 +684,29 @@ class EModel_FeatureWeight4(nn.Module):
         
         # Feature attention layer: aggregate LSTM output over feature dimensions
         self.feature_attn = nn.Sequential(
-            nn.Linear(window_size, 1),
+            nn.Linear(self.window_size, self.window_size * 2),
+            nn.GELU(),
+            nn.LayerNorm(self.window_size * 2),
+            nn.Linear(self.window_size * 2, 1),
             nn.Sigmoid()
         )
         # Feature projection layer
-        self.feature_proj = nn.Linear(2 * lstm_hidden_size, 2 * lstm_hidden_size)
+        self.feature_proj = nn.Sequential(
+            nn.Linear(2 * lstm_hidden_size, 2 * lstm_hidden_size),
+            nn.LayerNorm(2 * lstm_hidden_size),
+            nn.GELU()
+        )
         
-        # Learnable feature importance weights, initialized to 1
-        self.feature_importance = nn.Parameter(torch.ones(feature_dim), requires_grad = True)
+        # 初始化特征重要性权重，如果提供了特征重要性，则使用它
+        if feature_importance is not None and len(feature_importance) == feature_dim:
+            self.feature_importance = nn.Parameter(torch.tensor(feature_importance, dtype=torch.float32), requires_grad=True)
+        else:
+            self.feature_importance = nn.Parameter(torch.ones(feature_dim), requires_grad=True)
         
+        # LSTM 输出层归一化与 Dropout
+        self.lstm_norm = nn.LayerNorm(2 * lstm_hidden_size)
+        self.lstm_dropout = nn.Dropout(0.1)
+      
         # Bidirectional LSTM
         self.lstm = nn.LSTM(
             input_size    = feature_dim,
@@ -768,148 +723,10 @@ class EModel_FeatureWeight4(nn.Module):
         
         # Fully connected layer for final prediction
         self.fc = nn.Sequential(
-            nn.Linear(4 * lstm_hidden_size, 128),
-            nn.ReLU(),
-            nn.Dropout(0.1),
-            nn.Linear(128, 2)  # 输出两个值: mu 和 logvar
-        )
-
-    def _init_lstm_weights(self):
-        """
-        [LSTM Weight Initialization]
-        """
-        for name, param in self.lstm.named_parameters():
-            if 'weight_ih' in name:
-                nn.init.xavier_uniform_(param.data)
-            elif 'weight_hh' in name:
-                nn.init.orthogonal_(param.data)
-            elif 'bias' in name:
-                param.data.fill_(0)
-                n = param.size(0)
-                param.data[(n // 4):(n // 2)].fill_(1.0)  # Set forget gate bias to 1
-
-    def forward(self, x):
-        """
-        Parameters:
-          x: Input tensor with shape [batch_size, seq_len, feature_dim]
-        Returns:
-          Predicted output with shape [batch_size]
-        """
-        # Apply dynamic feature weighting
-        gate = self.feature_gate(x.mean(dim = 1))
-        x = x * gate.unsqueeze(1)
-
-        # Process with LSTM to obtain bidirectional output
-        lstm_out, _ = self.lstm(x)
-        
-        # Temporal attention:
-        if self.use_local_attn:
-            # 调用LocalAttention，将query, key, value均设置为lstm_out
-            temporal = self.temporal_attn(lstm_out, lstm_out, lstm_out)
-            # 聚合沿时间步（例如使用求和或者平均），使得维度变为二维
-            temporal = temporal.sum(dim=1)
-            # 如果希望归一化，可以改为：temporal = temporal.mean(dim=1)
-        else:
-            temporal = self.temporal_attn(lstm_out)
-        
-        # Feature attention over the feature dimensions
-        feature_raw = self.feature_attn(lstm_out.transpose(1, 2))
-        feature_raw = feature_raw.squeeze(-1)
-        feature = self.feature_proj(feature_raw)
-
-        # Concatenate the two branches
-        combined = torch.cat([temporal, feature], dim = 1)
-        output = self.fc(combined)
-        mu, logvar = torch.chunk(output, 2, dim = 1)
-        
-        # Reparameterization trick with noise
-        noise = 0.1 * torch.randn_like(mu, device = x.device) * torch.exp(0.5 * logvar)
-        output = mu + noise
-        
-        return output.squeeze(-1)
-
-class EModel_FeatureWeight5(nn.Module):
-    """
-    [Model 1: LSTM-based Model with Feature Weighting]
-    Parameters:
-      - feature_dim: Input feature dimension
-      - lstm_hidden_size: LSTM hidden size
-      - lstm_num_layers: Number of LSTM layers
-      - lstm_dropout: LSTM dropout probability
-      - use_local_attn: Whether to use local attention (default: False)
-      - local_attn_window_size: Window size for local attention (default: 5)
-    """
-    def __init__(self, 
-                 feature_dim, 
-                 lstm_hidden_size = 256, 
-                 lstm_num_layers = 3, 
-                 lstm_dropout = 0.1,
-                 use_local_attn = False,
-                 local_attn_window_size = 5,
-                 proj_dim = 512           # 新增投影维度参数
-                ):
-        
-        super(EModel_FeatureWeight5, self).__init__()
-        self.feature_dim = feature_dim
-        self.use_local_attn = use_local_attn  # 保存该标识
-
-        # 增强特征门控机制
-        self.feature_gate = nn.Sequential(
-            nn.Linear(feature_dim, feature_dim*2),
-            nn.GELU(),
-            nn.Linear(feature_dim*2, 1),
-            nn.Sigmoid()
-        )
-        
-        # 改进的局部注意力机制
-        if use_local_attn:
-            from local_attention.local_attention import LocalAttention
-            self.temporal_attn = LocalAttention(
-                dim = 2 * lstm_hidden_size,
-                window_size = local_attn_window_size,
-                causal = False,
-                dropout = 0.1,
-                prenorm = True
-            )
-        else:
-            self.temporal_attn = Attention(input_dim = 2 * lstm_hidden_size)
-        
-        # 增强特征注意力层
-        self.feature_attn = nn.Sequential(
-            nn.Linear(window_size, window_size*2),
-            nn.GELU(),
-            nn.Linear(window_size*2, 1),
-            nn.Sigmoid()
-        )
-        
-        # 增强特征投影层
-        self.feature_proj = nn.Sequential(
-            nn.Linear(2 * lstm_hidden_size, proj_dim),
-            nn.LayerNorm(proj_dim),
-            nn.GELU(),
-            nn.Dropout(0.1)
-        )
-        
-        # 可学习的特征重要性权重（增加初始化范围）
-        self.feature_importance = nn.Parameter(torch.rand(feature_dim)*2-1, requires_grad=True)
-        
-        # 增强LSTM配置
-        self.lstm = nn.LSTM(
-            input_size    = feature_dim,
-            hidden_size   = lstm_hidden_size,
-            num_layers    = lstm_num_layers,
-            batch_first   = True,
-            bidirectional = True,
-            dropout       = lstm_dropout if lstm_num_layers > 1 else 0
-        )
-        self._init_lstm_weights()
-        
-        # 增强全连接层
-        self.fc = nn.Sequential(
-            nn.Linear(2 * lstm_hidden_size + proj_dim, 256),  # 正确拼接后的维度
+            nn.Linear(4 * lstm_hidden_size, 256),
             nn.LayerNorm(256),
             nn.GELU(),
-            nn.Dropout(0.2),
+            nn.Dropout(0.1),
             nn.Linear(256, 128),
             nn.LayerNorm(128),
             nn.GELU(),
@@ -929,7 +746,7 @@ class EModel_FeatureWeight5(nn.Module):
             elif 'bias' in name:
                 param.data.fill_(0)
                 n = param.size(0)
-                param.data[(n // 4):(n // 2)].fill_(1.0)
+                param.data[(n // 4):(n // 2)].fill_(1.0)  # Set forget gate bias to 1
 
     def forward(self, x):
         """
@@ -938,21 +755,24 @@ class EModel_FeatureWeight5(nn.Module):
         Returns:
           Predicted output with shape [batch_size]
         """
-        # Dynamic feature weighting
+        # Apply dynamic feature weighting
         gate = self.feature_gate(x.mean(dim = 1))
         x = x * gate.unsqueeze(1)
 
-        # Process with LSTM
+        # Process with LSTM to obtain bidirectional output
         lstm_out, _ = self.lstm(x)
         
-        # Temporal attention
+        # Temporal attention:
         if self.use_local_attn:
+            # 调用LocalAttention，将query, key, value均设置为lstm_out
             temporal = self.temporal_attn(lstm_out, lstm_out, lstm_out)
-            temporal = temporal.sum(dim=1)  # 聚合到2D
+            # 聚合沿时间步（例如使用求和或者平均），使得维度变为二维
+            temporal = temporal.sum(dim=1)
+            # 如果希望归一化，可以改为：temporal = temporal.mean(dim=1)
         else:
             temporal = self.temporal_attn(lstm_out)
         
-        # Feature attention over feature dimensions
+        # Feature attention over the feature dimensions
         feature_raw = self.feature_attn(lstm_out.transpose(1, 2))
         feature_raw = feature_raw.squeeze(-1)
         feature = self.feature_proj(feature_raw)
@@ -968,17 +788,91 @@ class EModel_FeatureWeight5(nn.Module):
         
         return output.squeeze(-1)
 
+class EModel_FeatureWeight0(nn.Module):
+
+    def __init__(self,
+                 feature_dim,
+                 window_size=window_size,          # 序列窗口长度
+                 lstm_hidden_size=256,
+                 lstm_num_layers=3,
+                 lstm_dropout=0.1, 
+                ):
+        # ------- 修正父类调用名称 ------- #
+        super(EModel_FeatureWeight0, self).__init__()
+
+        self.feature_dim = feature_dim
+
+        # 1) CNN-FeatureGate（保持不变）
+        self.feature_gate = CNN_FeatureGate(feature_dim, window_size)
+
+        # 2) MLP-Attention
+        self.temporal_attn = Attention(input_dim=2 * lstm_hidden_size)
+
+        # 3) 双向 LSTM 及其初始化（
+        self.lstm = nn.LSTM(
+            input_size=feature_dim,
+            hidden_size=lstm_hidden_size,
+            num_layers=lstm_num_layers,
+            batch_first=True,
+            bidirectional=True,
+            dropout=lstm_dropout if lstm_num_layers > 1 else 0
+        )
+
+        self._init_lstm_weights()
+
+        # 5) 全连接输出层
+        self.fc = nn.Sequential(
+            nn.Linear(2 * lstm_hidden_size, 128),  
+            nn.ReLU(),
+            nn.Dropout(0.1),
+            nn.Linear(128, 2)   # 输出 μ 与 log σ²
+        )
+    
+    def _init_lstm_weights(self):
+        """LSTM权重初始化"""
+        for name, param in self.lstm.named_parameters():
+            if 'weight_ih' in name:
+                nn.init.xavier_uniform_(param.data)
+            elif 'weight_hh' in name:
+                nn.init.orthogonal_(param.data)
+            elif 'bias' in name:
+                param.data.fill_(0)
+                n = param.size(0)
+                param.data[(n // 4):(n // 2)].fill_(1.0)  # 设置遗忘门偏置为1
+                
+    def forward(self, x):
+        """
+        x: [batch, seq_len, feature_dim]
+        """
+        # ---------- 动态特征加权 ---------- #
+        gate = self.feature_gate(x)                # [batch, feature_dim]
+        x = x * gate.unsqueeze(1)                  # [batch, seq_len, feature_dim]
+
+        # ---------- LSTM ---------- #
+        lstm_out, _ = self.lstm(x)                 # [batch, seq_len, 2*hidden]
+
+        # ---------- Temporal Attention ---------- #
+        temporal = self.temporal_attn(lstm_out)    # [batch, 2*hidden]
+
+        mu, logvar = torch.chunk(self.fc(temporal), 2, dim=1)
+
+        # Re-parameterization trick
+        noise   = 0.1 * torch.randn_like(mu) * torch.exp(0.5 * logvar)
+        output  = mu + noise
+        return output.squeeze(-1)
+    
+
 # 5. Evaluation Module
 def evaluate(model, dataloader, criterion, device = device):
     """
     [Evaluation Module]
-    - Compute loss and multiple metrics (RMSE, MAPE, R², SMAPE, MAE) on the given dataset.
+    - Compute loss and multiple metrics (RMSE, MAPE, R², mse, MAE) on the given dataset.
     Parameters:
       model: Model to evaluate
       dataloader: DataLoader for the dataset
       criterion: Loss function
     Returns:
-      val_loss, rmse, mape, r2, smape, mae, preds, labels
+      val_loss, rmse, mape, r2, mse, mae, preds, labels
     """
     model.eval()
     running_loss, num_samples = 0.0, 0
@@ -986,7 +880,7 @@ def evaluate(model, dataloader, criterion, device = device):
 
     with torch.no_grad():
         for batch_inputs, batch_labels in dataloader:
-            batch_inputs  = batch_inputs.to(device)
+            batch_inputs  = batch_inputs.to(device)         
             batch_labels  = batch_labels.to(device)
 
             outputs = model(batch_inputs)
@@ -1017,19 +911,13 @@ def evaluate(model, dataloader, criterion, device = device):
     ss_tot = np.sum((labels_arr - np.mean(labels_arr)) ** 2)
     r2_std = 1 - (ss_res / ss_tot) if ss_tot != 0 else 0.0
 
-    # Compute SMAPE
-    numerator = np.abs(labels_arr - preds_arr)
-    denominator = np.abs(labels_arr) + np.abs(preds_arr)
-    nonzero_mask_smape = (denominator != 0)
-    if np.sum(nonzero_mask_smape) > 0:
-        smape_val = 100.0 * 2.0 * np.mean(numerator[nonzero_mask_smape] / denominator[nonzero_mask_smape])
-    else:
-        smape_val = 0.0
+    # Compute mse
+    mse_val = np.mean((labels_arr - preds_arr) ** 2)
 
     # Compute MAE
     mae_val = np.mean(np.abs(labels_arr - preds_arr))
 
-    return val_loss, rmse_std, mape_std, r2_std, smape_val, mae_val, preds_arr, labels_arr
+    return val_loss, rmse_std, mape_std, r2_std, mse_val, mae_val, preds_arr, labels_arr
 
 
 # 6. Training Module
@@ -1072,14 +960,14 @@ def train_model(model, train_loader, val_loader, model_name = 'Model', learning_
     train_rmse_history   = []
     train_mape_history   = []
     train_r2_history     = []
-    train_smape_history  = []
+    train_mse_history    = []
     train_mae_history    = []
 
     val_loss_history     = []
     val_rmse_history     = []
     val_mape_history     = []
     val_r2_history       = []
-    val_smape_history    = []
+    val_mse_history      = []
     val_mae_history      = []
 
     for epoch in range(num_epochs):
@@ -1106,22 +994,22 @@ def train_model(model, train_loader, val_loader, model_name = 'Model', learning_
         train_loss_epoch = running_loss / num_samples
 
         # Evaluate on training and validation sets
-        train_loss_eval, train_rmse_eval, train_mape_eval, train_r2_eval, train_smape_eval, train_mae_eval, _, _ = evaluate(model, train_loader, criterion)
-        val_loss_eval, val_rmse_eval, val_mape_eval, val_r2_eval, val_smape_eval, val_mae_eval, _, _ = evaluate(model, val_loader, criterion)
+        train_loss_eval, train_rmse_eval, train_mape_eval, train_r2_eval, train_mse_eval, train_mae_eval, _, _ = evaluate(model, train_loader, criterion)
+        val_loss_eval, val_rmse_eval, val_mape_eval, val_r2_eval, val_mse_eval, val_mae_eval, _, _ = evaluate(model, val_loader, criterion)
 
         # Save metric histories
         train_loss_history.append(train_loss_eval)
         train_rmse_history.append(train_rmse_eval)
         train_mape_history.append(train_mape_eval)
         train_r2_history.append(train_r2_eval)
-        train_smape_history.append(train_smape_eval)
+        train_mse_history.append(train_mse_eval)
         train_mae_history.append(train_mae_eval)
 
         val_loss_history.append(val_loss_eval)
         val_rmse_history.append(val_rmse_eval)
         val_mape_history.append(val_mape_eval)
         val_r2_history.append(val_r2_eval)
-        val_smape_history.append(val_smape_eval)
+        val_mse_history.append(val_mse_eval)
         val_mae_history.append(val_mae_eval)
 
         # Print log information
@@ -1131,7 +1019,7 @@ def train_model(model, train_loader, val_loader, model_name = 'Model', learning_
               f"ValRMSE: {val_rmse_eval:.4f}, "
               f"ValMAPE: {val_mape_eval:.2f}%, "
               f"ValR^2: {val_r2_eval:.4f}, "
-              f"ValSMAPE: {val_smape_eval:.2f}%, "
+              f"Valmse: {val_mse_eval:.2f}%, "
               f"ValMAE: {val_mae_eval:.4f}")
 
         # Early Stopping check
@@ -1151,13 +1039,13 @@ def train_model(model, train_loader, val_loader, model_name = 'Model', learning_
         "train_rmse":   train_rmse_history,
         "train_mape":   train_mape_history,
         "train_r2":     train_r2_history,
-        "train_smape":  train_smape_history,
+        "train_mse":  train_mse_history,
         "train_mae":    train_mae_history,
         "val_loss":     val_loss_history,
         "val_rmse":     val_rmse_history,
         "val_mape":     val_mape_history,
         "val_r2":       val_r2_history,
-        "val_smape":    val_smape_history,
+        "val_mse":    val_mse_history,
         "val_mae":      val_mae_history
     }
 
@@ -1213,9 +1101,8 @@ def analyze_target_distribution(data_df, target_col):
     print(f"\n[Target Analysis] Basic statistics for '{target_col}':")
     print(data_df[target_col].describe())
 
-    plt.figure(figsize = (6, 4))
+    plt.figure(figsize = (6, 4)) 
     plt.hist(data_df[target_col], bins = 30, color = 'skyblue', edgecolor = 'black')
-    plt.title(f"'{target_col}' Original Distribution")
     plt.xlabel(target_col)
     plt.ylabel("Frequency")
     plt.grid(True)
@@ -1232,35 +1119,39 @@ def plot_Egrid_over_time(data_df):
     plt.figure(figsize = (10, 5))
     plt.plot(data_df['timestamp'], data_df['E_grid'], color = 'blue', marker = 'o', markersize = 3, linewidth = 1)
     plt.xlabel('Timestamp')
-    plt.ylabel('E_grid')
-    plt.title('E_grid Over Time (Full Dataset)')
+    plt.ylabel('E_grid (kW·h)')
     plt.grid(True)
     plt.tight_layout()
     plt.show()
 
-def plot_predictions_comparison(y_actual_real, predictions_dict, colors=None, timestamps=None):
-
-    plt.figure(figsize = (14, 6))
-    x_axis = np.arange(len(y_actual_real))
-
-    plt.plot(x_axis, y_actual_real, 'black', label='Actual', linewidth=2, alpha=0.8)
-
-    colors = ['#FFF3CE', '#D6E9D5', '#FAD8D4', '#AFE3E6', '#D9E8FC']
-    for (model_name, pred_values), color in zip(predictions_dict.items(), colors):
-        plt.plot(x_axis, pred_values, color=color, label=model_name, linewidth=1.5, linestyle='--', alpha=0.9)
-
-    plt.xlabel('Timestamp')
-    plt.ylabel('E_grid Value')
+def plot_predictions_comparison(y_actual_real, predictions_dict, timestamps):
+    plt.figure(figsize=(14, 6))
+    if timestamps is not None:
+        x_axis = pd.to_datetime(timestamps)  
+    else:
+        x_axis = np.arange(len(y_actual_real))
+    plt.plot(x_axis, y_actual_real, 'black', label='Actual', linewidth=1.2, alpha=1)
+    
+    colors = ['green', 'blue']
+    
+    # 为每个模型的预测绘制曲线
+    for i, (model_name, pred_values) in enumerate(predictions_dict.items()):
+        color = colors[i % len(colors)]  
+        plt.plot(x_axis, pred_values, color=color, label=model_name, linewidth=0.9, linestyle='-', alpha=0.9)
+    
+    plt.xlabel('Timestamp of TrainValue')
+    plt.ylabel('Grid Energy Compensation Value (kW·h)')
     plt.legend()
     plt.grid(True)
     plt.tight_layout()
+    plt.xticks(rotation=45)   # 让时间轴标签斜着显示
     plt.show()
 
 
 def plot_training_curves_allmetrics(hist_dict, model_name = 'Model'):
     """
     [Visualization Module - Training Curves]
-    - Plot training and validation curves for Loss, RMSE, MAPE, R², SMAPE, and MAE.
+    - Plot training and validation curves for Loss, RMSE, MAPE, R², mse, and MAE.
     Parameters:
       hist_dict: Dictionary containing metric histories
       model_name: Model name (default: 'Model')
@@ -1308,13 +1199,13 @@ def plot_training_curves_allmetrics(hist_dict, model_name = 'Model'):
     plt.legend()
     plt.grid(True)
 
-    # SMAPE curve
+    # mse curve
     plt.subplot(3, 2, 5)
-    plt.plot(epochs, hist_dict["train_smape"], 'r-o', label = 'Train SMAPE', markersize = 4)
-    plt.plot(epochs, hist_dict["val_smape"], 'b-o', label = 'Val SMAPE', markersize = 4)
+    plt.plot(epochs, hist_dict["train_mse"], 'r-o', label = 'Train mse', markersize = 4)
+    plt.plot(epochs, hist_dict["val_mse"], 'b-o', label = 'Val mse', markersize = 4)
     plt.xlabel('Epoch')
-    plt.ylabel('SMAPE (%)')
-    plt.title('SMAPE')
+    plt.ylabel('mse (%)')
+    plt.title('mse')
     plt.legend()
     plt.grid(True)
 
@@ -1338,16 +1229,264 @@ def plot_dataset_distribution(timestamps, title):
     - Plot the time distribution of the dataset based on timestamps.
     Parameters:
       timestamps: Timestamps of the dataset
-      title: Title for the plot
     """
     plt.figure(figsize = (10, 4))
     plt.hist(pd.to_datetime(timestamps), bins = 50, color = 'skyblue', edgecolor = 'black')
-    plt.title(f'{title} - Time Distribution')
     plt.xlabel('Timestamp')
     plt.ylabel('Count')
     plt.grid(axis = 'y')
     plt.tight_layout()
     plt.show()
+
+# 添加新函数计算特征重要性
+def calculate_feature_importance(data_df, feature_cols, target_col):
+    """
+    计算特征与目标变量间的相关性，获取特征重要性权重
+    
+    参数:
+        data_df: 数据DataFrame
+        feature_cols: 特征列名称列表
+        target_col: 目标变量列名称
+        
+    返回:
+        特征重要性权重（绝对值相关系数）numpy数组
+    """
+    # 复制数据以避免修改原始数据
+    df_encoded = data_df.copy()
+    
+    # 初始化特征重要性数组
+    feature_importance = np.ones(len(feature_cols))
+    
+    # 计算每个特征与目标变量的Pearson相关系数
+    for i, col in enumerate(feature_cols):
+        # 确保特征列和目标列是数值型
+        if df_encoded[col].dtype == 'object':
+            le = LabelEncoder()
+            df_encoded[col] = le.fit_transform(df_encoded[col].astype(str))
+        
+        # 计算Pearson相关系数
+        corr = df_encoded[col].corr(df_encoded[target_col])
+        
+        # 使用相关系数的绝对值作为重要性
+        feature_importance[i] = abs(corr)
+    
+    # 确保没有零值（设置最小值为0.1）
+    feature_importance = np.maximum(feature_importance, 0.1)
+    
+    # 归一化，使最大值为1
+    if np.max(feature_importance) > 0:
+        feature_importance = feature_importance / np.max(feature_importance)
+    
+    # 打印特征重要性信息
+    importance_info = [(feature_cols[i], importance) for i, importance in enumerate(feature_importance)]
+    importance_info.sort(key=lambda x: x[1], reverse=True)
+    
+    print("\n基于Pearson相关系数的特征对E_grid影响度（线性相关性）：")
+    for feature, importance in importance_info:
+        print(f"{feature}: {importance:.4f}")
+    
+    return feature_importance
+
+# 基于 Maximum Information Coefficient (MIC) 的特征重要性计算
+# ------------------------------------------------------------------
+def calculate_feature_importance_mic(data_df, feature_cols, target_col):
+    """
+    使用 MIC 计算特征重要性，返回 0~1 归一化后的权重数组。
+    需要安装 minepy:  pip install minepy
+    """
+    from minepy import MINE
+    df_encoded = data_df.copy()
+    mic_importance = np.ones(len(feature_cols), dtype=np.float32)
+
+    mine = MINE(alpha=0.6, c=15)                 # 官方推荐参数
+    for i, col in enumerate(feature_cols):
+        # 类别型特征先标签编码
+        if df_encoded[col].dtype == 'object':
+            le = LabelEncoder()
+            df_encoded[col] = le.fit_transform(df_encoded[col].astype(str))
+
+        x = df_encoded[col].values
+        y = df_encoded[target_col].values
+
+        mine.compute_score(x, y)
+        mic_val = mine.mic()
+        mic_importance[i] = max(mic_val, 0.1)     # 最小 0.1，避免 0
+
+    # 归一化到 0~1
+    mic_importance /= mic_importance.max()
+
+    # 输出排序结果
+    ranking = sorted(zip(feature_cols, mic_importance),
+                     key=lambda z: z[1], reverse=True)
+    print("\n基于MIC的特征对E_grid影响度（线性+非线性相关性）：")
+    for feat, score in ranking:
+        print(f"{feat}: {score:.4f}")
+
+    return mic_importance
+
+
+def plot_predictions_date_range(y_actual_real, predictions_dict, timestamps, start_date, end_date, title=""):
+    """
+    Plot predictions for a specific date range.
+    
+    Parameters
+    ----------
+    y_actual_real : np.ndarray
+        Ground-truth values in original scale.
+    predictions_dict : Dict[str, np.ndarray]
+        Mapping of model name to its prediction array.
+    timestamps : array-like
+        Corresponding timestamps.
+    start_date : str
+        Start date in format 'YYYY-MM-DD'
+    end_date : str
+        End date in format 'YYYY-MM-DD'
+    """
+    # Convert timestamps to pandas DatetimeIndex
+    time_index = pd.to_datetime(timestamps)
+    
+    # 自定义模型颜色映射（由浅到深的蓝色 + 红色）
+    model_colors = {
+        'Model0': '#00008B',   # dark blue
+        'Model1': '#ADD8E6',   # light blue
+        'Model2': '#6495ED',   # cornflower blue
+        'Model3': '#1E90FF',   # dodger blue
+        'Model4': 'red'
+    }
+    
+    model_styles = {
+        'Model0': ':',
+        'Model1': '-',
+        'Model2': '--',
+        'Model3': '-.',
+        'Model4': (0, (3, 1, 1, 1))
+    }
+    # Create mask for date range
+    start = pd.to_datetime(start_date)
+    end = pd.to_datetime(end_date)
+    mask = (time_index >= start) & (time_index <= end)
+    
+    if mask.sum() < 2:
+        print(f"[Warning] Not enough samples in date range {start_date} to {end_date}")
+        return
+    
+    # Plot
+    plt.figure(figsize=(14, 6))
+    plt.plot(time_index[mask], y_actual_real[mask], 
+             label='Actual', color='black', linewidth=1.5)
+    
+    for model_name, preds in predictions_dict.items():
+        color = model_colors.get(model_name, '#808080')
+        ls = model_styles.get(model_name, '-')
+        plt.plot(time_index[mask], preds[mask], 
+                 label=model_name, color=color, linewidth=1.8, alpha=1, linestyle=ls)
+    
+    plt.xlabel('Timestamp')
+    plt.ylabel('Grid Energy Compensation Value (kW·h)')
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.xticks(rotation=45)
+    
+    # Add y-axis major locator for better readability
+    ax = plt.gca()
+    ax.yaxis.set_major_locator(ticker.MultipleLocator(20000))
+    
+    plt.show()
+
+def plot_value_and_error_histograms(y_actual_real, predictions_dict, bins=30):
+    """
+    Draw histograms of (1) actual value distribution and (2) prediction error distribution.
+
+    Prediction error is defined as ``prediction – actual``.
+    One histogram per model is overlayed for error distribution.
+    """
+    plt.figure(figsize=(14, 5))
+
+    # -------- Histogram of actual values -------- #
+    plt.subplot(1, 2, 1)
+    plt.hist(y_actual_real, bins=bins, color='skyblue', edgecolor='black')
+    plt.xlabel('Grid Energy Compensation Value (kW·h)')
+    plt.ylabel('Frequency')
+    plt.grid(True, axis='y')
+
+    # -------- Histogram of prediction errors -------- #
+    plt.subplot(1, 2, 2)
+    colors = mpl.cm.tab10.colors
+    for i, (model_name, preds) in enumerate(predictions_dict.items()):
+        errors = preds - y_actual_real
+        plt.hist(errors, bins=bins, alpha=0.5, label=model_name, color=colors[i % len(colors)], edgecolor='black')
+
+    plt.xlim(-20000, 20000)
+    plt.xlabel('Prediction Error (kW·h)')
+    plt.ylabel('Frequency')
+    plt.legend()
+    plt.grid(True, axis='y')
+
+    plt.tight_layout()
+    plt.show()
+
+def plot_error_max_curve(y_actual_real,
+                         predictions_dict,
+                         bins: int = 30,
+                         smooth_sigma: float = 1.0):
+    """
+    为 predictions_dict 中的每个模型绘制一条曲线：
+    曲线上的点来自该模型误差直方图每个 bin 的最高计数，
+    再经高斯平滑后连接而成。
+
+    参数
+    ----
+    y_actual_real : ndarray
+        真实值（原始尺度）。
+    predictions_dict : Dict[str, ndarray]
+        {'模型名': 预测值}。
+    bins : int
+        直方图分箱数量（应与直方图保持一致）。
+    smooth_sigma : float
+        高斯平滑 σ；设为 0 可关闭平滑。
+    """
+    from scipy.ndimage import gaussian_filter1d
+
+    # -------- 1. 计算各模型直方图计数 -------- #
+    bin_edges = None
+    model_curves = {}
+    for model_name, preds in predictions_dict.items():
+        errors = preds - y_actual_real
+        counts, edges = np.histogram(errors, bins=bins)
+        model_curves[model_name] = counts          # 每个 bin 的最高点即计数
+        if bin_edges is None:
+            bin_edges = edges                      # 记录一次 bin 边界
+
+    bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
+
+    # -------- 2. 绘制顺滑曲线 -------- #
+    plt.figure(figsize=(10, 5))
+    colors = mpl.cm.tab10.colors
+    line_styles = ['-', '--', '-.', ':',(0, (3, 1, 1, 1))]
+    marker_styles = ['^', 's', 'o', 'h', 'p']
+    for i, (model_name, counts) in enumerate(model_curves.items()):
+        curve = (gaussian_filter1d(counts.astype(float), sigma=smooth_sigma)
+                 if smooth_sigma > 0 else counts)
+        plt.plot(bin_centers,
+                 curve,
+                 label=model_name,
+                 color=colors[i % len(colors)],
+                 linewidth=2,  
+                 marker=marker_styles[i % len(marker_styles)],
+                 linestyle=line_styles[i % len(line_styles)],
+                 markersize = 10)
+
+    # -------- 3. 图形美化 -------- #
+    #plt.title('Smoothed Histogram Curves of Prediction Errors')
+    plt.xlim(-20000, 20000)
+    plt.xlabel('Prediction Error (kW·h)')
+    plt.ylabel('Frequency')
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show()
+
 
 # 8. Main Function
 def main(use_log_transform = True, min_egrid_threshold = 1.0):
@@ -1358,7 +1497,7 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
       use_log_transform: Whether to apply logarithmic transformation to target values (True/False)
       min_egrid_threshold: Minimum threshold for E_grid, filter out values below this (default: 1.0)
     """
-    print("[Info] 1) Loading raw data...")
+    print("Loading raw data...")
     data_df = load_data()
 
     # Plot correlation heatmap (before filtering E_grid = 0)
@@ -1372,6 +1511,34 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
 
     # Feature engineering (without standardization to avoid data leakage)
     data_df, feature_cols, target_col = feature_engineering(data_df)
+    
+    # ------------- 计算特征重要性 -------------
+    pearson_importance = calculate_feature_importance(
+        data_df, feature_cols, target_col)
+
+    mic_importance = calculate_feature_importance_mic(
+        data_df, feature_cols, target_col)
+
+    # 0.5*Pearson + 0.5*MIC 加权平均
+    combined_importance = 0.5 * pearson_importance + 0.5 * mic_importance
+
+    # 打印三列对比
+    print("\n========== 特征对 E_grid 的影响因子分析 ==========")
+    print("注：Pearson衡量线性相关性，MIC衡量线性+非线性相关性")
+    print("影响因子范围: 0~1 (越接近1表示该特征对E_grid影响越大)")
+    print("-" * 85)
+    print(f"{'特征名称':>25} | {'Pearson系数':>12} | {'MIC系数':>12} | {'综合影响因子':>12}")
+    print("-" * 85)
+    for feat, p_val, m_val, c_val in zip(feature_cols, pearson_importance, mic_importance, combined_importance):
+        # 处理NaN值的显示
+        p_str = f"{p_val:.4f}" if not np.isnan(p_val) else "N/A"
+        m_str = f"{m_val:.4f}" if not np.isnan(m_val) else "N/A"
+        c_str = f"{c_val:.4f}" if not np.isnan(c_val) else "N/A"
+        print(f"{feat:>25} | {p_str:>12} | {m_str:>12} | {c_str:>12}")
+    print("-" * 85) 
+
+    # 后续模型使用 combined_importance
+    feature_importance = combined_importance
 
     # Filter out small E_grid values
     data_df = data_df[data_df[target_col] > min_egrid_threshold].copy()
@@ -1436,48 +1603,56 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
 
     # Build models
     feature_dim = X_train_seq.shape[-1]
+
+    model0 = EModel_FeatureWeight0(
+        feature_dim       = feature_dim,
+        lstm_hidden_size  = 256, 
+        lstm_num_layers   = 3,
+        lstm_dropout      = 0.1
+    ).to(device)
+
     model1 = EModel_FeatureWeight1(
         feature_dim       = feature_dim,
-        lstm_hidden_size  = 128, 
+        lstm_hidden_size  = 256, 
         lstm_num_layers   = 2,
         lstm_dropout      = 0.2
     ).to(device)
     
     model2 = EModel_FeatureWeight2(
         feature_dim       = feature_dim,
-        lstm_hidden_size  = 128, 
+        lstm_hidden_size  = 256, 
         lstm_num_layers   = 2,
-        lstm_dropout      = 0.2
-    ).to(device)
-
-    model21 = EModel_FeatureWeight21(
-        feature_dim       = feature_dim,
-        lstm_hidden_size  = 512, 
-        lstm_num_layers   = 4,
         lstm_dropout      = 0.2
     ).to(device)
 
     model3 = EModel_FeatureWeight3(
         feature_dim       = feature_dim,
-        lstm_hidden_size  = 256, 
-        lstm_num_layers   = 4,
-        lstm_dropout      = 0.2
+        gru_hidden_size   = 128,  # 固定为10个隐藏层节点
+        gru_num_layers    = 2, 
+        gru_dropout       = 0.2,
+        use_local_attn    = True,
+        local_attn_window_size = 5
     ).to(device)
 
     model4 = EModel_FeatureWeight4(
         feature_dim       = feature_dim,
         lstm_hidden_size  = 256, 
-        lstm_num_layers   = 3,
-        lstm_dropout      = 0.1
+        lstm_num_layers   = 2,
+        lstm_dropout      = 0.1,
+        feature_importance = feature_importance  # 使用加权后的特征重要性
     ).to(device)
 
-    model5 = EModel_FeatureWeight5(
-        feature_dim       = feature_dim,
-        lstm_hidden_size  = 256, 
-        lstm_num_layers   = 3,
-        lstm_dropout      = 0.1
-    ).to(device)
-
+    # Train Model: EModel_FeatureWeight0
+    print("\n========== Training Model: 0 ==========")
+    hist0 = train_model(
+        model         = model0,
+        train_loader  = train_loader,
+        val_loader    = val_loader,
+        model_name    = 'EModel_FeatureWeight0',
+        learning_rate = learning_rate,
+        weight_decay  = weight_decay,
+        num_epochs    = num_epochs
+    )
     # Train Model: EModel_FeatureWeight1
     print("\n========== Training Model: 1 ==========")
     hist1 = train_model(
@@ -1496,17 +1671,6 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
         train_loader  = train_loader,
         val_loader    = val_loader,
         model_name    = 'EModel_FeatureWeight2',
-        learning_rate = learning_rate,
-        weight_decay  = weight_decay,
-        num_epochs    = num_epochs
-    )
-
-    print("\n========== Training Model: 21 ==========")
-    hist21 = train_model(
-        model         = model21,
-        train_loader  = train_loader,
-        val_loader    = val_loader,
-        model_name    = 'EModel_FeatureWeight21',
         learning_rate = learning_rate,
         weight_decay  = weight_decay,
         num_epochs    = num_epochs
@@ -1534,134 +1698,176 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
         weight_decay  = weight_decay,
         num_epochs    = num_epochs
     )
-    # Train Model: EModel_FeatureWeight5
-    print("\n========== Training Model: 5 ==========")
-    hist5 = train_model(
-        model         = model5,
-        train_loader  = train_loader,
-        val_loader    = val_loader,
-        model_name    = 'EModel_FeatureWeight5',
-        learning_rate = learning_rate,
-        weight_decay  = weight_decay,
-        num_epochs    = num_epochs
-    )
 
     # 修改加载模型部分的代码
+    best_model0 = EModel_FeatureWeight0(
+        feature_dim       = feature_dim,
+        lstm_hidden_size  = 256, 
+        lstm_num_layers   = 3
+    ).to(device)
+    best_model0.load_state_dict(torch.load('best_EModel_FeatureWeight0.pth', map_location=device, weights_only=True), strict=False)
+
     best_model1 = EModel_FeatureWeight1(
         feature_dim       = feature_dim,
-        lstm_hidden_size  = 128, 
+        lstm_hidden_size  = 256, 
         lstm_num_layers   = 2
     ).to(device)
     best_model1.load_state_dict(torch.load('best_EModel_FeatureWeight1.pth', map_location=device, weights_only=True), strict=False)
 
     best_model2 = EModel_FeatureWeight2(
         feature_dim       = feature_dim,
-        lstm_hidden_size  = 128, 
+        lstm_hidden_size  = 256, 
         lstm_num_layers   = 2
     ).to(device)
     best_model2.load_state_dict(torch.load('best_EModel_FeatureWeight2.pth', map_location=device, weights_only=True), strict=False)
 
-    best_model21 = EModel_FeatureWeight21(
-        feature_dim       = feature_dim,
-        lstm_hidden_size  = 512, 
-        lstm_num_layers   = 4
-    ).to(device)
-    best_model21.load_state_dict(torch.load('best_EModel_FeatureWeight21.pth', map_location=device, weights_only=True), strict=False)
-
     best_model3 = EModel_FeatureWeight3(
         feature_dim       = feature_dim,
-        lstm_hidden_size  = 256, 
-        lstm_num_layers   = 4
+        gru_hidden_size   = 128,  # 固定为10个隐藏层节点
+        gru_num_layers    = 2
     ).to(device)
     best_model3.load_state_dict(torch.load('best_EModel_FeatureWeight3.pth', map_location=device, weights_only=True), strict=False)
     
     best_model4 = EModel_FeatureWeight4(
         feature_dim       = feature_dim,
         lstm_hidden_size  = 256, 
-        lstm_num_layers   = 3
+        lstm_num_layers   = 2
     ).to(device)
     best_model4.load_state_dict(torch.load('best_EModel_FeatureWeight4.pth', map_location=device, weights_only=True), strict=False)
 
-    best_model5 = EModel_FeatureWeight5(
-        feature_dim       = feature_dim,
-        lstm_hidden_size  = 256, 
-        lstm_num_layers   = 3
-    ).to(device)
-    best_model5.load_state_dict(torch.load('best_EModel_FeatureWeight5.pth', map_location=device, weights_only=True), strict=False)
-
     # Evaluate on test set (standardized domain)
     criterion_test = nn.SmoothL1Loss(beta = 1.0)
-    (_, test_rmse1_std, test_mape1_std, test_r21_std, test_smape1_std, test_mae1_std, preds1_std, labels1_std) = evaluate(best_model1, test_loader, criterion_test)
-    (_, test_rmse2_std, test_mape2_std, test_r22_std, test_smape2_std, test_mae2_std, preds2_std, labels2_std) = evaluate(best_model2, test_loader, criterion_test)
-    (_, test_rmse21_std, test_mape21_std, test_r221_std, test_smape21_std, test_mae21_std, preds21_std, labels21_std) = evaluate(best_model21, test_loader, criterion_test)
-    (_, test_rmse3_std, test_mape3_std, test_r23_std, test_smape3_std, test_mae3_std, preds3_std, labels3_std) = evaluate(best_model3, test_loader, criterion_test)
-    (_, test_rmse4_std, test_mape4_std, test_r24_std, test_smape4_std, test_mae4_std, preds4_std, labels4_std) = evaluate(best_model4, test_loader, criterion_test)
-    (_, test_rmse5_std, test_mape5_std, test_r25_std, test_smape5_std, test_mae5_std, preds5_std, labels5_std) = evaluate(best_model5, test_loader, criterion_test)
+    (_, test_rmse0_std, test_mape0_std, test_r20_std, test_mse0_std, test_mae0_std, preds0_std, labels0_std) = evaluate(best_model0, test_loader, criterion_test)
+    (_, test_rmse1_std, test_mape1_std, test_r21_std, test_mse1_std, test_mae1_std, preds1_std, labels1_std) = evaluate(best_model1, test_loader, criterion_test)
+    (_, test_rmse2_std, test_mape2_std, test_r22_std, test_mse2_std, test_mae2_std, preds2_std, labels2_std) = evaluate(best_model2, test_loader, criterion_test)
+    (_, test_rmse3_std, test_mape3_std, test_r23_std, test_mse3_std, test_mae3_std, preds3_std, labels3_std) = evaluate(best_model3, test_loader, criterion_test)
+    (_, test_rmse4_std, test_mape4_std, test_r24_std, test_mse4_std, test_mae4_std, preds4_std, labels4_std) = evaluate(best_model4, test_loader, criterion_test)
 
     print("\n========== [Test Set Evaluation (Standardized Domain)] ==========")
-    print(f"[EModel_FeatureWeight1]  RMSE: {test_rmse1_std:.4f}, MAPE: {test_mape1_std:.2f}%, R²: {test_r21_std:.4f}, SMAPE: {test_smape1_std:.2f}%, MAE: {test_mae1_std:.4f}")
-    print(f"[EModel_FeatureWeight2]  RMSE: {test_rmse2_std:.4f}, MAPE: {test_mape2_std:.2f}%, R²: {test_r22_std:.4f}, SMAPE: {test_smape2_std:.2f}%, MAE: {test_mae2_std:.4f}")
-    print(f"[EModel_FeatureWeight21]  RMSE: {test_rmse21_std:.4f}, MAPE: {test_mape21_std:.2f}%, R²: {test_r221_std:.4f}, SMAPE: {test_smape21_std:.2f}%, MAE: {test_mae21_std:.4f}")
-    print(f"[EModel_FeatureWeight3]  RMSE: {test_rmse3_std:.4f}, MAPE: {test_mape3_std:.2f}%, R²: {test_r23_std:.4f}, SMAPE: {test_smape3_std:.2f}%, MAE: {test_mae3_std:.4f}")
-    print(f"[EModel_FeatureWeight4]  RMSE: {test_rmse4_std:.4f}, MAPE: {test_mape4_std:.2f}%, R²: {test_r24_std:.4f}, SMAPE: {test_smape4_std:.2f}%, MAE: {test_mae4_std:.4f}")
-    print(f"[EModel_FeatureWeight5]  RMSE: {test_rmse5_std:.4f}, MAPE: {test_mape5_std:.2f}%, R²: {test_r25_std:.4f}, SMAPE: {test_smape5_std:.2f}%, MAE: {test_mae5_std:.4f}")
+    print(f"[EModel_FeatureWeight0]  RMSE: {test_rmse0_std:.4f}, MAPE: {test_mape0_std:.2f}%, R²: {test_r20_std:.4f}, mse: {test_mse0_std:.2f}%, MAE: {test_mae0_std:.4f}")
+    print(f"[EModel_FeatureWeight1]  RMSE: {test_rmse1_std:.4f}, MAPE: {test_mape1_std:.2f}%, R²: {test_r21_std:.4f}, mse: {test_mse1_std:.2f}%, MAE: {test_mae1_std:.4f}")
+    print(f"[EModel_FeatureWeight2]  RMSE: {test_rmse2_std:.4f}, MAPE: {test_mape2_std:.2f}%, R²: {test_r22_std:.4f}, mse: {test_mse2_std:.2f}%, MAE: {test_mae2_std:.4f}")
+    print(f"[EModel_FeatureWeight3]  RMSE: {test_rmse3_std:.4f}, MAPE: {test_mape3_std:.2f}%, R²: {test_r23_std:.4f}, mse: {test_mse3_std:.2f}%, MAE: {test_mae3_std:.4f}")
+    print(f"[EModel_FeatureWeight4]  RMSE: {test_rmse4_std:.4f}, MAPE: {test_mape4_std:.2f}%, R²: {test_r24_std:.4f}, mse: {test_mse4_std:.2f}%, MAE: {test_mae4_std:.4f}")
 
     # Inverse standardization and (optionally) inverse logarithmic transformation
+    preds0_real_std = scaler_y.inverse_transform(preds0_std.reshape(-1, 1)).ravel()
     preds1_real_std = scaler_y.inverse_transform(preds1_std.reshape(-1, 1)).ravel()
     preds2_real_std = scaler_y.inverse_transform(preds2_std.reshape(-1, 1)).ravel()
-    preds21_real_std = scaler_y.inverse_transform(preds21_std.reshape(-1, 1)).ravel()
     preds3_real_std = scaler_y.inverse_transform(preds3_std.reshape(-1, 1)).ravel()
     preds4_real_std = scaler_y.inverse_transform(preds4_std.reshape(-1, 1)).ravel()
-    preds5_real_std = scaler_y.inverse_transform(preds5_std.reshape(-1, 1)).ravel()
+    labels0_real_std = scaler_y.inverse_transform(labels0_std.reshape(-1, 1)).ravel()
     labels1_real_std = scaler_y.inverse_transform(labels1_std.reshape(-1, 1)).ravel()
     labels2_real_std = scaler_y.inverse_transform(labels2_std.reshape(-1, 1)).ravel()
-    labels21_real_std = scaler_y.inverse_transform(labels21_std.reshape(-1, 1)).ravel()
     labels3_real_std = scaler_y.inverse_transform(labels3_std.reshape(-1, 1)).ravel()
     labels4_real_std = scaler_y.inverse_transform(labels4_std.reshape(-1, 1)).ravel()
-    labels5_real_std = scaler_y.inverse_transform(labels5_std.reshape(-1, 1)).ravel()
 
     if use_log_transform:
+        preds0_real = np.expm1(preds0_real_std)
         preds1_real = np.expm1(preds1_real_std)
         preds2_real = np.expm1(preds2_real_std)
-        preds21_real = np.expm1(preds21_real_std)
         preds3_real = np.expm1(preds3_real_std)
         preds4_real = np.expm1(preds4_real_std)
-        preds5_real = np.expm1(preds5_real_std)
+        labels0_real = np.expm1(labels0_real_std)
         labels1_real = np.expm1(labels1_real_std)
         labels2_real = np.expm1(labels2_real_std)
-        labels21_real = np.expm1(labels21_real_std)
         labels3_real = np.expm1(labels3_real_std)
         labels4_real = np.expm1(labels4_real_std)
-        labels5_real = np.expm1(labels5_real_std)
     else:
+        preds0_real = preds0_real_std
         preds1_real = preds1_real_std
         preds2_real = preds2_real_std
-        preds21_real = preds21_real_std
         preds3_real = preds3_real_std
         preds4_real = preds4_real_std
-        preds5_real = preds5_real_std
+        labels0_real = labels0_real_std
         labels1_real = labels1_real_std
         labels2_real = labels2_real_std
-        labels21_real = labels21_real_std
         labels3_real = labels3_real_std
         labels4_real = labels4_real_std
-        labels5_real = labels5_real_std
 
     # Compute RMSE in original domain
+    test_rmse0_real = np.sqrt(mean_squared_error(labels0_real, preds0_real))
     test_rmse1_real = np.sqrt(mean_squared_error(labels1_real, preds1_real))
     test_rmse2_real = np.sqrt(mean_squared_error(labels2_real, preds2_real))
-    test_rmse21_real = np.sqrt(mean_squared_error(labels21_real, preds21_real))
     test_rmse3_real = np.sqrt(mean_squared_error(labels3_real, preds3_real))
     test_rmse4_real = np.sqrt(mean_squared_error(labels4_real, preds4_real))
-    test_rmse5_real = np.sqrt(mean_squared_error(labels5_real, preds5_real))
+
+    # 使用 Model4 与其他模型对比，生成全长与缩放窗口图，以及分布直方图
+    for m_name, m_preds in [
+        ('Model0', preds0_real),
+        ('Model1', preds1_real),
+        ('Model2', preds2_real),
+        ('Model3', preds3_real),
+        ('Model4', preds4_real)
+    ]:
+        pair_preds = {'Model4': preds4_real, m_name: m_preds}
+        
+        plot_value_and_error_histograms(
+            y_actual_real = labels4_real,
+            predictions_dict = pair_preds,
+            bins = 30
+        )
+
+    all_model_preds = {
+        'Model0': preds0_real,
+        'Model1': preds1_real,
+        'Model2': preds2_real,
+        'Model3': preds3_real,
+        'Model4': preds4_real
+        
+    }
+
+    # 使用 Model4 与其他模型对比，生成全长与缩放窗口图，以及分布直方图
+    primary_preds = {'Model4': preds4_real, 'Model0': preds0_real}
+
+    # 绘制两个时间段的图表
+    plot_predictions_date_range(
+        y_actual_real = labels4_real,
+        predictions_dict = primary_preds,
+        timestamps = test_timestamps,
+        start_date = '2024-11-25',
+        end_date = '2024-12-13'
+    )
+
+    plot_predictions_date_range(
+        y_actual_real = labels4_real,
+        predictions_dict = primary_preds,
+        timestamps = test_timestamps,
+        start_date = '2024-12-13',
+        end_date = '2025-01-01'
+    )
+
+    # 绘制两个时间段的图表（所有模型）
+    plot_predictions_date_range(
+        y_actual_real = labels4_real,
+        predictions_dict = all_model_preds,
+        timestamps = test_timestamps,
+        start_date = '2024-11-25',
+        end_date = '2024-12-13'
+    )
+
+    plot_predictions_date_range(
+        y_actual_real = labels4_real,
+        predictions_dict = all_model_preds,
+        timestamps = test_timestamps,
+        start_date = '2024-12-13',
+        end_date = '2025-01-01'
+    )
+
+    plot_error_max_curve(
+        y_actual_real = labels4_real,
+        predictions_dict = primary_preds,
+        bins = 30,
+        smooth_sigma = 1.0
+    )
+    print("[Info] Processing complete!")
 
     print("\n========== [Test Set Evaluation (Original Domain)] ==========")
+    print(f"[EModel_FeatureWeight0] => RMSE (original): {test_rmse0_real:.2f}")
     print(f"[EModel_FeatureWeight1] => RMSE (original): {test_rmse1_real:.2f}")
     print(f"[EModel_FeatureWeight2] => RMSE (original): {test_rmse2_real:.2f}")
-    print(f"[EModel_FeatureWeight21] => RMSE (original): {test_rmse21_real:.2f}")
     print(f"[EModel_FeatureWeight3] => RMSE (original): {test_rmse3_real:.2f}")
     print(f"[EModel_FeatureWeight4] => RMSE (original): {test_rmse4_real:.2f}")
-    print(f"[EModel_FeatureWeight5] => RMSE (original): {test_rmse5_real:.2f}")
 
     # Dataset statistics
     print(f"\n[Dataset Statistics] Total samples: {total_samples}")
@@ -1674,28 +1880,42 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     plot_dataset_distribution(val_timestamps, 'Validation Set')
     plot_dataset_distribution(test_timestamps, 'Test Set')
 
-    predictions_dict = {
-    'Model1': preds1_real,
-    'Model2': preds2_real,
-    'Model21': preds21_real,
-    'Model3': preds3_real,
-    'Model4': preds4_real,
-    'Model5': preds5_real
-    }
-    # 使用增强版可视化函数
-    plot_predictions_comparison(
-        y_actual_real=labels1_real,
-        predictions_dict=predictions_dict,
-        timestamps=train_timestamps  # 训练集对应的时间戳
+    # ----------------- 1) 五个模型整体对比 -----------------
+
+    plot_value_and_error_histograms(
+        y_actual_real = labels4_real,
+        predictions_dict = all_model_preds,
+        bins = 30
     )
 
-    # Plot training curves for various metrics
+    plot_error_max_curve(
+        y_actual_real = labels4_real,
+        predictions_dict = all_model_preds,  # 或 primary_preds
+        bins = 30,
+        smooth_sigma = 1.0
+    )
+
+    # ----------------- 2) 与 Model4 的两两对比 -----------------
+    # 可读性更高，用循环依次绘制
+    for m_name, m_preds in [
+                            ('Model0', preds0_real),
+                            ('Model1', preds1_real),
+                            ('Model2', preds2_real),
+                            ('Model3', preds3_real),
+                            ('Model4', preds4_real)
+                            ]:   # 追加 Model0
+        plot_predictions_comparison(
+            y_actual_real = labels4_real,
+            predictions_dict = {'Model4': preds4_real, m_name: m_preds},
+            timestamps = test_timestamps
+        )
+
+    # ----------------- 3) 训练曲线 -----------------
+    plot_training_curves_allmetrics(hist0, model_name = 'EModel_FeatureWeight0')
     plot_training_curves_allmetrics(hist1, model_name = 'EModel_FeatureWeight1')
     plot_training_curves_allmetrics(hist2, model_name = 'EModel_FeatureWeight2')
-    plot_training_curves_allmetrics(hist21, model_name = 'EModel_FeatureWeight21')
     plot_training_curves_allmetrics(hist3, model_name = 'EModel_FeatureWeight3')
     plot_training_curves_allmetrics(hist4, model_name = 'EModel_FeatureWeight4')
-    plot_training_curves_allmetrics(hist5, model_name = 'EModel_FeatureWeight5')
 
     print("[Info] Processing complete!")
 

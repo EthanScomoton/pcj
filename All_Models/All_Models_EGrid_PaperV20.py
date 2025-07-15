@@ -795,7 +795,7 @@ class EModel_FeatureWeight5(nn.Module):
                  window_size=window_size,          # 序列窗口长度
                  lstm_hidden_size=256,
                  lstm_num_layers=2,
-                 lstm_dropout=0.1, 
+                 lstm_dropout=0.2, 
                 ):
         # ------- 修正父类调用名称 ------- #
         super(EModel_FeatureWeight5, self).__init__()
@@ -1676,7 +1676,7 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
         feature_dim       = feature_dim,
         lstm_hidden_size  = 256, 
         lstm_num_layers   = 2,
-        lstm_dropout      = 0.1
+        lstm_dropout      = 0.2
     ).to(device)
 
     # Train Model: EModel_FeatureWeight1

@@ -1834,10 +1834,10 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
                            ('Model2', preds2_real),
                            ('Model3', preds3_real),
                            ('Model5', preds5_real)]:
-        pair_preds = {'Model4': preds4_real, m_name: m_preds}
+        pair_preds = {'Model5': preds5_real, m_name: m_preds}
         
         plot_value_and_error_histograms(
-            y_actual_real = labels4_real,
+            y_actual_real = labels5_real,
             predictions_dict = pair_preds,
             bins = 30
         )
@@ -1855,7 +1855,7 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
 
     # 绘制两个时间段的图表
     plot_predictions_date_range(
-        y_actual_real = labels4_real,
+        y_actual_real = labels5_real,
         predictions_dict = primary_preds,
         timestamps = test_timestamps,
         start_date = '2024-11-25',
@@ -1863,7 +1863,7 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     )
 
     plot_predictions_date_range(
-        y_actual_real = labels4_real,
+        y_actual_real = labels5_real,
         predictions_dict = primary_preds,
         timestamps = test_timestamps,
         start_date = '2024-12-13',
@@ -1872,7 +1872,7 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
 
     # 绘制两个时间段的图表（所有模型）
     plot_predictions_date_range(
-        y_actual_real = labels4_real,
+        y_actual_real = labels5_real,
         predictions_dict = all_model_preds,
         timestamps = test_timestamps,
         start_date = '2024-11-25',
@@ -1880,7 +1880,7 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     )
 
     plot_predictions_date_range(
-        y_actual_real = labels4_real,
+        y_actual_real = labels5_real,
         predictions_dict = all_model_preds,
         timestamps = test_timestamps,
         start_date = '2024-12-13',
@@ -1888,7 +1888,7 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     )
 
     plot_error_max_curve(
-        y_actual_real = labels4_real,
+        y_actual_real = labels5_real,
         predictions_dict = primary_preds,
         bins = 30,
         smooth_sigma = 1.0
@@ -1916,13 +1916,13 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     # ----------------- 1) 五个模型整体对比 -----------------
 
     plot_value_and_error_histograms(
-        y_actual_real = labels4_real,
+        y_actual_real = labels5_real,
         predictions_dict = all_model_preds,
         bins = 30
     )
 
     plot_error_max_curve(
-        y_actual_real = labels4_real,
+        y_actual_real = labels5_real,
         predictions_dict = all_model_preds,  # 或 primary_preds
         bins = 30,
         smooth_sigma = 1.0
@@ -1935,8 +1935,8 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
                             ('Model3', preds3_real),
                             ('Model5', preds5_real)]:   # 追加 Model5
         plot_predictions_comparison(
-            y_actual_real = labels4_real,
-            predictions_dict = {'Model4': preds4_real, m_name: m_preds},
+            y_actual_real = labels5_real,
+            predictions_dict = {'Model5': preds5_real, m_name: m_preds},
             timestamps = test_timestamps
         )
 

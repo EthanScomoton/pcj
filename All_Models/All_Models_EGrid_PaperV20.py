@@ -793,7 +793,7 @@ class EModel_FeatureWeight0(nn.Module):
     def __init__(self,
                  feature_dim,
                  window_size=window_size,          # 序列窗口长度
-                 lstm_hidden_size=512,
+                 lstm_hidden_size=256,
                  lstm_num_layers=4,
                  lstm_dropout=0.2, 
                 ):
@@ -1606,7 +1606,7 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
 
     model0 = EModel_FeatureWeight0(
         feature_dim       = feature_dim,
-        lstm_hidden_size  = 512, 
+        lstm_hidden_size  = 256, 
         lstm_num_layers   = 4,
         lstm_dropout      = 0.2
     ).to(device)

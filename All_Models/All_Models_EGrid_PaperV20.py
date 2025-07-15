@@ -1344,22 +1344,15 @@ def plot_predictions_date_range(y_actual_real, predictions_dict, timestamps, sta
     # Convert timestamps to pandas DatetimeIndex
     time_index = pd.to_datetime(timestamps)
     
-    # 自定义模型颜色映射（由浅到深的蓝色 + 红色）
-    model_colors = {
-        'Model1': '#ADD8E6',   # light blue
-        'Model2': '#6495ED',   # cornflower blue
-        'Model3': '#1E90FF',   # dodger blue
-        'Model5': '#00008B',   # dark blue
-        'Model4': 'red'
+    # 自定义模型颜色映射和透明度
+    model_settings = {
+        'Model1': {'color': '#B0C4DE', 'alpha': 0.5, 'linewidth': 1.2, 'linestyle': '-'},      # 浅钢蓝色，低透明度
+        'Model2': {'color': '#87CEEB', 'alpha': 0.5, 'linewidth': 1.2, 'linestyle': '--'},     # 天蓝色，低透明度
+        'Model3': {'color': '#ADD8E6', 'alpha': 0.5, 'linewidth': 1.2, 'linestyle': '-.'},     # 浅蓝色，低透明度
+        'Model4': {'color': '#DC143C', 'alpha': 1.0, 'linewidth': 2.5, 'linestyle': '-'},      # 深红色，完全不透明
+        'Model5': {'color': '#00008B', 'alpha': 1.0, 'linewidth': 2.5, 'linestyle': ':'}       # 深蓝色，完全不透明
     }
     
-    model_styles = {
-        'Model1': '-',
-        'Model2': '--',
-        'Model3': '-.',
-        'Model5': ':',
-        'Model4': (0, (3, 1, 1, 1))
-    }
     # Create mask for date range
     start = pd.to_datetime(start_date)
     end = pd.to_datetime(end_date)
@@ -1371,19 +1364,53 @@ def plot_predictions_date_range(y_actual_real, predictions_dict, timestamps, sta
     
     # Plot
     plt.figure(figsize=(14, 6))
-    plt.plot(time_index[mask], y_actual_real[mask], 
-             label='Actual', color='black', linewidth=1.5)
     
+    # 绘制实际值
+    plt.plot(time_index[mask], y_actual_real[mask], 
+             label='Actual', color='black', linewidth=1.5, zorder=10)
+    
+    # 先绘制非重点模型（使其在底层）
     for model_name, preds in predictions_dict.items():
-        color = model_colors.get(model_name, '#808080')
-        ls = model_styles.get(model_name, '-')
-        plt.plot(time_index[mask], preds[mask], 
-                 label=model_name, color=color, linewidth=1.8, alpha=1, linestyle=ls)
+        if model_name not in ['Model4', 'Model5']:
+            settings = model_settings.get(model_name, {'color': '#808080', 'alpha': 0.4, 'linewidth': 1.0, 'linestyle': '-'})
+            plt.plot(time_index[mask], preds[mask], 
+                     label=model_name, 
+                     color=settings['color'], 
+                     linewidth=settings['linewidth'], 
+                     alpha=settings['alpha'], 
+                     linestyle=settings['linestyle'],
+                     zorder=5)
+    
+    # 再绘制重点模型（使其在顶层）
+    for model_name, preds in predictions_dict.items():
+        if model_name in ['Model4', 'Model5']:
+            settings = model_settings.get(model_name)
+            plt.plot(time_index[mask], preds[mask], 
+                     label=model_name, 
+                     color=settings['color'], 
+                     linewidth=settings['linewidth'], 
+                     alpha=settings['alpha'], 
+                     linestyle=settings['linestyle'],
+                     zorder=15)
     
     plt.xlabel('Timestamp')
     plt.ylabel('Grid Energy Compensation Value (kW·h)')
-    plt.legend()
-    plt.grid(True)
+    
+    # 调整图例顺序
+    handles, labels = plt.gca().get_legend_handles_labels()
+    order = [0]  # Actual first
+    # Model4 and Model5 next
+    for i, label in enumerate(labels):
+        if label in ['Model4', 'Model5'] and i != 0:
+            order.append(i)
+    # Other models last
+    for i, label in enumerate(labels):
+        if label not in ['Model4', 'Model5', 'Actual'] and i != 0:
+            order.append(i)
+    
+    plt.legend([handles[idx] for idx in order], [labels[idx] for idx in order], 
+               loc='best', framealpha=0.9)
+    plt.grid(True, alpha=0.3)
     plt.tight_layout()
     plt.xticks(rotation=45)
     
@@ -1411,15 +1438,7 @@ def plot_value_and_error_histograms(y_actual_real, predictions_dict, bins=30):
 
     # -------- Histogram of prediction errors -------- #
     plt.subplot(1, 2, 2)
-    
-    # 定义模型的颜色和透明度设置
-    model_settings = {
-        'Model1': {'color': '#ADD8E6', 'alpha': 0.35},  # 浅蓝色，低透明度
-        'Model2': {'color': '#87CEEB', 'alpha': 0.35},  # 天蓝色，低透明度
-        'Model3': {'color': '#98D8C8', 'alpha': 0.35},  # 薄荷绿，低透明度
-        'Model4': {'color': '#FF4500', 'alpha': 0.85},  # 深橙红色，高透明度
-        'Model5': {'color': '#0000CD', 'alpha': 0.85}   # 深蓝色，高透明度
-    }
+    colors = mpl.cm.tab10.colors
     
     # 在绘图前先拼接所有误差，得到统一边界
     all_errors = np.concatenate([
@@ -1427,49 +1446,19 @@ def plot_value_and_error_histograms(y_actual_real, predictions_dict, bins=30):
     ])
     bin_edges = np.histogram_bin_edges(all_errors, bins=bins)  # 使用统一的bin边界
     
-    # 先绘制非重点模型（保证它们在底层）
-    for model_name, preds in predictions_dict.items():
-        if model_name not in ['Model4', 'Model5']:
-            errors = preds - y_actual_real
-            settings = model_settings.get(model_name, {'color': '#C0C0C0', 'alpha': 0.3})
-            plt.hist(errors,
-                     bins=bin_edges,
-                     alpha=settings['alpha'],
-                     label=model_name,
-                     color=settings['color'],
-                     edgecolor='gray',
-                     linewidth=0.5)
-    
-    # 再绘制重点模型（保证它们在顶层）
-    for model_name, preds in predictions_dict.items():
-        if model_name in ['Model4', 'Model5']:
-            errors = preds - y_actual_real
-            settings = model_settings.get(model_name)
-            plt.hist(errors,
-                     bins=bin_edges,
-                     alpha=settings['alpha'],
-                     label=model_name,
-                     color=settings['color'],
-                     edgecolor='black',
-                     linewidth=1.2)
+    for i, (model_name, preds) in enumerate(predictions_dict.items()):
+        errors = preds - y_actual_real
+        plt.hist(errors,
+                 bins=bin_edges,        # 关键：固定 bin
+                 alpha=0.5,
+                 label=model_name,
+                 color=colors[i % len(colors)],
+                 edgecolor='black')
 
     plt.xlim(-20000, 20000)
     plt.xlabel('Prediction Error of Model and Actual Value(kW·h)')
     plt.ylabel('Frequency')
-    
-    # 调整图例顺序，让重点模型在前
-    handles, labels = plt.gca().get_legend_handles_labels()
-    order = []
-    # 先添加Model4和Model5
-    for i, label in enumerate(labels):
-        if label in ['Model4', 'Model5']:
-            order.append(i)
-    # 再添加其他模型
-    for i, label in enumerate(labels):
-        if label not in ['Model4', 'Model5']:
-            order.append(i)
-    
-    plt.legend([handles[idx] for idx in order], [labels[idx] for idx in order])
+    plt.legend()
     plt.grid(True, axis='y')
 
     plt.tight_layout()

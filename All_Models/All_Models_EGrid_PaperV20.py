@@ -1480,7 +1480,7 @@ def plot_error_max_curve(y_actual_real,
     # -------- 3. 图形美化 -------- #
     #plt.title('Smoothed Histogram Curves of Prediction Errors')
     plt.xlim(-20000, 20000)
-    plt.xlabel('Prediction Error (kW·h)')
+    plt.xlabel('Prediction Error of Model and Actual(kW·h)')
     plt.ylabel('Frequency')
     plt.legend()
     plt.grid(True)
@@ -1794,6 +1794,7 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
 
     # 使用 Model0 与其他模型对比，生成全长与缩放窗口图，以及分布直方图
     for m_name, m_preds in [
+        ('Model0', preds0_real),
         ('Model1', preds1_real),
         ('Model2', preds2_real),
         ('Model3', preds3_real),
@@ -1808,6 +1809,7 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
         )
 
     all_model_preds = {
+        'Model0': preds0_real,
         'Model1': preds1_real,
         'Model2': preds2_real,
         'Model3': preds3_real,
@@ -1903,7 +1905,7 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
                             ]:   # 追加 Model0
         plot_predictions_comparison(
             y_actual_real = labels0_real,
-            predictions_dict = {'Model0': preds4_real, m_name: m_preds},
+            predictions_dict = {'Model0': preds0_real, m_name: m_preds},
             timestamps = test_timestamps
         )
 

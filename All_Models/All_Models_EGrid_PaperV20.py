@@ -1702,7 +1702,7 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     # 修改加载模型部分的代码
     best_model0 = EModel_FeatureWeight0(
         feature_dim       = feature_dim,
-        lstm_hidden_size  = 512, 
+        lstm_hidden_size  = 256, 
         lstm_num_layers   = 4
     ).to(device)
     best_model0.load_state_dict(torch.load('best_EModel_FeatureWeight0.pth', map_location=device, weights_only=True), strict=False)

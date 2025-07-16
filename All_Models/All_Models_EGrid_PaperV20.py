@@ -1346,9 +1346,9 @@ def plot_predictions_date_range(y_actual_real, predictions_dict, timestamps, sta
     
     # 自定义模型颜色映射和透明度
     model_settings = {
-        'Model1': {'color': '#B0C4DE', 'alpha': 0.7, 'linewidth': 1.2, 'linestyle': '-'},      # 浅钢蓝色，低透明度
-        'Model2': {'color': '#87CEEB', 'alpha': 0.7, 'linewidth': 1.2, 'linestyle': '--'},     # 天蓝色，低透明度
-        'Model3': {'color': '#ADD8E6', 'alpha': 0.7, 'linewidth': 1.2, 'linestyle': '-.'},     # 浅蓝色，低透明度
+        'Model1': {'color': '#B0C4DE', 'alpha': 0.9, 'linewidth': 1.5, 'linestyle': '-'},      # 浅钢蓝色，低透明度
+        'Model2': {'color': '#87CEEB', 'alpha': 0.9, 'linewidth': 1.5, 'linestyle': '--'},     # 天蓝色，低透明度
+        'Model3': {'color': '#ADD8E6', 'alpha': 0.9, 'linewidth': 1.5, 'linestyle': '-.'},     # 浅蓝色，低透明度
         'Model4': {'color': '#00008B', 'alpha': 1.0, 'linewidth': 1.9, 'linestyle': '-'},      # 深红色，完全不透明
         'Model5': {'color': '#DC143C', 'alpha': 1.0, 'linewidth': 1.9, 'linestyle': ':'}       # 深蓝色，完全不透明
     }

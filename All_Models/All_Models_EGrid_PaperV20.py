@@ -1499,15 +1499,15 @@ def plot_error_max_curve(y_actual_real,
     smooth_sigma : float
         高斯平滑 σ；设为 0 可关闭平滑。
     alpha : float
-        所有曲线的默认透明度（0-1），默认0.8。
+        所有曲线的默认透明度（0-1），默认0.9。
     model5_alpha : float
         Model5 的特殊透明度（0-1），默认1.0（不透明）。
     model5_linewidth : float
-        Model5 的线条粗细，默认3.0。
+        Model5 的线条粗细，默认2.0。
     model5_color : str
         Model5 的颜色，默认深红色。
     default_linewidth : float
-        其他模型的默认线条粗细，默认2.0。
+        其他模型的默认线条粗细，默认1.7。
     """
     from scipy.ndimage import gaussian_filter1d
 
@@ -1541,7 +1541,7 @@ def plot_error_max_curve(y_actual_real,
                      color=model5_color,              # 使用 Model5 的特殊颜色
                      linewidth=model5_linewidth,      # 使用 Model5 的特殊线条粗细
                      marker=marker_styles[i % len(marker_styles)],
-                     linestyle=line_styles[i % len(line_styles)],
+                     linestyle='-',                   # 固定为实线
                      markersize=10,
                      alpha=model5_alpha,              # 使用 Model5 的特殊透明度
                      zorder=10)                       # 确保 Model5 在最上层

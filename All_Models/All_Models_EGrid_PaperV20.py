@@ -1349,8 +1349,8 @@ def plot_predictions_date_range(y_actual_real, predictions_dict, timestamps, sta
         'Model1': {'color': '#B0C4DE', 'alpha': 0.9, 'linewidth': 1.5, 'linestyle': '-'},      # 浅钢蓝色，低透明度
         'Model2': {'color': '#87CEEB', 'alpha': 0.9, 'linewidth': 1.5, 'linestyle': '--'},     # 天蓝色，低透明度
         'Model3': {'color': '#ADD8E6', 'alpha': 0.9, 'linewidth': 1.5, 'linestyle': '-.'},     # 浅蓝色，低透明度
-        'Model4': {'color': '#00008B', 'alpha': 1.0, 'linewidth': 1.9, 'linestyle': '-'},      # 深红色，完全不透明
-        'Model5': {'color': '#DC143C', 'alpha': 1.0, 'linewidth': 1.9, 'linestyle': ':'}       # 深蓝色，完全不透明
+        'Model4': {'color': '#00008B', 'alpha': 1.0, 'linewidth': 1.9, 'linestyle': ':'},      # 深红色，完全不透明
+        'Model5': {'color': '#DC143C', 'alpha': 1.0, 'linewidth': 2, 'linestyle': '-'}       # 深蓝色，完全不透明
     }
     
     # Create mask for date range
@@ -1476,7 +1476,13 @@ def plot_value_and_error_histograms(y_actual_real, predictions_dict, bins=30):
 def plot_error_max_curve(y_actual_real,
                          predictions_dict,
                          bins: int = 30,
-                         smooth_sigma: float = 1.0):
+                         smooth_sigma: float = 1.0,
+                         # 新增参数
+                         alpha: float = 0.9,                # 默认透明度
+                         model5_alpha: float = 1.0,         # Model5 的透明度  
+                         model5_linewidth: float = 2.0,     # Model5 的线条粗细
+                         model5_color: str = '#DC143C',     # Model5 的颜色（深红色）
+                         default_linewidth: float = 1.7):   # 其他模型的默认线条粗细
     """
     为 predictions_dict 中的每个模型绘制一条曲线：
     曲线上的点来自该模型误差直方图每个 bin 的最高计数，
@@ -1492,6 +1498,16 @@ def plot_error_max_curve(y_actual_real,
         直方图分箱数量（应与直方图保持一致）。
     smooth_sigma : float
         高斯平滑 σ；设为 0 可关闭平滑。
+    alpha : float
+        所有曲线的默认透明度（0-1），默认0.8。
+    model5_alpha : float
+        Model5 的特殊透明度（0-1），默认1.0（不透明）。
+    model5_linewidth : float
+        Model5 的线条粗细，默认3.0。
+    model5_color : str
+        Model5 的颜色，默认深红色。
+    default_linewidth : float
+        其他模型的默认线条粗细，默认2.0。
     """
     from scipy.ndimage import gaussian_filter1d
 
@@ -1512,17 +1528,33 @@ def plot_error_max_curve(y_actual_real,
     colors = mpl.cm.tab10.colors
     line_styles = ['-', '--', '-.', ':',(0, (3, 1, 1, 1))]
     marker_styles = ['^', 's', 'o', 'h', 'p']
+    
     for i, (model_name, counts) in enumerate(model_curves.items()):
         curve = (gaussian_filter1d(counts.astype(float), sigma=smooth_sigma)
                  if smooth_sigma > 0 else counts)
-        plt.plot(bin_centers,
-                 curve,
-                 label=model_name,
-                 color=colors[i % len(colors)],
-                 linewidth=2,  
-                 marker=marker_styles[i % len(marker_styles)],
-                 linestyle=line_styles[i % len(line_styles)],
-                 markersize = 10)
+        
+        # 检查是否为 Model5，应用特殊设置
+        if model_name == 'Model5':
+            plt.plot(bin_centers,
+                     curve,
+                     label=model_name,
+                     color=model5_color,              # 使用 Model5 的特殊颜色
+                     linewidth=model5_linewidth,      # 使用 Model5 的特殊线条粗细
+                     marker=marker_styles[i % len(marker_styles)],
+                     linestyle=line_styles[i % len(line_styles)],
+                     markersize=10,
+                     alpha=model5_alpha,              # 使用 Model5 的特殊透明度
+                     zorder=10)                       # 确保 Model5 在最上层
+        else:
+            plt.plot(bin_centers,
+                     curve,
+                     label=model_name,
+                     color=colors[i % len(colors)],
+                     linewidth=default_linewidth,     # 使用默认线条粗细
+                     marker=marker_styles[i % len(marker_styles)],
+                     linestyle=line_styles[i % len(line_styles)],
+                     markersize=10,
+                     alpha=alpha)                     # 使用默认透明度
 
     # -------- 3. 图形美化 -------- #
     #plt.title('Smoothed Histogram Curves of Prediction Errors')

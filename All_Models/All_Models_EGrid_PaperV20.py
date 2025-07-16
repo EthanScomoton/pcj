@@ -1480,7 +1480,7 @@ def plot_error_max_curve(y_actual_real,
                          # 新增参数
                          alpha: float = 0.9,                # 默认透明度
                          model5_alpha: float = 1.0,         # Model5 的透明度  
-                         model5_linewidth: float = 2.0,     # Model5 的线条粗细
+                         model5_linewidth: float = 2.3,     # Model5 的线条粗细
                          model5_color: str = '#DC143C',     # Model5 的颜色（深红色）
                          default_linewidth: float = 1.7):   # 其他模型的默认线条粗细
     """

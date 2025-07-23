@@ -1,0 +1,20 @@
+{
+  "path": "/Users/ethanzhu/Desktop/pcj/pcj_deploy",
+  "desc": "这是一个基于深度学习的能源预测系统，使用LSTM和注意力机制进行电网能源补偿值的预测。系统提供Web界面，支持模型上传、数据处理和可视化预测结果。",
+  "id": "2169d9ef91a24827a6a64adac17ccaf9",
+  "data": {
+    "spaceKey": "2169d9ef91a24827a6a64adac17ccaf9",
+    "connections": {
+      "webIDE": "https://2169d9ef91a24827a6a64adac17ccaf9.ap-singapore.cloudstudio.club",
+      "preview": "https://2169d9ef91a24827a6a64adac17ccaf9--{port}.ap-singapore.cloudstudio.club",
+      "api": "https://2169d9ef91a24827a6a64adac17ccaf9--api.ap-singapore.cloudstudio.club",
+      "pty": "https://2169d9ef91a24827a6a64adac17ccaf9--pty.ap-singapore.cloudstudio.club"
+    }
+  },
+  "config": {
+    "api": "https://2169d9ef91a24827a6a64adac17ccaf9--api.ap-singapore.cloudstudio.club",
+    "pty": "https://2169d9ef91a24827a6a64adac17ccaf9--pty.ap-singapore.cloudstudio.club",
+    "region": "ap-shanghai",
+    "spaceKey": "2169d9ef91a24827a6a64adac17ccaf9"
+  }
+}

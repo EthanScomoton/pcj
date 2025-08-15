@@ -1,18 +1,34 @@
-import argparse
 from pathlib import Path
 import pandas as pd
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 
-# ------------------------ 全局绘图风格（与原代码一致） ------------------------ #
+# 直接在此处填写三份 CSV 的“绝对路径”
+CSV_FILES = [
+    Path('/Users/ethanzhu/Desktop/part_top3_per_day.csv'),
+    Path('/Users/ethanzhu/Desktop/part_4th_per_day.csv'),
+    Path('/Users/ethanzhu/Desktop/part_5th_per_day.csv'),
+]
+
+# 按文件名指定颜色
+COLOR_MAP = {
+    'part_top3_per_day.csv': '#1f77b4',
+    'part_4th_per_day.csv': '#ff7f0e',
+    'part_5th_per_day.csv': '#2ca02c',
+}
+
+# 统一固定的 y 轴范围
+FIXED_Y_LIM = (0, 400000)
+
+# ------------------------ 全局绘图风格 ------------------------ #
 mpl.rcParams.update({
     'font.family': 'Times New Roman',
-    'font.size': 26,          # 全局默认字体大小
-    'axes.labelsize': 26,     # 坐标轴标签大小
-    'axes.titlesize': 28,     # 标题字号
-    'xtick.labelsize': 24,    # x 轴刻度字号
-    'ytick.labelsize': 24     # y 轴刻度字号
+    'font.size': 26,
+    'axes.labelsize': 26,
+    'axes.titlesize': 28,
+    'xtick.labelsize': 24,
+    'ytick.labelsize': 24
 })
 
 def load_and_prepare(csv_path: Path) -> pd.DataFrame:
@@ -24,25 +40,13 @@ def load_and_prepare(csv_path: Path) -> pd.DataFrame:
     df = df.sort_values('timestamp').dropna(subset=['E_grid']).reset_index(drop=True)
     return df
 
-def compute_global_ylim(dfs):
-    """计算多个数据集的统一 y 轴范围（上下各留 5% 边距）。"""
-    y_min = min(df['E_grid'].min() for df in dfs)
-    y_max = max(df['E_grid'].max() for df in dfs)
-    if y_max <= y_min:
-        return (y_min - 1.0, y_max + 1.0)
-    pad = 0.05 * (y_max - y_min)
-    return (y_min - pad, y_max + pad)
-
-def plot_egrid_timeseries(df: pd.DataFrame, title: str, outfile: Path, ylim=None):
-    """按时间绘制 E_grid 折线图并保存。"""
+def plot_egrid_timeseries(df: pd.DataFrame, color: str, ylim=FIXED_Y_LIM):
     fig = plt.figure(figsize=(14, 3))
-    # 不显式指定颜色，以遵循通用绘图规范；保留标记与线宽便于还原“点+线”风格
-    plt.plot(df['timestamp'], df['E_grid'], marker='.', linewidth=1)
+    plt.plot(df['timestamp'], df['E_grid'], marker='.', linewidth=1, color=color)
     if ylim is not None:
         plt.ylim(*ylim)
     plt.xlabel('Timestamp')
     plt.ylabel('E_grid')
-    plt.title(title)
     plt.grid(True, alpha=0.3)
 
     ax = plt.gca()
@@ -51,33 +55,26 @@ def plot_egrid_timeseries(df: pd.DataFrame, title: str, outfile: Path, ylim=None
     plt.xticks(rotation=0)
 
     plt.tight_layout()
-    fig.savefig(outfile, dpi=240)
-    plt.close(fig)
+    return fig
 
 def main():
-    parser = argparse.ArgumentParser(description='Plot E_grid over time from CSV files.')
-    parser.add_argument('--inputs', nargs='+', required=True, help='输入 CSV 文件路径（一个或多个）。')
-    parser.add_argument('--output-dir', default='.', help='输出图片目录，默认当前目录。')
-    parser.add_argument('--unify-ylims', action='store_true', help='对所有图统一 y 轴范围以便比较。')
-    args = parser.parse_args()
+    # 校验路径数量与存在性
+    if len(CSV_FILES) != 3:
+        raise ValueError("请在 CSV_FILES 中填写三个 CSV 文件的绝对路径。")
+    for p in CSV_FILES:
+        if not p.exists():
+            raise FileNotFoundError(f"找不到文件：{p}")
 
-    input_paths = [Path(p) for p in args.inputs]
-    outdir = Path(args.output_dir)
-    outdir.mkdir(parents=True, exist_ok=True)
+    # 读取数据
+    dfs = [load_and_prepare(p) for p in CSV_FILES]
 
-    # 读取所有数据
-    dfs = [load_and_prepare(p) for p in input_paths]
+    # 逐个绘制（不保存，只显示），无标题，统一 y 轴为 (0, 400000)，颜色按文件名指定
+    for csv_path, df in zip(CSV_FILES, dfs):
+        color = COLOR_MAP.get(csv_path.name, '#1f77b4')
+        plot_egrid_timeseries(df, color=color, ylim=FIXED_Y_LIM)
 
-    # 统一 y 轴范围（可选）
-    ylim = compute_global_ylim(dfs) if args.unify_ylims and len(dfs) > 1 else None
-
-    # 逐个绘制
-    for csv_path, df in zip(input_paths, dfs):
-        title = f"E_grid over Time — {csv_path.stem}"
-        outfile = outdir / f"{csv_path.stem}_egrid_timeseries.png"
-        plot_egrid_timeseries(df, title=title, outfile=outfile, ylim=ylim)
-        print(f"[Saved] {outfile}")
+    # 一次性显示所有图窗口
+    plt.show()
 
 if __name__ == '__main__':
     main()
-    

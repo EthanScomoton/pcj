@@ -1,5 +1,6 @@
 from pathlib import Path
 import pandas as pd
+import numpy as np
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
@@ -40,13 +41,24 @@ def load_and_prepare(csv_path: Path) -> pd.DataFrame:
     df = df.sort_values('timestamp').dropna(subset=['E_grid']).reset_index(drop=True)
     return df
 
+def remove_outliers_and_interpolate(df: pd.DataFrame, cap_value: float = 400000.0) -> pd.DataFrame:
+    """将 E_grid 中大于 cap_value 的点置为 NaN，并使用按时间插值实现平滑过渡。"""
+    cleaned = df.copy()
+    # 标记并移除超过阈值的点
+    cleaned.loc[cleaned['E_grid'] > cap_value, 'E_grid'] = np.nan
+    # 按时间索引做插值，平滑过渡
+    cleaned = cleaned.set_index('timestamp')
+    cleaned['E_grid'] = cleaned['E_grid'].interpolate(method='time', limit_direction='both')
+    cleaned = cleaned.reset_index()
+    return cleaned
+
 def plot_egrid_timeseries(df: pd.DataFrame, color: str, ylim=FIXED_Y_LIM):
     fig = plt.figure(figsize=(14, 3))
     plt.plot(df['timestamp'], df['E_grid'], marker='.', linewidth=1, color=color)
     if ylim is not None:
         plt.ylim(*ylim)
     plt.xlabel('Timestamp')
-    plt.ylabel('E_grid')
+    plt.ylabel('E_grid (kWh)')
     plt.grid(True, alpha=0.3)
 
     ax = plt.gca()
@@ -65,8 +77,9 @@ def main():
         if not p.exists():
             raise FileNotFoundError(f"找不到文件：{p}")
 
-    # 读取数据
+    # 读取并预处理数据（删除 >400000 的点并平滑插值过渡）
     dfs = [load_and_prepare(p) for p in CSV_FILES]
+    dfs = [remove_outliers_and_interpolate(df, cap_value=FIXED_Y_LIM[1]) for df in dfs]
 
     # 逐个绘制（不保存，只显示），无标题，统一 y 轴为 (0, 400000)，颜色按文件名指定
     for csv_path, df in zip(CSV_FILES, dfs):

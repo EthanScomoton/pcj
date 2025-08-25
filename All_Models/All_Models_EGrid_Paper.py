@@ -63,21 +63,32 @@ def load_data():
 # 2. Feature Engineering Module
 def feature_engineering(data_df):
     """
-    [Feature Engineering Module]
-    - Apply EWMA smoothing to 'E_grid' (span = 10)
-    - Construct time features: dayofweek, hour, month and their sin/cos transformations
-    - Encode categorical features using LabelEncoder
-    - Returns: processed data, list of feature columns, target column name
+    [Feature Engineering Module - Fixed]
+    - EWMA 平滑 E_grid
+    - 只对“确认为类别型”的列做 LabelEncoder
+    - 连续变量保持为 float，不做离散化
+    - 构造时间特征（sin/cos）
+    - 返回：处理后数据、特征列、目标名、元信息字典
     """
-    span = 8  # EWMA smoothing parameter
-    data_df['E_grid'] = data_df['E_grid'].ewm(span = span, adjust = False).mean()  # Smooth E_grid
+    span = 8
+    data_df = data_df.copy()
 
-    # Construct time features
-    data_df['dayofweek'] = data_df['timestamp'].dt.dayofweek  # dayofweek: weekday index
-    data_df['hour']      = data_df['timestamp'].dt.hour       # hour: hour of the day
-    data_df['month']     = data_df['timestamp'].dt.month      # month: month of the year
+    # 基础缺失值处理（按需可改为更复杂插值）
+    data_df = data_df.sort_values('timestamp').reset_index(drop = True)
+    for col in data_df.columns:
+        if col != 'timestamp':
+            if data_df[col].dtype.kind in 'biufc':
+                data_df[col] = data_df[col].interpolate(limit_direction='both')
+            else:
+                data_df[col] = data_df[col].fillna(method='ffill').fillna(method='bfill')
 
-    # Sin/Cos transformations
+    data_df['E_grid'] = data_df['E_grid'].ewm(span = span, adjust = False).mean()
+
+    # 时间特征
+    data_df['dayofweek'] = data_df['timestamp'].dt.dayofweek
+    data_df['hour']      = data_df['timestamp'].dt.hour
+    data_df['month']     = data_df['timestamp'].dt.month
+
     data_df['dayofweek_sin'] = np.sin(2 * np.pi * data_df['dayofweek'] / 7)
     data_df['dayofweek_cos'] = np.cos(2 * np.pi * data_df['dayofweek'] / 7)
     data_df['hour_sin']      = np.sin(2 * np.pi * data_df['hour'] / 24)
@@ -85,29 +96,45 @@ def feature_engineering(data_df):
     data_df['month_sin']     = np.sin(2 * np.pi * (data_df['month'] - 1) / 12)
     data_df['month_cos']     = np.cos(2 * np.pi * (data_df['month'] - 1) / 12)
 
-    # Categorical feature encoding
-    renewable_features = [
-        'season', 'holiday', 'weather', 'temperature',
-        'working_hours', 'E_wind', 'E_storage_discharge',
-        'ESCFR', 'ESCFG','v_wind', 'wind_direction','E_PV'
+    # 明确划分类别变量与连续变量（依据你现有字段）
+    categorical_cols = [
+        'season', 'holiday', 'weather', 'working_hours',
+        'ship_grade', 'dock_position', 'destination'
     ]
-    load_features = [
-        'ship_grade', 'dock_position', 'destination', 'energyconsumption'
+    numeric_cols = [
+        'temperature', 'E_wind', 'E_storage_discharge', 'ESCFR', 'ESCFG',
+        'v_wind', 'wind_direction', 'E_PV', 'energyconsumption'
     ]
-    for col in renewable_features + load_features:
-        if col in data_df.columns:
-            le = LabelEncoder()
-            data_df[col] = le.fit_transform(data_df[col].astype(str))  # Encode feature
+
+    # 仅对存在的列做处理
+    categorical_cols = [c for c in categorical_cols if c in data_df.columns]
+    numeric_cols     = [c for c in numeric_cols     if c in data_df.columns]
+
+    # LabelEncoder 仅用于类别列
+    for col in categorical_cols:
+        le = LabelEncoder()
+        data_df[col] = le.fit_transform(data_df[col].astype(str))
+
+    # 连续列保证为 float
+    for col in numeric_cols:
+        data_df[col] = pd.to_numeric(data_df[col], errors='coerce').astype(float)
+        data_df[col] = data_df[col].interpolate(limit_direction='both')
 
     time_feature_cols = [
         'dayofweek_sin', 'dayofweek_cos',
         'hour_sin', 'hour_cos',
         'month_sin', 'month_cos'
     ]
-    feature_columns = renewable_features + load_features + time_feature_cols  # All feature columns
+
+    feature_columns = categorical_cols + numeric_cols + time_feature_cols
     target_column   = 'E_grid'
-    
-    return data_df, feature_columns, target_column
+
+    meta = {
+        'categorical_cols': categorical_cols,
+        'numeric_cols': numeric_cols,
+        'time_cols': time_feature_cols
+    }
+    return data_df, feature_columns, target_column, meta
 
 
 # 3. Sequence Construction Module
@@ -264,57 +291,51 @@ class CNN_FeatureGate(nn.Module):
         return x
 
 class EModel_FeatureWeight1(nn.Module):
-    """
-    [Model 1: LSTM-based Model with Feature Weighting]
-    Parameters:
-      - feature_dim: Input feature dimension
-      - lstm_hidden_size: LSTM hidden size
-      - lstm_num_layers: Number of LSTM layers
-      - lstm_dropout: LSTM dropout probability
-      - use_local_attn: Whether to use local attention 
-      - local_attn_window_size: Window size for local attention
-    """
     def __init__(self, 
                  feature_dim, 
                  lstm_hidden_size = 256, 
                  lstm_num_layers = 2, 
                  lstm_dropout = 0.2,
                  use_local_attn = False,
-                 local_attn_window_size = 5
+                 local_attn_window_size = 5,
+                 window_size = 20,
+                 feature_importance = None  # 新增
                 ):
         super(EModel_FeatureWeight1, self).__init__()
         self.feature_dim = feature_dim
-        self.use_local_attn = use_local_attn  # 保存是否使用局部注意力的标识
-        
-        # Feature gating mechanism: fully connected layer + Sigmoid to compute feature weights
+        self.use_local_attn = use_local_attn
+        self.window_size = window_size
+
+        # 先验特征权重（静态）
+        if feature_importance is not None and len(feature_importance) == feature_dim:
+            fi = torch.tensor(feature_importance, dtype = torch.float32)
+            fi = fi / (fi.max() + 1e-8)
+            self.register_buffer('fi_static', fi)  # [F]
+        else:
+            self.register_buffer('fi_static', torch.ones(feature_dim))
+
+        # 动态门控
         self.feature_gate = nn.Sequential(
             nn.Linear(feature_dim, feature_dim),
             nn.Sigmoid()
         )
-        
-        # Temporal attention: choose between local or global (MLP) attention
+
         if use_local_attn:
             from local_attention.local_attention import LocalAttention
             self.temporal_attn = LocalAttention(
                 dim = 2 * lstm_hidden_size,
-                window_size = local_attn_window_size,   # 使用正确的参数名
+                window_size = local_attn_window_size,
                 causal = False
             )
         else:
             self.temporal_attn = Attention(input_dim = 2 * lstm_hidden_size)
-        
-        # Feature attention layer: aggregate LSTM output over feature dimensions
+
         self.feature_attn = nn.Sequential(
-            nn.Linear(window_size, 1),
+            nn.Linear(self.window_size, 1),
             nn.Sigmoid()
         )
-        # Feature projection layer
         self.feature_proj = nn.Linear(2 * lstm_hidden_size, 2 * lstm_hidden_size)
-        
-        # Learnable feature importance weights, initialized to 1
-        self.feature_importance = nn.Parameter(torch.ones(feature_dim), requires_grad = True)
-        
-        # Bidirectional LSTM
+
         self.lstm = nn.LSTM(
             input_size    = feature_dim,
             hidden_size   = lstm_hidden_size,
@@ -324,22 +345,17 @@ class EModel_FeatureWeight1(nn.Module):
             dropout       = lstm_dropout if lstm_num_layers > 1 else 0
         )
         self._init_lstm_weights()
-        
-        # Global attention module
+
         self.attention = Attention(input_dim = 2 * lstm_hidden_size)
-        
-        # Fully connected layer for final prediction
+
         self.fc = nn.Sequential(
             nn.Linear(4 * lstm_hidden_size, 128),
             nn.ReLU(),
             nn.Dropout(0.1),
-            nn.Linear(128, 2)  # 输出两个值: mu 和 logvar
+            nn.Linear(128, 2)
         )
 
     def _init_lstm_weights(self):
-        """
-        [LSTM Weight Initialization]
-        """
         for name, param in self.lstm.named_parameters():
             if 'weight_ih' in name:
                 nn.init.xavier_uniform_(param.data)
@@ -348,47 +364,32 @@ class EModel_FeatureWeight1(nn.Module):
             elif 'bias' in name:
                 param.data.fill_(0)
                 n = param.size(0)
-                param.data[(n // 4):(n // 2)].fill_(1.0)  # Set forget gate bias to 1
+                param.data[(n // 4):(n // 2)].fill_(1.0)
 
     def forward(self, x):
-        """
-        Parameters:
-          x: Input tensor with shape [batch_size, seq_len, feature_dim]
-        Returns:
-          Predicted output with shape [batch_size]
-        """
-        # Apply dynamic feature weighting
-        gate = self.feature_gate(x.mean(dim = 1))
+        # 静态先验缩放
+        x = x * self.fi_static.view(1, 1, -1)  # [B, T, F]
+        # 动态门控
+        gate = self.feature_gate(x.mean(dim = 1))  # [B, F]
         x = x * gate.unsqueeze(1)
 
-        # Process with LSTM to obtain bidirectional output
         lstm_out, _ = self.lstm(x)
-        
-        # Temporal attention:
+
         if self.use_local_attn:
-            # 调用LocalAttention，将query, key, value均设置为lstm_out
-            temporal = self.temporal_attn(lstm_out, lstm_out, lstm_out)
-            # 聚合沿时间步（例如使用求和或者平均），使得维度变为二维
-            temporal = temporal.sum(dim=1)
-            # 如果希望归一化，可以改为：temporal = temporal.mean(dim=1)
+            temporal = self.temporal_attn(lstm_out, lstm_out, lstm_out).sum(dim=1)
         else:
             temporal = self.temporal_attn(lstm_out)
-        
-        # Feature attention over the feature dimensions
-        feature_raw = self.feature_attn(lstm_out.transpose(1, 2))
-        feature_raw = feature_raw.squeeze(-1)
+
+        feature_raw = self.feature_attn(lstm_out.transpose(1, 2)).squeeze(-1)
         feature = self.feature_proj(feature_raw)
 
-        # Concatenate the two branches
         combined = torch.cat([temporal, feature], dim = 1)
-        output = self.fc(combined)
-        mu, logvar = torch.chunk(output, 2, dim = 1)
-        
-        # Reparameterization trick with noise
+        mu_logvar = self.fc(combined)
+        mu, logvar = torch.chunk(mu_logvar, 2, dim = 1)
+
         noise = 0.1 * torch.randn_like(mu, device = x.device) * torch.exp(0.5 * logvar)
-        output = mu + noise
-        
-        return output.squeeze(-1)
+        out = mu + noise
+        return out.squeeze(-1)
     
 class EModel_FeatureWeight2(nn.Module):
     """
@@ -1434,38 +1435,41 @@ def calculate_feature_importance(data_df, feature_cols, target_col):
 # ------------------------------------------------------------------
 def calculate_feature_importance_mic(data_df, feature_cols, target_col):
     """
-    使用 MIC 计算特征重要性，返回 0~1 归一化后的权重数组。
-    需要安装 minepy:  pip install minepy
+    使用 MIC 计算特征重要性；若 minepy 不可用，自动退化为 Pearson 的 |r|
     """
-    from minepy import MINE
-    df_encoded = data_df.copy()
-    mic_importance = np.ones(len(feature_cols), dtype=np.float32)
+    try:
+        from minepy import MINE
+        use_mic = True
+    except Exception as e:
+        print("[Info] minepy not found, MIC falls back to Pearson |r|.")
+        use_mic = False
 
-    mine = MINE(alpha=0.6, c=15)                 # 官方推荐参数
-    for i, col in enumerate(feature_cols):
-        # 类别型特征先标签编码
-        if df_encoded[col].dtype == 'object':
-            le = LabelEncoder()
-            df_encoded[col] = le.fit_transform(df_encoded[col].astype(str))
+    df = data_df.copy()
+    imp = np.ones(len(feature_cols), dtype=np.float32)
 
-        x = df_encoded[col].values
-        y = df_encoded[target_col].values
+    if use_mic:
+        mine = MINE(alpha=0.6, c=15)
+        for i, col in enumerate(feature_cols):
+            if df[col].dtype == 'object':
+                le = LabelEncoder()
+                df[col] = le.fit_transform(df[col].astype(str))
+            x = df[col].values
+            y = df[target_col].values
+            mine.compute_score(x, y)
+            imp[i] = max(mine.mic(), 0.1)
+    else:
+        for i, col in enumerate(feature_cols):
+            if df[col].dtype == 'object':
+                le = LabelEncoder()
+                df[col] = le.fit_transform(df[col].astype(str))
+            imp[i] = max(abs(df[col].corr(df[target_col])), 0.1)
 
-        mine.compute_score(x, y)
-        mic_val = mine.mic()
-        mic_importance[i] = max(mic_val, 0.1)     # 最小 0.1，避免 0
-
-    # 归一化到 0~1
-    mic_importance /= mic_importance.max()
-
-    # 输出排序结果
-    ranking = sorted(zip(feature_cols, mic_importance),
-                     key=lambda z: z[1], reverse=True)
-    print("\n基于MIC的特征对E_grid影响度（线性+非线性相关性）：")
+    imp /= imp.max()
+    ranking = sorted(zip(feature_cols, imp), key=lambda z: z[1], reverse=True)
+    print("\n基于MIC(或退化Pearson)的特征影响度：")
     for feat, score in ranking:
         print(f"{feat}: {score:.4f}")
-
-    return mic_importance
+    return imp
 
 
 def plot_predictions_date_range(y_actual_real, predictions_dict, timestamps, start_date, end_date, title=""):
@@ -1747,10 +1751,12 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     # Build models
     feature_dim = X_train_seq.shape[-1]
     model1 = EModel_FeatureWeight1(
-        feature_dim       = feature_dim,
-        lstm_hidden_size  = 256, 
-        lstm_num_layers   = 2,
-        lstm_dropout      = 0.2
+        feature_dim = feature_dim,
+        lstm_hidden_size = 256,
+        lstm_num_layers  = 2,
+        lstm_dropout     = 0.2,
+        window_size      = window_size,
+        feature_importance = feature_importance
     ).to(device)
     
     model2 = EModel_FeatureWeight2(
@@ -1770,11 +1776,12 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     ).to(device)
 
     model4 = EModel_FeatureWeight4(
-        feature_dim       = feature_dim,
-        lstm_hidden_size  = 256, 
-        lstm_num_layers   = 2,
-        lstm_dropout      = 0.1,
-        feature_importance = feature_importance  # 使用加权后的特征重要性
+        feature_dim = feature_dim,
+        lstm_hidden_size = 256,
+        lstm_num_layers  = 2,
+        lstm_dropout     = 0.1,
+        window_size      = window_size,
+        feature_importance = feature_importance
     ).to(device)
 
     model5 = EModel_FeatureWeight5(

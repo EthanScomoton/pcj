@@ -386,7 +386,9 @@ class EModel_FeatureWeight1(nn.Module):
         combined = torch.cat([temporal, feature], dim = 1)
         mu_logvar = self.fc(combined)
         mu, logvar = torch.chunk(mu_logvar, 2, dim = 1)
-
+        logvar = torch.clamp(logvar, -10.0, 10.0)
+        if not self.training:
+            return mu.squeeze(-1)
         noise = 0.1 * torch.randn_like(mu, device = x.device) * torch.exp(0.5 * logvar)
         out = mu + noise
         return out.squeeze(-1)
@@ -507,8 +509,9 @@ class EModel_FeatureWeight2(nn.Module):
         combined = torch.cat([temporal, feature], dim=1)
         output = self.fc(combined)
         mu, logvar = torch.chunk(output, 2, dim=1)
-        
-        # Reparameterization trick with noise
+        logvar = torch.clamp(logvar, -10.0, 10.0)
+        if not self.training:
+            return mu.squeeze(-1)
         noise = 0.1 * torch.randn_like(mu, device=x.device) * torch.exp(0.5 * logvar)
         output = mu + noise
         return output.squeeze(-1)
@@ -630,8 +633,9 @@ class EModel_FeatureWeight3(nn.Module):
         combined = torch.cat([temporal, feature], dim = 1)
         output = self.fc(combined)
         mu, logvar = torch.chunk(output, 2, dim = 1)
-        
-        # Reparameterization trick with noise
+        logvar = torch.clamp(logvar, -10.0, 10.0)
+        if not self.training:
+            return mu.squeeze(-1)
         noise = 0.1 * torch.randn_like(mu, device = x.device) * torch.exp(0.5 * logvar)
         output = mu + noise
         
@@ -782,8 +786,11 @@ class EModel_FeatureWeight4(nn.Module):
         combined = torch.cat([temporal, feature], dim = 1)
         output = self.fc(combined)
         mu, logvar = torch.chunk(output, 2, dim = 1)
+        logvar = torch.clamp(logvar, -10.0, 10.0)
         
-        # Reparameterization trick with noise
+        if not self.training:
+            return mu.squeeze(-1)
+        
         noise = 0.1 * torch.randn_like(mu, device = x.device) * torch.exp(0.5 * logvar)
         output = mu + noise
         
@@ -985,6 +992,9 @@ class EModel_FeatureWeight5(nn.Module):
         
         # 11. 高度自适应的噪声控制
         mu, logvar = torch.chunk(output, 2, dim=1)
+        logvar = torch.clamp(logvar, -10.0, 10.0)
+        if not self.training:
+            return mu.squeeze(-1)
         
         # 结合多种信号进行噪声控制
         signal_strength = torch.abs(mu).mean(dim=1, keepdim=True)  # 信号强度
@@ -1028,6 +1038,9 @@ def evaluate(model, dataloader, criterion, device = device):
             batch_labels  = batch_labels.to(device)
 
             outputs = model(batch_inputs)
+            # 数值清洗，避免 NaN/Inf 进入指标计算
+            if torch.isnan(outputs).any() or torch.isinf(outputs).any():
+                outputs = torch.where(torch.isfinite(outputs), outputs, torch.zeros_like(outputs))
             loss    = criterion(outputs, batch_labels)
 
             running_loss += loss.item() * batch_inputs.size(0)
@@ -1039,6 +1052,13 @@ def evaluate(model, dataloader, criterion, device = device):
     val_loss   = running_loss / num_samples
     preds_arr  = np.concatenate(preds_list, axis = 0)
     labels_arr = np.concatenate(labels_list, axis = 0)
+
+    # 汇总后的再清洗（双保险）
+    finite_mask = np.isfinite(preds_arr) & np.isfinite(labels_arr)
+    preds_arr = preds_arr[finite_mask]
+    labels_arr = labels_arr[finite_mask]
+    if preds_arr.size == 0:
+        return val_loss, np.nan, np.nan, np.nan, np.nan, np.nan, preds_arr, labels_arr
 
     # Compute RMSE
     rmse_std = np.sqrt(mean_squared_error(labels_arr, preds_arr))

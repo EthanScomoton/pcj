@@ -80,7 +80,7 @@ def feature_engineering(data_df):
             if data_df[col].dtype.kind in 'biufc':
                 data_df[col] = data_df[col].interpolate(limit_direction='both')
             else:
-                data_df[col] = data_df[col].fillna(method='ffill').fillna(method='bfill')
+                data_df[col] = data_df[col].ffill().bfill()
 
     data_df['E_grid'] = data_df['E_grid'].ewm(span = span, adjust = False).mean()
 
@@ -1657,7 +1657,7 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     data_df.reset_index(drop = True, inplace = True)
 
     # Feature engineering (without standardization to avoid data leakage)
-    data_df, feature_cols, target_col = feature_engineering(data_df)
+    data_df, feature_cols, target_col, meta = feature_engineering(data_df)
     
     # ------------- 计算特征重要性 -------------
     pearson_importance = calculate_feature_importance(

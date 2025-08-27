@@ -2233,9 +2233,9 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
         bp = plt.boxplot(errors_data, positions=range(1, 5), widths=0.3,
                          patch_artist=False, showfliers=False)
         
-        plt.xlabel('季节')
-        plt.ylabel('预测误差 (kW·h)')
-        plt.title('四季预测误差分布')
+        plt.xlabel('season')
+        plt.ylabel('prediction error (kW·h)')
+        plt.title('seasonal prediction error distribution')
         plt.xticks(range(1, 5), seasons)
         plt.grid(True, alpha=0.3)
         plt.axhline(y=0, color='red', linestyle='--', linewidth=1, alpha=0.5)
@@ -2261,7 +2261,7 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
         metrics = ['MAPE (%)', 'RMSE', 'MAE', 'R²']
         
         print("\n" + "="*80)
-        print("表 1：四季模型性能评估")
+        print("Table 1: seasonal model performance evaluation")
         print("="*80)
         
         # 表头

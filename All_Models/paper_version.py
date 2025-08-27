@@ -1636,159 +1636,221 @@ def plot_error_max_curve(y_actual_real,
 # 8. Seasonal Processing
 def process_season(data_df, season_name, season_months, use_log_transform=True, min_egrid_threshold=1.0):
     print(f"\n========== Season {season_name} ({season_months}) ==========")
-    # 1) 按季节月份过滤
+    # Filter by season months
     df = data_df[data_df['timestamp'].dt.month.isin(season_months)].copy()
     if df.shape[0] < window_size + 50:
         print(f"[{season_name}] Not enough samples ({df.shape[0]}) for window_size={window_size}. Skipping.")
         return
 
-    # 2) 去除 E_grid 为 0 的样本（与原流程一致）
-    df = df[df['E_grid'] != 0].copy()
-    df.reset_index(drop=True, inplace=True)
+# 8x. Quarterly rolling evaluation helpers
+def get_last_full_year(data_df):
+    """
+    Return the most recent year in which all 12 months are present.
+    If none has all 12 months, return the latest year available.
+    """
+    years_sorted = sorted(data_df['timestamp'].dt.year.unique().tolist())
+    for y in reversed(years_sorted):
+        months_in_year = set(data_df.loc[data_df['timestamp'].dt.year == y, 'timestamp'].dt.month.unique().tolist())
+        if all(m in months_in_year for m in range(1, 13)):
+            return y
+    return years_sorted[-1] if years_sorted else None
 
-    # 3) 特征工程 + 季节内特征重要性
-    df, feature_cols, target_col = feature_engineering(df)
-
-    pearson_importance = calculate_feature_importance(df, feature_cols, target_col)
-    mic_importance = calculate_feature_importance_mic(df, feature_cols, target_col)
-    feature_importance = 0.5 * pearson_importance + 0.5 * mic_importance
-
-    # 4) 过滤过小目标值
-    df = df[df[target_col] > min_egrid_threshold].copy()
-    df.reset_index(drop=True, inplace=True)
-
-    # 5) 构造原始数组
-    X_all_raw = df[feature_cols].values
-    y_all_raw = df[target_col].values
-    timestamps_all = df['timestamp'].values
-
-    total_samples = len(df)
-    train_size = int(0.8 * total_samples)
-    val_size   = int(0.1 * total_samples)
-    test_size  = total_samples - train_size - val_size
-
-    X_train_raw = X_all_raw[:train_size]
-    y_train_raw = y_all_raw[:train_size]
-    X_val_raw   = X_all_raw[train_size : train_size + val_size]
-    y_val_raw   = y_all_raw[train_size : train_size + val_size]
-    X_test_raw  = X_all_raw[train_size + val_size:]
-    y_test_raw  = y_all_raw[train_size + val_size:]
-
-    train_timestamps = timestamps_all[:train_size]
-    val_timestamps   = timestamps_all[train_size : train_size + val_size]
-    # 为了与序列对齐，测试时间戳从 test 开始偏移 window_size
-    test_timestamps  = timestamps_all[train_size + val_size + window_size:]
-
-    # 6) 目标对数变换（可选）
-    if use_log_transform:
-        y_train_raw = np.log1p(y_train_raw)
-        y_val_raw   = np.log1p(y_val_raw)
-        y_test_raw  = np.log1p(y_test_raw)
-
-    # 7) 标准化（基于训练集拟合）
-    scaler_X = StandardScaler().fit(X_train_raw)
-    X_train = scaler_X.transform(X_train_raw)
-    X_val   = scaler_X.transform(X_val_raw)
-    X_test  = scaler_X.transform(X_test_raw)
-
-    scaler_y = StandardScaler().fit(y_train_raw.reshape(-1, 1))
-    y_train  = scaler_y.transform(y_train_raw.reshape(-1, 1)).ravel()
-    y_val    = scaler_y.transform(y_val_raw.reshape(-1, 1)).ravel()
-    y_test   = scaler_y.transform(y_test_raw.reshape(-1, 1)).ravel()
-
-    # 8) 构造时序样本
-    X_train_seq, y_train_seq = create_sequences(X_train, y_train, window_size)
-    X_val_seq,   y_val_seq   = create_sequences(X_val,   y_val,   window_size)
-    X_test_seq,  y_test_seq  = create_sequences(X_test,  y_test,  window_size)
-
-    print(f"[{season_name}] Train/Val/Test samples: {X_train_seq.shape[0]}, {X_val_seq.shape[0]}, {X_test_seq.shape[0]}")
-    print(f"[{season_name}] Feature dim: {X_train_seq.shape[-1]}, Window size: {window_size}")
-
-    train_dataset = TensorDataset(torch.from_numpy(X_train_seq), torch.from_numpy(y_train_seq))
-    val_dataset   = TensorDataset(torch.from_numpy(X_val_seq),   torch.from_numpy(y_val_seq))
-    test_dataset  = TensorDataset(torch.from_numpy(X_test_seq),  torch.from_numpy(y_test_seq))
-
-    train_loader = DataLoader(train_dataset, batch_size = batch_size, shuffle = True,  num_workers = num_workers)
-    val_loader   = DataLoader(val_dataset,   batch_size = batch_size, shuffle = False, num_workers = num_workers)
-    test_loader  = DataLoader(test_dataset,  batch_size = batch_size, shuffle = False, num_workers = num_workers)
-
-    # 9) 构建并训练模型（带季节后缀保存权重）
-    feature_dim = X_train_seq.shape[-1]
-    model1 = EModel_FeatureWeight1(feature_dim=feature_dim, lstm_hidden_size=256, lstm_num_layers=2, lstm_dropout=0.2).to(device)
-    model2 = EModel_FeatureWeight2(feature_dim=feature_dim, lstm_hidden_size=256, lstm_num_layers=2, lstm_dropout=0.2).to(device)
-    model3 = EModel_FeatureWeight3(feature_dim=feature_dim, gru_hidden_size=128, gru_num_layers=2, gru_dropout=0.2, use_local_attn=True, local_attn_window_size=5).to(device)
-    model4 = EModel_FeatureWeight4(feature_dim=feature_dim, lstm_hidden_size=256, lstm_num_layers=2, lstm_dropout=0.1, feature_importance=feature_importance).to(device)
-    model5 = EModel_FeatureWeight5(feature_dim=feature_dim, lstm_hidden_size=256, lstm_num_layers=3, lstm_dropout=0.1).to(device)
-
-    print(f"\n========== Training {season_name}: Model 1 ==========")
-    hist1 = train_model(model1, train_loader, val_loader, 'EModel_FeatureWeight1', learning_rate, weight_decay, num_epochs, season_tag=season_name)
-    print(f"\n========== Training {season_name}: Model 2 ==========")
-    hist2 = train_model(model2, train_loader, val_loader, 'EModel_FeatureWeight2', learning_rate, weight_decay, num_epochs, season_tag=season_name)
-    print(f"\n========== Training {season_name}: Model 3 ==========")
-    hist3 = train_model(model3, train_loader, val_loader, 'EModel_FeatureWeight3', learning_rate, weight_decay, num_epochs, season_tag=season_name)
-    print(f"\n========== Training {season_name}: Model 4 ==========")
-    hist4 = train_model(model4, train_loader, val_loader, 'EModel_FeatureWeight4', learning_rate, weight_decay, num_epochs, season_tag=season_name)
-    print(f"\n========== Training {season_name}: Model 5 ==========")
-    hist5 = train_model(model5, train_loader, val_loader, 'EModel_FeatureWeight5', learning_rate, weight_decay, num_epochs, season_tag=season_name)
-
-    # 10) 载入最佳权重并在测试集评估
-    best_model1 = EModel_FeatureWeight1(feature_dim=feature_dim, lstm_hidden_size=256, lstm_num_layers=2).to(device)
-    best_model1.load_state_dict(torch.load(f'best_EModel_FeatureWeight1_{season_name}.pth', map_location=device, weights_only=True), strict=False)
-    best_model2 = EModel_FeatureWeight2(feature_dim=feature_dim, lstm_hidden_size=256, lstm_num_layers=2).to(device)
-    best_model2.load_state_dict(torch.load(f'best_EModel_FeatureWeight2_{season_name}.pth', map_location=device, weights_only=True), strict=False)
-    best_model3 = EModel_FeatureWeight3(feature_dim=feature_dim, gru_hidden_size=128, gru_num_layers=2).to(device)
-    best_model3.load_state_dict(torch.load(f'best_EModel_FeatureWeight3_{season_name}.pth', map_location=device, weights_only=True), strict=False)
-    best_model4 = EModel_FeatureWeight4(feature_dim=feature_dim, lstm_hidden_size=256, lstm_num_layers=2).to(device)
-    best_model4.load_state_dict(torch.load(f'best_EModel_FeatureWeight4_{season_name}.pth', map_location=device, weights_only=True), strict=False)
-    best_model5 = EModel_FeatureWeight5(feature_dim=feature_dim, lstm_hidden_size=256, lstm_num_layers=3).to(device)
-    best_model5.load_state_dict(torch.load(f'best_EModel_FeatureWeight5_{season_name}.pth', map_location=device, weights_only=True), strict=False)
-
-    criterion_test = nn.SmoothL1Loss(beta = 1.0)
-    (_, rmse1_s, mape1_s, r21_s, mse1_s, mae1_s, p1_s, y1_s) = evaluate(best_model1, test_loader, criterion_test)
-    (_, rmse2_s, mape2_s, r22_s, mse2_s, mae2_s, p2_s, y2_s) = evaluate(best_model2, test_loader, criterion_test)
-    (_, rmse3_s, mape3_s, r23_s, mse3_s, mae3_s, p3_s, y3_s) = evaluate(best_model3, test_loader, criterion_test)
-    (_, rmse4_s, mape4_s, r24_s, mse4_s, mae4_s, p4_s, y4_s) = evaluate(best_model4, test_loader, criterion_test)
-    (_, rmse5_s, mape5_s, r25_s, mse5_s, mae5_s, p5_s, y5_s) = evaluate(best_model5, test_loader, criterion_test)
-
-    print(f"\n========== [{season_name} - Test (Standardized Domain)] ==========")
-    print(f"[EModel_FeatureWeight1]  RMSE: {rmse1_s:.4f}, MAPE: {mape1_s:.2f}%, R²: {r21_s:.4f}, mse: {mse1_s:.2f}%, MAE: {mae1_s:.4f}")
-    print(f"[EModel_FeatureWeight2]  RMSE: {rmse2_s:.4f}, MAPE: {mape2_s:.2f}%, R²: {r22_s:.4f}, mse: {mse2_s:.2f}%, MAE: {mae2_s:.4f}")
-    print(f"[EModel_FeatureWeight3]  RMSE: {rmse3_s:.4f}, MAPE: {mape3_s:.2f}%, R²: {r23_s:.4f}, mse: {mse3_s:.2f}%, MAE: {mae3_s:.4f}")
-    print(f"[EModel_FeatureWeight4]  RMSE: {rmse4_s:.4f}, MAPE: {mape4_s:.2f}%, R²: {r24_s:.4f}, mse: {mse4_s:.2f}%, MAE: {mae4_s:.4f}")
-    print(f"[EModel_FeatureWeight5]  RMSE: {rmse5_s:.4f}, MAPE: {mape5_s:.2f}%, R²: {r25_s:.4f}, mse: {mse5_s:.2f}%, MAE: {mae5_s:.4f}")
-
-    # 11) 反标准化与（可选）反对数，计算原始域 RMSE
-    preds_std = [p1_s, p2_s, p3_s, p4_s, p5_s]
-    labels_std = [y1_s, y2_s, y3_s, y4_s, y5_s]
-
-    preds_real_std = [scaler_y.inverse_transform(p.reshape(-1,1)).ravel() for p in preds_std]
-    labels_real_std = [scaler_y.inverse_transform(y.reshape(-1,1)).ravel() for y in labels_std]
-
-    if use_log_transform:
-        preds_real = [np.expm1(x) for x in preds_real_std]
-        labels_real = [np.expm1(x) for x in labels_real_std]
+def compute_original_domain_metrics(y_true, y_pred):
+    """
+    Compute RMSE, MAPE (exclude zeros), R^2, MSE, MAE in original domain.
+    Returns a dict.
+    """
+    rmse_val = np.sqrt(mean_squared_error(y_true, y_pred))
+    nonzero_mask = (y_true != 0)
+    if np.sum(nonzero_mask) > 0:
+        mape_val = np.mean(np.abs((y_true[nonzero_mask] - y_pred[nonzero_mask]) / y_true[nonzero_mask])) * 100.0
     else:
-        preds_real = preds_real_std
-        labels_real = labels_real_std
+        mape_val = 0.0
+    ss_res = np.sum((y_true - y_pred) ** 2)
+    ss_tot = np.sum((y_true - np.mean(y_true)) ** 2)
+    r2_val = 1 - (ss_res / ss_tot) if ss_tot != 0 else 0.0
+    mse_val = np.mean((y_true - y_pred) ** 2)
+    mae_val = np.mean(np.abs(y_true - y_pred))
+    return {
+        'RMSE': rmse_val,
+        'MAPE(%)': mape_val,
+        'R2': r2_val,
+        'MSE': mse_val,
+        'MAE': mae_val
+    }
 
-    rmse_real = [np.sqrt(mean_squared_error(labels_real[3], pr)) for pr in preds_real]  # 与 Model4 标签对齐对比
+def plot_residual_density_overlay(residuals_dict):
+    """
+    Plot overlaid density (KDE) curves of residuals for provided quarters.
+    residuals_dict: {'Q2': np.ndarray, 'Q3': np.ndarray, 'Q4': np.ndarray}
+    """
+    plt.figure(figsize=(10, 5))
+    ordered_keys = [k for k in ['Q2', 'Q3', 'Q4'] if k in residuals_dict]
+    for key in ordered_keys:
+        res = residuals_dict[key]
+        if res is None or len(res) == 0:
+            continue
+        sns.kdeplot(res, label=key, linewidth=2)
+    plt.xlabel('Prediction Error (kW·h)')
+    plt.ylabel('Density')
+    plt.legend()
+    plt.grid(True)
+    # Focus view on main mass while keeping tails visible
+    try:
+        all_res = np.concatenate([residuals_dict[k] for k in ordered_keys if residuals_dict[k] is not None])
+        if all_res.size > 0:
+            limit = np.percentile(np.abs(all_res), 99.5)
+            if np.isfinite(limit) and limit > 0:
+                plt.xlim(-limit, limit)
+    except Exception:
+        pass
+    plt.tight_layout()
+    plt.show()
 
-    print(f"\n========== [{season_name} - Test (Original Domain)] ==========")
-    print(f"[EModel_FeatureWeight1] => RMSE (original): {rmse_real[0]:.2f}")
-    print(f"[EModel_FeatureWeight2] => RMSE (original): {rmse_real[1]:.2f}")
-    print(f"[EModel_FeatureWeight3] => RMSE (original): {rmse_real[2]:.2f}")
-    print(f"[EModel_FeatureWeight4] => RMSE (original): {rmse_real[3]:.2f}")
-    print(f"[EModel_FeatureWeight5] => RMSE (original): {rmse_real[4]:.2f}")
+def quarterly_rolling_evaluation(data_df, feature_cols, target_col, use_log_transform=True):
+    """
+    Quarterly rolling starting at Q1:
+    - Train on Q1 -> predict Q2
+    - Train on Q1–Q2 -> predict Q3
+    - Train on Q1–Q3 -> predict Q4
 
-    # 12) 数据集时间分布图（训练/验证/测试），仅季节窗口
-    print(f"\n[{season_name} Dataset Statistics] Total samples: {total_samples}")
-    print(f"Training set: {train_size} ({train_size / total_samples:.1%})")
-    print(f"Validation set: {val_size} ({val_size / total_samples:.1%})")
-    print(f"Test set: {test_size} ({test_size / total_samples:.1%})")
+    Returns:
+      (metrics_df, residuals_by_quarter)
+    """
+    if 'timestamp' not in data_df.columns:
+        print('[Quarterly] timestamp column not found, skip.')
+        return None, {}
 
-    plot_dataset_distribution(train_timestamps, f'{season_name} - Training Set')
-    plot_dataset_distribution(val_timestamps,   f'{season_name} - Validation Set')
-    plot_dataset_distribution(test_timestamps,  f'{season_name} - Test Set')
+    year = get_last_full_year(data_df)
+    if year is None:
+        print('[Quarterly] No year found in data, skip.')
+        return None, {}
+
+    df_year = data_df[data_df['timestamp'].dt.year == year].copy()
+    df_year.sort_values('timestamp', inplace=True)
+
+    steps = [
+        ('Q2', list(range(1, 4)), list(range(4, 7))),
+        ('Q3', list(range(1, 7)), list(range(7, 10))),
+        ('Q4', list(range(1, 10)), list(range(10, 13)))
+    ]
+
+    metrics_rows = []
+    residuals_by_quarter = {}
+
+    for step_name, train_months, test_months in steps:
+        df_train = df_year[df_year['timestamp'].dt.month.isin(train_months)].copy()
+        df_test  = df_year[df_year['timestamp'].dt.month.isin(test_months)].copy()
+
+        if df_train.shape[0] < window_size + 50 or df_test.shape[0] < window_size + 10:
+            print(f"[Quarterly:{step_name}] Not enough samples. Train={df_train.shape[0]}, Test={df_test.shape[0]}. Skipping.")
+            continue
+
+        # Prepare raw arrays
+        X_train_full = df_train[feature_cols].values
+        y_train_full = df_train[target_col].values
+        X_test_raw   = df_test[feature_cols].values
+        y_test_raw   = df_test[target_col].values
+
+        # Optional log transform
+        if use_log_transform:
+            y_train_full = np.log1p(y_train_full)
+            y_test_raw   = np.log1p(y_test_raw)
+
+        # Time-based split for validation (last 10% of train as val)
+        split_idx = int(0.9 * len(X_train_full))
+        split_idx = max(split_idx, window_size + 1)
+        X_tr_raw, X_val_raw = X_train_full[:split_idx], X_train_full[split_idx:]
+        y_tr_raw, y_val_raw = y_train_full[:split_idx], y_train_full[split_idx:]
+
+        # Standardize using training part only
+        scaler_X = StandardScaler().fit(X_tr_raw)
+        X_tr = scaler_X.transform(X_tr_raw)
+        X_val = scaler_X.transform(X_val_raw)
+        X_te  = scaler_X.transform(X_test_raw)
+
+        scaler_y = StandardScaler().fit(y_tr_raw.reshape(-1, 1))
+        y_tr = scaler_y.transform(y_tr_raw.reshape(-1, 1)).ravel()
+        y_val = scaler_y.transform(y_val_raw.reshape(-1, 1)).ravel()
+        y_te  = scaler_y.transform(y_test_raw.reshape(-1, 1)).ravel()
+
+        # Build sequences
+        X_tr_seq, y_tr_seq   = create_sequences(X_tr,  y_tr,  window_size)
+        X_val_seq, y_val_seq = create_sequences(X_val, y_val, window_size)
+        X_te_seq,  y_te_seq  = create_sequences(X_te,  y_te,  window_size)
+
+        # DataLoaders
+        train_ds = TensorDataset(torch.from_numpy(X_tr_seq), torch.from_numpy(y_tr_seq))
+        val_ds   = TensorDataset(torch.from_numpy(X_val_seq), torch.from_numpy(y_val_seq))
+        test_ds  = TensorDataset(torch.from_numpy(X_te_seq),  torch.from_numpy(y_te_seq))
+        train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True,  num_workers=num_workers)
+        val_loader   = DataLoader(val_ds,   batch_size=batch_size, shuffle=False, num_workers=num_workers)
+        test_loader  = DataLoader(test_ds,  batch_size=batch_size, shuffle=False, num_workers=num_workers)
+
+        feature_dim = X_tr_seq.shape[-1]
+        model = EModel_FeatureWeight4(
+            feature_dim      = feature_dim,
+            lstm_hidden_size = 256,
+            lstm_num_layers  = 2,
+            lstm_dropout     = 0.1
+        ).to(device)
+
+        print(f"\n========== Training (Quarterly {step_name}) ==========")
+        _ = train_model(
+            model         = model,
+            train_loader  = train_loader,
+            val_loader    = val_loader,
+            model_name    = 'EModel_FeatureWeight4',
+            learning_rate = learning_rate,
+            weight_decay  = weight_decay,
+            num_epochs    = num_epochs,
+            season_tag    = step_name
+        )
+
+        # Load best checkpoint
+        best_model = EModel_FeatureWeight4(
+            feature_dim      = feature_dim,
+            lstm_hidden_size = 256,
+            lstm_num_layers  = 2,
+            lstm_dropout     = 0.1
+        ).to(device)
+        try:
+            best_model.load_state_dict(torch.load(f'best_EModel_FeatureWeight4_{step_name}.pth', map_location=device, weights_only=True), strict=False)
+        except Exception:
+            # Fallback to last weights if checkpoint unavailable
+            best_model.load_state_dict(model.state_dict())
+
+        criterion_test = nn.SmoothL1Loss(beta=1.0)
+        (_, _, _, _, _, _, preds_std, labels_std) = evaluate(best_model, test_loader, criterion_test)
+
+        # Inverse transforms back to original domain
+        preds_real_std = scaler_y.inverse_transform(preds_std.reshape(-1, 1)).ravel()
+        labels_real_std = scaler_y.inverse_transform(labels_std.reshape(-1, 1)).ravel()
+
+        if use_log_transform:
+            preds_real = np.expm1(preds_real_std)
+            labels_real = np.expm1(labels_real_std)
+        else:
+            preds_real = preds_real_std
+            labels_real = labels_real_std
+
+        # Metrics in original domain
+        metrics = compute_original_domain_metrics(labels_real, preds_real)
+        metrics['Quarter'] = step_name
+        metrics['NumSamples'] = len(labels_real)
+        metrics_rows.append(metrics)
+
+        # Residuals for density plot
+        residuals_by_quarter[step_name] = preds_real - labels_real
+
+    if len(metrics_rows) == 0:
+        print('[Quarterly] No valid quarterly steps executed.')
+        return None, residuals_by_quarter
+
+    # Build summary DataFrame
+    metrics_df = pd.DataFrame(metrics_rows)[['Quarter', 'NumSamples', 'RMSE', 'MAPE(%)', 'R2', 'MSE', 'MAE']]
+    metrics_df.sort_values('Quarter', inplace=True)
+    return metrics_df, residuals_by_quarter
 
 # 8. Main Function
 def main(use_log_transform = True, min_egrid_threshold = 1.0):
@@ -1801,24 +1863,6 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     """
     print("Loading raw data...")
     data_df = load_data()
-
-    # 先按季节窗口进行独立划分与训练评估（不影响后续全量流程）
-    if 'timestamp' not in data_df.columns:
-        raise ValueError("Expected 'timestamp' column in data.")
-    seasons = {
-        'DJF': [12, 1, 2],
-        'MAM': [3, 4, 5],
-        'JJA': [6, 7, 8],
-        'SON': [9, 10, 11]
-    }
-    for s_name, s_months in seasons.items():
-        process_season(
-            data_df=data_df,
-            season_name=s_name,
-            season_months=s_months,
-            use_log_transform=use_log_transform,
-            min_egrid_threshold=min_egrid_threshold
-        )
 
     # Plot correlation heatmap (before filtering E_grid = 0)
     feature_cols_to_plot = ['season', 'holiday', 'weather', 'temperature', 'working_hours', 'E_wind','E_PV','v_wind', 'wind_direction', 'E_grid']
@@ -1865,7 +1909,26 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     data_df.reset_index(drop = True, inplace = True)
 
     analyze_target_distribution(data_df, target_col)
-    plot_Egrid_over_time(data_df)
+    plot_Egrid_over_time(data_df)ß
+
+    # =============== Quarterly rolling evaluation (Q1→Q2, Q1–Q2→Q3, Q1–Q3→Q4) ===============
+    metrics_df, residuals_q = quarterly_rolling_evaluation(
+        data_df=data_df,
+        feature_cols=feature_cols,
+        target_col=target_col,
+        use_log_transform=use_log_transform
+    )
+    if metrics_df is not None:
+        print("\n========== Quarterly Rolling Metrics (Original Domain) ==========")
+        print(metrics_df.to_string(index=False))
+        try:
+            out_csv_path = 'quarterly_metrics.csv'
+            metrics_df.to_csv(out_csv_path, index=False)
+            print(f"[Quarterly] Metrics saved to {out_csv_path}")
+        except Exception as e:
+            print(f"[Quarterly] Failed to save metrics CSV: {e}")
+        # Residual density overlay plot
+        plot_residual_density_overlay(residuals_q)
 
     # Split data into training, validation, and test sets by time series
     X_all_raw = data_df[feature_cols].values

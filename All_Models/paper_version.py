@@ -1064,7 +1064,7 @@ def evaluate(model, dataloader, criterion, device = device):
 
 
 # 6. Training Module
-def train_model(model, train_loader, val_loader, model_name = 'Model', learning_rate = learning_rate, weight_decay = weight_decay, num_epochs = num_epochs):
+def train_model(model, train_loader, val_loader, model_name = 'Model', learning_rate = learning_rate, weight_decay = weight_decay, num_epochs = num_epochs, season_tag = None):
     """
     [Training Module]
     - Train the model on the training and validation sets while recording various metrics.
@@ -1077,6 +1077,7 @@ def train_model(model, train_loader, val_loader, model_name = 'Model', learning_
       learning_rate: Learning rate
       weight_decay: Weight decay
       num_epochs: Number of training epochs
+      season_tag: Optional season identifier to suffix checkpoint names (e.g., 'DJF', 'MAM').
     Returns:
       A dictionary of metric histories.
     """
@@ -1169,8 +1170,9 @@ def train_model(model, train_loader, val_loader, model_name = 'Model', learning_
         if val_loss_eval < best_val_loss:
             best_val_loss = val_loss_eval
             counter       = 0
-            torch.save(model.state_dict(), f"best_{model_name}.pth")
-            print(f"[{model_name}] Model saved (best val_loss = {best_val_loss:.4f}).")
+            ckpt_name = f"best_{model_name}.pth" if not season_tag else f"best_{model_name}_{season_tag}.pth"
+            torch.save(model.state_dict(), ckpt_name)
+            print(f"[{model_name}] Model saved (best val_loss = {best_val_loss:.4f}) as {ckpt_name}.")
         else:
             counter += 1
             if counter >= patience:
@@ -1620,6 +1622,7 @@ def plot_error_max_curve(y_actual_real,
                  linestyle=line_styles[i % len(line_styles)],
                  markersize = 10)
 
+
     # -------- 3. 图形美化 -------- #
     #plt.title('Smoothed Histogram Curves of Prediction Errors')
     plt.xlim(-20000, 20000)
@@ -1630,6 +1633,162 @@ def plot_error_max_curve(y_actual_real,
     plt.tight_layout()
     plt.show()
 
+# 8. Seasonal Processing
+def process_season(data_df, season_name, season_months, use_log_transform=True, min_egrid_threshold=1.0):
+    print(f"\n========== Season {season_name} ({season_months}) ==========")
+    # 1) 按季节月份过滤
+    df = data_df[data_df['timestamp'].dt.month.isin(season_months)].copy()
+    if df.shape[0] < window_size + 50:
+        print(f"[{season_name}] Not enough samples ({df.shape[0]}) for window_size={window_size}. Skipping.")
+        return
+
+    # 2) 去除 E_grid 为 0 的样本（与原流程一致）
+    df = df[df['E_grid'] != 0].copy()
+    df.reset_index(drop=True, inplace=True)
+
+    # 3) 特征工程 + 季节内特征重要性
+    df, feature_cols, target_col = feature_engineering(df)
+
+    pearson_importance = calculate_feature_importance(df, feature_cols, target_col)
+    mic_importance = calculate_feature_importance_mic(df, feature_cols, target_col)
+    feature_importance = 0.5 * pearson_importance + 0.5 * mic_importance
+
+    # 4) 过滤过小目标值
+    df = df[df[target_col] > min_egrid_threshold].copy()
+    df.reset_index(drop=True, inplace=True)
+
+    # 5) 构造原始数组
+    X_all_raw = df[feature_cols].values
+    y_all_raw = df[target_col].values
+    timestamps_all = df['timestamp'].values
+
+    total_samples = len(df)
+    train_size = int(0.8 * total_samples)
+    val_size   = int(0.1 * total_samples)
+    test_size  = total_samples - train_size - val_size
+
+    X_train_raw = X_all_raw[:train_size]
+    y_train_raw = y_all_raw[:train_size]
+    X_val_raw   = X_all_raw[train_size : train_size + val_size]
+    y_val_raw   = y_all_raw[train_size : train_size + val_size]
+    X_test_raw  = X_all_raw[train_size + val_size:]
+    y_test_raw  = y_all_raw[train_size + val_size:]
+
+    train_timestamps = timestamps_all[:train_size]
+    val_timestamps   = timestamps_all[train_size : train_size + val_size]
+    # 为了与序列对齐，测试时间戳从 test 开始偏移 window_size
+    test_timestamps  = timestamps_all[train_size + val_size + window_size:]
+
+    # 6) 目标对数变换（可选）
+    if use_log_transform:
+        y_train_raw = np.log1p(y_train_raw)
+        y_val_raw   = np.log1p(y_val_raw)
+        y_test_raw  = np.log1p(y_test_raw)
+
+    # 7) 标准化（基于训练集拟合）
+    scaler_X = StandardScaler().fit(X_train_raw)
+    X_train = scaler_X.transform(X_train_raw)
+    X_val   = scaler_X.transform(X_val_raw)
+    X_test  = scaler_X.transform(X_test_raw)
+
+    scaler_y = StandardScaler().fit(y_train_raw.reshape(-1, 1))
+    y_train  = scaler_y.transform(y_train_raw.reshape(-1, 1)).ravel()
+    y_val    = scaler_y.transform(y_val_raw.reshape(-1, 1)).ravel()
+    y_test   = scaler_y.transform(y_test_raw.reshape(-1, 1)).ravel()
+
+    # 8) 构造时序样本
+    X_train_seq, y_train_seq = create_sequences(X_train, y_train, window_size)
+    X_val_seq,   y_val_seq   = create_sequences(X_val,   y_val,   window_size)
+    X_test_seq,  y_test_seq  = create_sequences(X_test,  y_test,  window_size)
+
+    print(f"[{season_name}] Train/Val/Test samples: {X_train_seq.shape[0]}, {X_val_seq.shape[0]}, {X_test_seq.shape[0]}")
+    print(f"[{season_name}] Feature dim: {X_train_seq.shape[-1]}, Window size: {window_size}")
+
+    train_dataset = TensorDataset(torch.from_numpy(X_train_seq), torch.from_numpy(y_train_seq))
+    val_dataset   = TensorDataset(torch.from_numpy(X_val_seq),   torch.from_numpy(y_val_seq))
+    test_dataset  = TensorDataset(torch.from_numpy(X_test_seq),  torch.from_numpy(y_test_seq))
+
+    train_loader = DataLoader(train_dataset, batch_size = batch_size, shuffle = True,  num_workers = num_workers)
+    val_loader   = DataLoader(val_dataset,   batch_size = batch_size, shuffle = False, num_workers = num_workers)
+    test_loader  = DataLoader(test_dataset,  batch_size = batch_size, shuffle = False, num_workers = num_workers)
+
+    # 9) 构建并训练模型（带季节后缀保存权重）
+    feature_dim = X_train_seq.shape[-1]
+    model1 = EModel_FeatureWeight1(feature_dim=feature_dim, lstm_hidden_size=256, lstm_num_layers=2, lstm_dropout=0.2).to(device)
+    model2 = EModel_FeatureWeight2(feature_dim=feature_dim, lstm_hidden_size=256, lstm_num_layers=2, lstm_dropout=0.2).to(device)
+    model3 = EModel_FeatureWeight3(feature_dim=feature_dim, gru_hidden_size=128, gru_num_layers=2, gru_dropout=0.2, use_local_attn=True, local_attn_window_size=5).to(device)
+    model4 = EModel_FeatureWeight4(feature_dim=feature_dim, lstm_hidden_size=256, lstm_num_layers=2, lstm_dropout=0.1, feature_importance=feature_importance).to(device)
+    model5 = EModel_FeatureWeight5(feature_dim=feature_dim, lstm_hidden_size=256, lstm_num_layers=3, lstm_dropout=0.1).to(device)
+
+    print(f"\n========== Training {season_name}: Model 1 ==========")
+    hist1 = train_model(model1, train_loader, val_loader, 'EModel_FeatureWeight1', learning_rate, weight_decay, num_epochs, season_tag=season_name)
+    print(f"\n========== Training {season_name}: Model 2 ==========")
+    hist2 = train_model(model2, train_loader, val_loader, 'EModel_FeatureWeight2', learning_rate, weight_decay, num_epochs, season_tag=season_name)
+    print(f"\n========== Training {season_name}: Model 3 ==========")
+    hist3 = train_model(model3, train_loader, val_loader, 'EModel_FeatureWeight3', learning_rate, weight_decay, num_epochs, season_tag=season_name)
+    print(f"\n========== Training {season_name}: Model 4 ==========")
+    hist4 = train_model(model4, train_loader, val_loader, 'EModel_FeatureWeight4', learning_rate, weight_decay, num_epochs, season_tag=season_name)
+    print(f"\n========== Training {season_name}: Model 5 ==========")
+    hist5 = train_model(model5, train_loader, val_loader, 'EModel_FeatureWeight5', learning_rate, weight_decay, num_epochs, season_tag=season_name)
+
+    # 10) 载入最佳权重并在测试集评估
+    best_model1 = EModel_FeatureWeight1(feature_dim=feature_dim, lstm_hidden_size=256, lstm_num_layers=2).to(device)
+    best_model1.load_state_dict(torch.load(f'best_EModel_FeatureWeight1_{season_name}.pth', map_location=device, weights_only=True), strict=False)
+    best_model2 = EModel_FeatureWeight2(feature_dim=feature_dim, lstm_hidden_size=256, lstm_num_layers=2).to(device)
+    best_model2.load_state_dict(torch.load(f'best_EModel_FeatureWeight2_{season_name}.pth', map_location=device, weights_only=True), strict=False)
+    best_model3 = EModel_FeatureWeight3(feature_dim=feature_dim, gru_hidden_size=128, gru_num_layers=2).to(device)
+    best_model3.load_state_dict(torch.load(f'best_EModel_FeatureWeight3_{season_name}.pth', map_location=device, weights_only=True), strict=False)
+    best_model4 = EModel_FeatureWeight4(feature_dim=feature_dim, lstm_hidden_size=256, lstm_num_layers=2).to(device)
+    best_model4.load_state_dict(torch.load(f'best_EModel_FeatureWeight4_{season_name}.pth', map_location=device, weights_only=True), strict=False)
+    best_model5 = EModel_FeatureWeight5(feature_dim=feature_dim, lstm_hidden_size=256, lstm_num_layers=3).to(device)
+    best_model5.load_state_dict(torch.load(f'best_EModel_FeatureWeight5_{season_name}.pth', map_location=device, weights_only=True), strict=False)
+
+    criterion_test = nn.SmoothL1Loss(beta = 1.0)
+    (_, rmse1_s, mape1_s, r21_s, mse1_s, mae1_s, p1_s, y1_s) = evaluate(best_model1, test_loader, criterion_test)
+    (_, rmse2_s, mape2_s, r22_s, mse2_s, mae2_s, p2_s, y2_s) = evaluate(best_model2, test_loader, criterion_test)
+    (_, rmse3_s, mape3_s, r23_s, mse3_s, mae3_s, p3_s, y3_s) = evaluate(best_model3, test_loader, criterion_test)
+    (_, rmse4_s, mape4_s, r24_s, mse4_s, mae4_s, p4_s, y4_s) = evaluate(best_model4, test_loader, criterion_test)
+    (_, rmse5_s, mape5_s, r25_s, mse5_s, mae5_s, p5_s, y5_s) = evaluate(best_model5, test_loader, criterion_test)
+
+    print(f"\n========== [{season_name} - Test (Standardized Domain)] ==========")
+    print(f"[EModel_FeatureWeight1]  RMSE: {rmse1_s:.4f}, MAPE: {mape1_s:.2f}%, R²: {r21_s:.4f}, mse: {mse1_s:.2f}%, MAE: {mae1_s:.4f}")
+    print(f"[EModel_FeatureWeight2]  RMSE: {rmse2_s:.4f}, MAPE: {mape2_s:.2f}%, R²: {r22_s:.4f}, mse: {mse2_s:.2f}%, MAE: {mae2_s:.4f}")
+    print(f"[EModel_FeatureWeight3]  RMSE: {rmse3_s:.4f}, MAPE: {mape3_s:.2f}%, R²: {r23_s:.4f}, mse: {mse3_s:.2f}%, MAE: {mae3_s:.4f}")
+    print(f"[EModel_FeatureWeight4]  RMSE: {rmse4_s:.4f}, MAPE: {mape4_s:.2f}%, R²: {r24_s:.4f}, mse: {mse4_s:.2f}%, MAE: {mae4_s:.4f}")
+    print(f"[EModel_FeatureWeight5]  RMSE: {rmse5_s:.4f}, MAPE: {mape5_s:.2f}%, R²: {r25_s:.4f}, mse: {mse5_s:.2f}%, MAE: {mae5_s:.4f}")
+
+    # 11) 反标准化与（可选）反对数，计算原始域 RMSE
+    preds_std = [p1_s, p2_s, p3_s, p4_s, p5_s]
+    labels_std = [y1_s, y2_s, y3_s, y4_s, y5_s]
+
+    preds_real_std = [scaler_y.inverse_transform(p.reshape(-1,1)).ravel() for p in preds_std]
+    labels_real_std = [scaler_y.inverse_transform(y.reshape(-1,1)).ravel() for y in labels_std]
+
+    if use_log_transform:
+        preds_real = [np.expm1(x) for x in preds_real_std]
+        labels_real = [np.expm1(x) for x in labels_real_std]
+    else:
+        preds_real = preds_real_std
+        labels_real = labels_real_std
+
+    rmse_real = [np.sqrt(mean_squared_error(labels_real[3], pr)) for pr in preds_real]  # 与 Model4 标签对齐对比
+
+    print(f"\n========== [{season_name} - Test (Original Domain)] ==========")
+    print(f"[EModel_FeatureWeight1] => RMSE (original): {rmse_real[0]:.2f}")
+    print(f"[EModel_FeatureWeight2] => RMSE (original): {rmse_real[1]:.2f}")
+    print(f"[EModel_FeatureWeight3] => RMSE (original): {rmse_real[2]:.2f}")
+    print(f"[EModel_FeatureWeight4] => RMSE (original): {rmse_real[3]:.2f}")
+    print(f"[EModel_FeatureWeight5] => RMSE (original): {rmse_real[4]:.2f}")
+
+    # 12) 数据集时间分布图（训练/验证/测试），仅季节窗口
+    print(f"\n[{season_name} Dataset Statistics] Total samples: {total_samples}")
+    print(f"Training set: {train_size} ({train_size / total_samples:.1%})")
+    print(f"Validation set: {val_size} ({val_size / total_samples:.1%})")
+    print(f"Test set: {test_size} ({test_size / total_samples:.1%})")
+
+    plot_dataset_distribution(train_timestamps, f'{season_name} - Training Set')
+    plot_dataset_distribution(val_timestamps,   f'{season_name} - Validation Set')
+    plot_dataset_distribution(test_timestamps,  f'{season_name} - Test Set')
 
 # 8. Main Function
 def main(use_log_transform = True, min_egrid_threshold = 1.0):
@@ -1642,6 +1801,24 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     """
     print("Loading raw data...")
     data_df = load_data()
+
+    # 先按季节窗口进行独立划分与训练评估（不影响后续全量流程）
+    if 'timestamp' not in data_df.columns:
+        raise ValueError("Expected 'timestamp' column in data.")
+    seasons = {
+        'DJF': [12, 1, 2],
+        'MAM': [3, 4, 5],
+        'JJA': [6, 7, 8],
+        'SON': [9, 10, 11]
+    }
+    for s_name, s_months in seasons.items():
+        process_season(
+            data_df=data_df,
+            season_name=s_name,
+            season_months=s_months,
+            use_log_transform=use_log_transform,
+            min_egrid_threshold=min_egrid_threshold
+        )
 
     # Plot correlation heatmap (before filtering E_grid = 0)
     feature_cols_to_plot = ['season', 'holiday', 'weather', 'temperature', 'working_hours', 'E_wind','E_PV','v_wind', 'wind_direction', 'E_grid']

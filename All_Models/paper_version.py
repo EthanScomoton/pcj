@@ -1064,7 +1064,7 @@ def evaluate(model, dataloader, criterion, device = device):
 
 
 # 6. Training Module
-def train_model(model, train_loader, val_loader, model_name = 'Model', learning_rate = learning_rate, weight_decay = weight_decay, num_epochs = num_epochs, season_tag = None):
+def train_model(model, train_loader, val_loader, model_name = 'Model', learning_rate = learning_rate, weight_decay = weight_decay, num_epochs = num_epochs):
     """
     [Training Module]
     - Train the model on the training and validation sets while recording various metrics.
@@ -1077,7 +1077,6 @@ def train_model(model, train_loader, val_loader, model_name = 'Model', learning_
       learning_rate: Learning rate
       weight_decay: Weight decay
       num_epochs: Number of training epochs
-      season_tag: Optional season identifier to suffix checkpoint names (e.g., 'DJF', 'MAM').
     Returns:
       A dictionary of metric histories.
     """
@@ -1170,9 +1169,8 @@ def train_model(model, train_loader, val_loader, model_name = 'Model', learning_
         if val_loss_eval < best_val_loss:
             best_val_loss = val_loss_eval
             counter       = 0
-            ckpt_name = f"best_{model_name}.pth" if not season_tag else f"best_{model_name}_{season_tag}.pth"
-            torch.save(model.state_dict(), ckpt_name)
-            print(f"[{model_name}] Model saved (best val_loss = {best_val_loss:.4f}) as {ckpt_name}.")
+            torch.save(model.state_dict(), f"best_{model_name}.pth")
+            print(f"[{model_name}] Model saved (best val_loss = {best_val_loss:.4f}).")
         else:
             counter += 1
             if counter >= patience:
@@ -1622,7 +1620,6 @@ def plot_error_max_curve(y_actual_real,
                  linestyle=line_styles[i % len(line_styles)],
                  markersize = 10)
 
-
     # -------- 3. 图形美化 -------- #
     #plt.title('Smoothed Histogram Curves of Prediction Errors')
     plt.xlim(-20000, 20000)
@@ -1633,224 +1630,6 @@ def plot_error_max_curve(y_actual_real,
     plt.tight_layout()
     plt.show()
 
-# 8. Seasonal Processing
-def process_season(data_df, season_name, season_months, use_log_transform=True, min_egrid_threshold=1.0):
-    print(f"\n========== Season {season_name} ({season_months}) ==========")
-    # Filter by season months
-    df = data_df[data_df['timestamp'].dt.month.isin(season_months)].copy()
-    if df.shape[0] < window_size + 50:
-        print(f"[{season_name}] Not enough samples ({df.shape[0]}) for window_size={window_size}. Skipping.")
-        return
-
-# 8x. Quarterly rolling evaluation helpers
-def get_last_full_year(data_df):
-    """
-    Return the most recent year in which all 12 months are present.
-    If none has all 12 months, return the latest year available.
-    """
-    years_sorted = sorted(data_df['timestamp'].dt.year.unique().tolist())
-    for y in reversed(years_sorted):
-        months_in_year = set(data_df.loc[data_df['timestamp'].dt.year == y, 'timestamp'].dt.month.unique().tolist())
-        if all(m in months_in_year for m in range(1, 13)):
-            return y
-    return years_sorted[-1] if years_sorted else None
-
-def compute_original_domain_metrics(y_true, y_pred):
-    """
-    Compute RMSE, MAPE (exclude zeros), R^2, MSE, MAE in original domain.
-    Returns a dict.
-    """
-    rmse_val = np.sqrt(mean_squared_error(y_true, y_pred))
-    nonzero_mask = (y_true != 0)
-    if np.sum(nonzero_mask) > 0:
-        mape_val = np.mean(np.abs((y_true[nonzero_mask] - y_pred[nonzero_mask]) / y_true[nonzero_mask])) * 100.0
-    else:
-        mape_val = 0.0
-    ss_res = np.sum((y_true - y_pred) ** 2)
-    ss_tot = np.sum((y_true - np.mean(y_true)) ** 2)
-    r2_val = 1 - (ss_res / ss_tot) if ss_tot != 0 else 0.0
-    mse_val = np.mean((y_true - y_pred) ** 2)
-    mae_val = np.mean(np.abs(y_true - y_pred))
-    return {
-        'RMSE': rmse_val,
-        'MAPE(%)': mape_val,
-        'R2': r2_val,
-        'MSE': mse_val,
-        'MAE': mae_val
-    }
-
-def plot_residual_density_overlay(residuals_dict):
-    """
-    Plot overlaid density (KDE) curves of residuals for provided quarters.
-    residuals_dict: {'Q2': np.ndarray, 'Q3': np.ndarray, 'Q4': np.ndarray}
-    """
-    plt.figure(figsize=(10, 5))
-    ordered_keys = [k for k in ['Q2', 'Q3', 'Q4'] if k in residuals_dict]
-    for key in ordered_keys:
-        res = residuals_dict[key]
-        if res is None or len(res) == 0:
-            continue
-        sns.kdeplot(res, label=key, linewidth=2)
-    plt.xlabel('Prediction Error (kW·h)')
-    plt.ylabel('Density')
-    plt.legend()
-    plt.grid(True)
-    # Focus view on main mass while keeping tails visible
-    try:
-        all_res = np.concatenate([residuals_dict[k] for k in ordered_keys if residuals_dict[k] is not None])
-        if all_res.size > 0:
-            limit = np.percentile(np.abs(all_res), 99.5)
-            if np.isfinite(limit) and limit > 0:
-                plt.xlim(-limit, limit)
-    except Exception:
-        pass
-    plt.tight_layout()
-    plt.show()
-
-def quarterly_rolling_evaluation(data_df, feature_cols, target_col, use_log_transform=True):
-    """
-    Quarterly rolling starting at Q1:
-    - Train on Q1 -> predict Q2
-    - Train on Q1–Q2 -> predict Q3
-    - Train on Q1–Q3 -> predict Q4
-
-    Returns:
-      (metrics_df, residuals_by_quarter)
-    """
-    if 'timestamp' not in data_df.columns:
-        print('[Quarterly] timestamp column not found, skip.')
-        return None, {}
-
-    year = get_last_full_year(data_df)
-    if year is None:
-        print('[Quarterly] No year found in data, skip.')
-        return None, {}
-
-    df_year = data_df[data_df['timestamp'].dt.year == year].copy()
-    df_year.sort_values('timestamp', inplace=True)
-
-    steps = [
-        ('Q2', list(range(1, 4)), list(range(4, 7))),
-        ('Q3', list(range(1, 7)), list(range(7, 10))),
-        ('Q4', list(range(1, 10)), list(range(10, 13)))
-    ]
-
-    metrics_rows = []
-    residuals_by_quarter = {}
-
-    for step_name, train_months, test_months in steps:
-        df_train = df_year[df_year['timestamp'].dt.month.isin(train_months)].copy()
-        df_test  = df_year[df_year['timestamp'].dt.month.isin(test_months)].copy()
-
-        if df_train.shape[0] < window_size + 50 or df_test.shape[0] < window_size + 10:
-            print(f"[Quarterly:{step_name}] Not enough samples. Train={df_train.shape[0]}, Test={df_test.shape[0]}. Skipping.")
-            continue
-
-        # Prepare raw arrays
-        X_train_full = df_train[feature_cols].values
-        y_train_full = df_train[target_col].values
-        X_test_raw   = df_test[feature_cols].values
-        y_test_raw   = df_test[target_col].values
-
-        # Optional log transform
-        if use_log_transform:
-            y_train_full = np.log1p(y_train_full)
-            y_test_raw   = np.log1p(y_test_raw)
-
-        # Time-based split for validation (last 10% of train as val)
-        split_idx = int(0.9 * len(X_train_full))
-        split_idx = max(split_idx, window_size + 1)
-        X_tr_raw, X_val_raw = X_train_full[:split_idx], X_train_full[split_idx:]
-        y_tr_raw, y_val_raw = y_train_full[:split_idx], y_train_full[split_idx:]
-
-        # Standardize using training part only
-        scaler_X = StandardScaler().fit(X_tr_raw)
-        X_tr = scaler_X.transform(X_tr_raw)
-        X_val = scaler_X.transform(X_val_raw)
-        X_te  = scaler_X.transform(X_test_raw)
-
-        scaler_y = StandardScaler().fit(y_tr_raw.reshape(-1, 1))
-        y_tr = scaler_y.transform(y_tr_raw.reshape(-1, 1)).ravel()
-        y_val = scaler_y.transform(y_val_raw.reshape(-1, 1)).ravel()
-        y_te  = scaler_y.transform(y_test_raw.reshape(-1, 1)).ravel()
-
-        # Build sequences
-        X_tr_seq, y_tr_seq   = create_sequences(X_tr,  y_tr,  window_size)
-        X_val_seq, y_val_seq = create_sequences(X_val, y_val, window_size)
-        X_te_seq,  y_te_seq  = create_sequences(X_te,  y_te,  window_size)
-
-        # DataLoaders
-        train_ds = TensorDataset(torch.from_numpy(X_tr_seq), torch.from_numpy(y_tr_seq))
-        val_ds   = TensorDataset(torch.from_numpy(X_val_seq), torch.from_numpy(y_val_seq))
-        test_ds  = TensorDataset(torch.from_numpy(X_te_seq),  torch.from_numpy(y_te_seq))
-        train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True,  num_workers=num_workers)
-        val_loader   = DataLoader(val_ds,   batch_size=batch_size, shuffle=False, num_workers=num_workers)
-        test_loader  = DataLoader(test_ds,  batch_size=batch_size, shuffle=False, num_workers=num_workers)
-
-        feature_dim = X_tr_seq.shape[-1]
-        model = EModel_FeatureWeight4(
-            feature_dim      = feature_dim,
-            lstm_hidden_size = 256,
-            lstm_num_layers  = 2,
-            lstm_dropout     = 0.1
-        ).to(device)
-
-        print(f"\n========== Training (Quarterly {step_name}) ==========")
-        _ = train_model(
-            model         = model,
-            train_loader  = train_loader,
-            val_loader    = val_loader,
-            model_name    = 'EModel_FeatureWeight4',
-            learning_rate = learning_rate,
-            weight_decay  = weight_decay,
-            num_epochs    = num_epochs,
-            season_tag    = step_name
-        )
-
-        # Load best checkpoint
-        best_model = EModel_FeatureWeight4(
-            feature_dim      = feature_dim,
-            lstm_hidden_size = 256,
-            lstm_num_layers  = 2,
-            lstm_dropout     = 0.1
-        ).to(device)
-        try:
-            best_model.load_state_dict(torch.load(f'best_EModel_FeatureWeight4_{step_name}.pth', map_location=device, weights_only=True), strict=False)
-        except Exception:
-            # Fallback to last weights if checkpoint unavailable
-            best_model.load_state_dict(model.state_dict())
-
-        criterion_test = nn.SmoothL1Loss(beta=1.0)
-        (_, _, _, _, _, _, preds_std, labels_std) = evaluate(best_model, test_loader, criterion_test)
-
-        # Inverse transforms back to original domain
-        preds_real_std = scaler_y.inverse_transform(preds_std.reshape(-1, 1)).ravel()
-        labels_real_std = scaler_y.inverse_transform(labels_std.reshape(-1, 1)).ravel()
-
-        if use_log_transform:
-            preds_real = np.expm1(preds_real_std)
-            labels_real = np.expm1(labels_real_std)
-        else:
-            preds_real = preds_real_std
-            labels_real = labels_real_std
-
-        # Metrics in original domain
-        metrics = compute_original_domain_metrics(labels_real, preds_real)
-        metrics['Quarter'] = step_name
-        metrics['NumSamples'] = len(labels_real)
-        metrics_rows.append(metrics)
-
-        # Residuals for density plot
-        residuals_by_quarter[step_name] = preds_real - labels_real
-
-    if len(metrics_rows) == 0:
-        print('[Quarterly] No valid quarterly steps executed.')
-        return None, residuals_by_quarter
-
-    # Build summary DataFrame
-    metrics_df = pd.DataFrame(metrics_rows)[['Quarter', 'NumSamples', 'RMSE', 'MAPE(%)', 'R2', 'MSE', 'MAE']]
-    metrics_df.sort_values('Quarter', inplace=True)
-    return metrics_df, residuals_by_quarter
 
 # 8. Main Function
 def main(use_log_transform = True, min_egrid_threshold = 1.0):
@@ -1910,25 +1689,6 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
 
     analyze_target_distribution(data_df, target_col)
     plot_Egrid_over_time(data_df)
-
-    # =============== Quarterly rolling evaluation (Q1→Q2, Q1–Q2→Q3, Q1–Q3→Q4) ===============
-    metrics_df, residuals_q = quarterly_rolling_evaluation(
-        data_df=data_df,
-        feature_cols=feature_cols,
-        target_col=target_col,
-        use_log_transform=use_log_transform
-    )
-    if metrics_df is not None:
-        print("\n========== Quarterly Rolling Metrics (Original Domain) ==========")
-        print(metrics_df.to_string(index=False))
-        try:
-            out_csv_path = 'quarterly_metrics.csv'
-            metrics_df.to_csv(out_csv_path, index=False)
-            print(f"[Quarterly] Metrics saved to {out_csv_path}")
-        except Exception as e:
-            print(f"[Quarterly] Failed to save metrics CSV: {e}")
-        # Residual density overlay plot
-        plot_residual_density_overlay(residuals_q)
 
     # Split data into training, validation, and test sets by time series
     X_all_raw = data_df[feature_cols].values
@@ -2293,6 +2053,357 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     plot_training_curves_allmetrics(hist5, model_name = 'EModel_FeatureWeight5')
 
     print("[Info] Processing complete!")
+
+    # ================== 季节性分析模块 ==================
+    def assign_season(month):
+        """
+        根据月份分配季节
+        DJF（冬 12-2）、MAM（春 3-5）、JJA（夏 6-8）、SON（秋 9-11）
+        """
+        if month in [12, 1, 2]:
+            return 'DJF'  # 冬季
+        elif month in [3, 4, 5]:
+            return 'MAM'  # 春季
+        elif month in [6, 7, 8]:
+            return 'JJA'  # 夏季
+        elif month in [9, 10, 11]:
+            return 'SON'  # 秋季
+        else:
+            return 'Unknown'
+
+    def split_data_by_season(data_df):
+        """
+        按季节划分数据
+        返回：季节名称到数据的字典
+        """
+        # 添加季节列
+        data_df['season_label'] = data_df['timestamp'].dt.month.apply(assign_season)
+        
+        # 按季节分组
+        seasonal_data = {}
+        for season in ['DJF', 'MAM', 'JJA', 'SON']:
+            seasonal_data[season] = data_df[data_df['season_label'] == season].copy()
+            seasonal_data[season].reset_index(drop=True, inplace=True)
+        
+        return seasonal_data
+
+    def train_seasonal_model(train_seasons_data, test_season_data, feature_cols, target_col, 
+                             model_class, model_params, test_season_name, use_log_transform=True):
+        """
+        训练单个季节的模型
+        train_seasons_data: 训练季节的数据列表
+        test_season_data: 测试季节的数据
+        """
+        # 合并训练季节数据
+        train_data = pd.concat(train_seasons_data, ignore_index=True)
+        train_data.sort_values('timestamp', inplace=True)
+        
+        # 准备训练数据
+        X_train_all = train_data[feature_cols].values
+        y_train_all = train_data[target_col].values
+        
+        # 在训练数据内部进行 8:1:1 划分
+        n_train = len(X_train_all)
+        train_size = int(0.8 * n_train)
+        val_size = int(0.1 * n_train)
+        
+        X_train = X_train_all[:train_size]
+        y_train = y_train_all[:train_size]
+        X_val = X_train_all[train_size:train_size+val_size]
+        y_val = y_train_all[train_size:train_size+val_size]
+        
+        # 准备测试数据
+        X_test = test_season_data[feature_cols].values
+        y_test = test_season_data[target_col].values
+        
+        # 应用对数变换
+        if use_log_transform:
+            y_train = np.log1p(y_train)
+            y_val = np.log1p(y_val)
+            y_test = np.log1p(y_test)
+        
+        # 标准化
+        scaler_X = StandardScaler().fit(X_train)
+        X_train_scaled = scaler_X.transform(X_train)
+        X_val_scaled = scaler_X.transform(X_val)
+        X_test_scaled = scaler_X.transform(X_test)
+        
+        scaler_y = StandardScaler().fit(y_train.reshape(-1, 1))
+        y_train_scaled = scaler_y.transform(y_train.reshape(-1, 1)).ravel()
+        y_val_scaled = scaler_y.transform(y_val.reshape(-1, 1)).ravel()
+        y_test_scaled = scaler_y.transform(y_test.reshape(-1, 1)).ravel()
+        
+        # 创建序列
+        X_train_seq, y_train_seq = create_sequences(X_train_scaled, y_train_scaled, window_size)
+        X_val_seq, y_val_seq = create_sequences(X_val_scaled, y_val_scaled, window_size)
+        X_test_seq, y_test_seq = create_sequences(X_test_scaled, y_test_scaled, window_size)
+        
+        # 创建数据加载器
+        train_dataset = TensorDataset(torch.from_numpy(X_train_seq), torch.from_numpy(y_train_seq))
+        val_dataset = TensorDataset(torch.from_numpy(X_val_seq), torch.from_numpy(y_val_seq))
+        test_dataset = TensorDataset(torch.from_numpy(X_test_seq), torch.from_numpy(y_test_seq))
+        
+        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=0)
+        val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=0)
+        test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=0)
+        
+        # 创建模型
+        model = model_class(**model_params).to(device)
+        
+        # 训练模型
+        print(f"\n训练季节模型 - 测试季节: {test_season_name}")
+        hist = train_model(
+            model=model,
+            train_loader=train_loader,
+            val_loader=val_loader,
+            model_name=f'Seasonal_{test_season_name}',
+            learning_rate=learning_rate,
+            weight_decay=weight_decay,
+            num_epochs=num_epochs
+        )
+        
+        # 加载最佳模型进行评估
+        model.load_state_dict(torch.load(f'best_Seasonal_{test_season_name}.pth', map_location=device, weights_only=True))
+        
+        # 评估
+        criterion_test = nn.MSELoss()
+        _, rmse_std, mape_std, r2_std, mse_std, mae_std, preds_std, labels_std = evaluate(
+            model, test_loader, criterion_test
+        )
+        
+        # 反标准化和反对数变换
+        preds_real = scaler_y.inverse_transform(preds_std.reshape(-1, 1)).ravel()
+        labels_real = scaler_y.inverse_transform(labels_std.reshape(-1, 1)).ravel()
+        
+        if use_log_transform:
+            preds_real = np.expm1(preds_real)
+            labels_real = np.expm1(labels_real)
+        
+        # 计算原始域的指标
+        rmse_real = np.sqrt(mean_squared_error(labels_real, preds_real))
+        mae_real = np.mean(np.abs(labels_real - preds_real))
+        
+        # MAPE（排除零值）
+        nonzero_mask = (labels_real != 0)
+        if np.sum(nonzero_mask) > 0:
+            mape_real = np.mean(np.abs((labels_real[nonzero_mask] - preds_real[nonzero_mask]) / 
+                                       labels_real[nonzero_mask])) * 100.0
+        else:
+            mape_real = 0.0
+        
+        # R²
+        ss_res = np.sum((labels_real - preds_real) ** 2)
+        ss_tot = np.sum((labels_real - np.mean(labels_real)) ** 2)
+        r2_real = 1 - (ss_res / ss_tot) if ss_tot != 0 else 0.0
+        
+        # 计算预测误差（用于箱线图）
+        errors = preds_real - labels_real
+        
+        return {
+            'season': test_season_name,
+            'rmse': rmse_real,
+            'mape': mape_real,
+            'mae': mae_real,
+            'r2': r2_real,
+            'errors': errors,
+            'predictions': preds_real,
+            'labels': labels_real
+        }
+
+    def plot_seasonal_error_distribution(results_dict):
+        """
+        绘制四季误差箱线图或小提琴图
+        """
+        plt.figure(figsize=(12, 6))
+        
+        seasons = ['DJF', 'MAM', 'JJA', 'SON']
+        errors_data = [results_dict[season]['errors'] for season in seasons]
+        
+        # 创建小提琴图
+        parts = plt.violinplot(errors_data, positions=range(1, 5), widths=0.6,
+                               showmeans=True, showmedians=True)
+        
+        # 设置颜色
+        colors = ['#87CEEB', '#98FB98', '#FFD700', '#DEB887']  # 冬蓝、春绿、夏金、秋褐
+        for pc, color in zip(parts['bodies'], colors):
+            pc.set_facecolor(color)
+            pc.set_alpha(0.6)
+        
+        # 添加箱线图叠加
+        bp = plt.boxplot(errors_data, positions=range(1, 5), widths=0.3,
+                         patch_artist=False, showfliers=False)
+        
+        plt.xlabel('季节')
+        plt.ylabel('预测误差 (kW·h)')
+        plt.title('四季预测误差分布')
+        plt.xticks(range(1, 5), seasons)
+        plt.grid(True, alpha=0.3)
+        plt.axhline(y=0, color='red', linestyle='--', linewidth=1, alpha=0.5)
+        
+        # 添加统计信息
+        for i, season in enumerate(seasons):
+            errors = results_dict[season]['errors']
+            mean_err = np.mean(errors)
+            std_err = np.std(errors)
+            plt.text(i+1, plt.ylim()[1]*0.9, f'μ={mean_err:.0f}\nσ={std_err:.0f}',
+                    ha='center', fontsize=10)
+        
+        plt.tight_layout()
+        plt.show()
+
+    def create_seasonal_results_table(results_dict, baseline_metrics=None):
+        """
+        创建季节性结果表格
+        baseline_metrics: 基线模型的指标字典，用于计算差值
+        """
+        # 创建表格数据
+        seasons = ['DJF', 'MAM', 'JJA', 'SON']
+        metrics = ['MAPE (%)', 'RMSE', 'MAE', 'R²']
+        
+        print("\n" + "="*80)
+        print("表 1：四季模型性能评估")
+        print("="*80)
+        
+        # 表头
+        header = f"{'季节':^10} | {'MAPE (%)':^12} | {'RMSE':^12} | {'MAE':^12} | {'R²':^12}"
+        print(header)
+        print("-"*80)
+        
+        # 数据行
+        for season in seasons:
+            result = results_dict[season]
+            row = f"{season:^10} | {result['mape']:^12.2f} | {result['rmse']:^12.2f} | " \
+                  f"{result['mae']:^12.2f} | {result['r2']:^12.4f}"
+            print(row)
+        
+        # 平均值行
+        print("-"*80)
+        avg_mape = np.mean([results_dict[s]['mape'] for s in seasons])
+        avg_rmse = np.mean([results_dict[s]['rmse'] for s in seasons])
+        avg_mae = np.mean([results_dict[s]['mae'] for s in seasons])
+        avg_r2 = np.mean([results_dict[s]['r2'] for s in seasons])
+        
+        avg_row = f"{'平均':^10} | {avg_mape:^12.2f} | {avg_rmse:^12.2f} | " \
+                  f"{avg_mae:^12.2f} | {avg_r2:^12.4f}"
+        print(avg_row)
+        
+        # 如果提供了基线指标，显示差值
+        if baseline_metrics:
+            print("\n" + "="*80)
+            print("与基线模型的差值 Δ (当前-基线)")
+            print("-"*80)
+            for season in seasons:
+                result = results_dict[season]
+                if season in baseline_metrics:
+                    baseline = baseline_metrics[season]
+                    delta_mape = result['mape'] - baseline.get('mape', 0)
+                    delta_rmse = result['rmse'] - baseline.get('rmse', 0)
+                    delta_mae = result['mae'] - baseline.get('mae', 0)
+                    delta_r2 = result['r2'] - baseline.get('r2', 0)
+                    
+                    delta_row = f"{season:^10} | {delta_mape:^+12.2f} | {delta_rmse:^+12.2f} | " \
+                               f"{delta_mae:^+12.2f} | {delta_r2:^+12.4f}"
+                    print(delta_row)
+        
+        print("="*80)
+
+    def seasonal_analysis_main():
+        """
+        季节性分析主函数
+        """
+        print("\n" + "="*60)
+        print("开始季节性分析")
+        print("="*60)
+        
+        # 1. 加载和预处理数据
+        print("\n1. 加载数据...")
+        data_df = load_data()
+        
+        # 过滤E_grid = 0的数据
+        data_df = data_df[data_df['E_grid'] != 0].copy()
+        data_df.reset_index(drop=True, inplace=True)
+        
+        # 特征工程
+        data_df, feature_cols, target_col = feature_engineering(data_df)
+        
+        # 过滤小值
+        min_egrid_threshold = 1.0
+        data_df = data_df[data_df[target_col] > min_egrid_threshold].copy()
+        data_df.reset_index(drop=True, inplace=True)
+        
+        # 2. 按季节划分数据
+        print("\n2. 按季节划分数据...")
+        seasonal_data = split_data_by_season(data_df)
+        
+        # 打印每个季节的数据量
+        print("\n各季节数据量：")
+        for season, data in seasonal_data.items():
+            print(f"  {season}: {len(data)} 样本")
+        
+        # 3. 进行4轮季节交叉验证
+        print("\n3. 开始季节交叉验证训练...")
+        
+        # 定义要测试的模型（这里使用Model4作为主模型）
+        feature_dim = len(feature_cols)
+        model_class = EModel_FeatureWeight4
+        model_params = {
+            'feature_dim': feature_dim,
+            'lstm_hidden_size': 256,
+            'lstm_num_layers': 2,
+            'lstm_dropout': 0.1,
+            'window_size': window_size
+        }
+        
+        # 存储所有季节的结果
+        all_results = {}
+        
+        # 对每个季节进行交叉验证
+        for test_season in ['DJF', 'MAM', 'JJA', 'SON']:
+            print(f"\n测试季节: {test_season}")
+            
+            # 准备训练季节数据
+            train_seasons = [s for s in ['DJF', 'MAM', 'JJA', 'SON'] if s != test_season]
+            train_seasons_data = [seasonal_data[s] for s in train_seasons]
+            test_season_data = seasonal_data[test_season]
+            
+            print(f"  训练季节: {', '.join(train_seasons)}")
+            print(f"  训练样本总数: {sum(len(d) for d in train_seasons_data)}")
+            print(f"  测试样本数: {len(test_season_data)}")
+            
+            # 训练和评估
+            result = train_seasonal_model(
+                train_seasons_data=train_seasons_data,
+                test_season_data=test_season_data,
+                feature_cols=feature_cols,
+                target_col=target_col,
+                model_class=model_class,
+                model_params=model_params,
+                test_season_name=test_season,
+                use_log_transform=True
+            )
+            
+            all_results[test_season] = result
+        
+        # 4. 生成结果表格
+        print("\n4. 生成评估结果...")
+        create_seasonal_results_table(all_results)
+        
+        # 5. 绘制误差分布图
+        print("\n5. 绘制可视化图表...")
+        plot_seasonal_error_distribution(all_results)
+        
+        # 6. 保存结果供后续分析
+        import pickle
+        with open('seasonal_analysis_results.pkl', 'wb') as f:
+            pickle.dump(all_results, f)
+        
+        print("\n季节性分析完成！")
+        print("="*60)
+        
+        return all_results
+
+    # 运行季节性分析
+    seasonal_results = seasonal_analysis_main()
 
 if __name__ == "__main__":
     main(use_log_transform = True, min_egrid_threshold = 1.0)

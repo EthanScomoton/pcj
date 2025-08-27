@@ -19,7 +19,7 @@ import matplotlib.ticker as ticker
  
 # Global style settings for plots
 mpl.rcParams.update({
-    'font.family': 'Times New Roman',
+    'font.family': 'DejaVu Sans',
     'font.size': 26,          # Global default font size
     'axes.labelsize': 26,     # Axis label font size
     'axes.titlesize': 28,     # Chart title font size

@@ -1909,7 +1909,7 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     data_df.reset_index(drop = True, inplace = True)
 
     analyze_target_distribution(data_df, target_col)
-    plot_Egrid_over_time(data_df)ß
+    plot_Egrid_over_time(data_df)
 
     # =============== Quarterly rolling evaluation (Q1→Q2, Q1–Q2→Q3, Q1–Q3→Q4) ===============
     metrics_df, residuals_q = quarterly_rolling_evaluation(

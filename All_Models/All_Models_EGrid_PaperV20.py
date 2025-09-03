@@ -1,4 +1,5 @@
 import math
+import os
 import numpy as np
 import pandas as pd
 import torch
@@ -38,6 +39,29 @@ mpl.rcParams.update({
     'xtick.labelsize': 24,    # x-axis tick label size
     'ytick.labelsize': 24     # y-axis tick label size
 })
+
+# Figure saving/show helper
+FIG_DIR = "figures"
+
+def save_show(fig_name: str):
+    try:
+        os.makedirs(FIG_DIR, exist_ok=True)
+        safe_name = fig_name.replace(" ", "_").replace("/", "-")
+        out_path = os.path.join(FIG_DIR, f"{safe_name}.png")
+        plt.savefig(out_path, dpi = 200, bbox_inches = 'tight')
+        # Show only if backend is interactive
+        backend = mpl.get_backend().lower()
+        if 'agg' not in backend:
+            plt.show()
+        print(f"[Figure saved] {out_path}")
+    except Exception as e:
+        print(f"[Figure save warning] {e}")
+        try:
+            plt.show()
+        except Exception:
+            pass
+    finally:
+        plt.close()
 
 # Global hyperparameters
 learning_rate     = 1e-4   # Learning rate
@@ -1253,7 +1277,7 @@ def plot_correlation_heatmap(df, feature_cols):
     )
     plt.xticks(rotation = 45, ha = 'right')
     plt.tight_layout()
-    plt.show()
+    save_show("correlation_heatmap")
 
 def analyze_target_distribution(data_df, target_col):
     """
@@ -1276,7 +1300,7 @@ def analyze_target_distribution(data_df, target_col):
     plt.ylabel("Frequency")
     plt.grid(True)
     plt.tight_layout()
-    plt.show()
+    save_show("target_distribution")
 
 def plot_Egrid_over_time(data_df):
     """
@@ -1291,7 +1315,7 @@ def plot_Egrid_over_time(data_df):
     plt.ylabel('E_grid (kW·h)')
     plt.grid(True)
     plt.tight_layout()
-    plt.show()
+    save_show("egrid_over_time")
 
 def plot_predictions_comparison(y_actual_real, predictions_dict, timestamps):
     plt.figure(figsize=(14, 6))
@@ -1314,7 +1338,7 @@ def plot_predictions_comparison(y_actual_real, predictions_dict, timestamps):
     plt.grid(True)
     plt.tight_layout()
     plt.xticks(rotation=45)   # 让时间轴标签斜着显示
-    plt.show()
+    save_show(f"predictions_comparison_{model_name}" if isinstance(predictions_dict, dict) and len(predictions_dict)>0 else "predictions_comparison")
 
 
 def plot_training_curves_allmetrics(hist_dict, model_name = 'Model'):
@@ -1390,7 +1414,7 @@ def plot_training_curves_allmetrics(hist_dict, model_name = 'Model'):
 
     plt.suptitle(f"Training Curves - {model_name}", fontsize = 16)
     plt.tight_layout()
-    plt.show()
+    save_show(f"training_curves_{model_name}")
 
 def plot_dataset_distribution(timestamps, title):
     """
@@ -1405,7 +1429,7 @@ def plot_dataset_distribution(timestamps, title):
     plt.ylabel('Count')
     plt.grid(axis = 'y')
     plt.tight_layout()
-    plt.show()
+    save_show(f"dataset_distribution_{title}")
 
 # 添加新函数计算特征重要性
 def calculate_feature_importance(data_df, feature_cols, target_col):
@@ -1588,7 +1612,7 @@ def plot_predictions_date_range(y_actual_real, predictions_dict, timestamps, sta
     ax = plt.gca()
     ax.yaxis.set_major_locator(ticker.MultipleLocator(20000))
     
-    plt.show()
+    save_show(f"predictions_date_range_{start_date}_to_{end_date}")
 
 def plot_value_and_error_histograms(y_actual_real, predictions_dict, bins=30):
     """
@@ -1641,7 +1665,7 @@ def plot_value_and_error_histograms(y_actual_real, predictions_dict, bins=30):
     plt.grid(True, axis='y')
 
     plt.tight_layout()
-    plt.show()
+    save_show("value_and_error_histograms")
 
 def plot_error_max_curve(y_actual_real,
                          predictions_dict,
@@ -1734,7 +1758,7 @@ def plot_error_max_curve(y_actual_real,
     plt.legend()
     plt.grid(True)
     plt.tight_layout()
-    plt.show()
+    save_show("error_max_curve")
 
 
 # 8. Main Function

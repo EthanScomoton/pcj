@@ -1050,6 +1050,14 @@ def evaluate(model, dataloader, criterion, device = device):
     preds_arr  = np.concatenate(preds_list, axis = 0)
     labels_arr = np.concatenate(labels_list, axis = 0)
 
+    # Safety: guard against NaN/Inf in predictions or labels
+    if np.isnan(preds_arr).any() or np.isinf(preds_arr).any():
+        print("[Warning] NaN/Inf detected in predictions. They will be replaced by 0 for metrics computation.")
+    if np.isnan(labels_arr).any() or np.isinf(labels_arr).any():
+        print("[Warning] NaN/Inf detected in labels. They will be replaced by 0 for metrics computation.")
+    preds_arr  = np.nan_to_num(preds_arr, nan = 0.0, posinf = 0.0, neginf = 0.0)
+    labels_arr = np.nan_to_num(labels_arr, nan = 0.0, posinf = 0.0, neginf = 0.0)
+
     # Compute RMSE
     rmse_std = np.sqrt(mean_squared_error(labels_arr, preds_arr))
 
@@ -1839,11 +1847,23 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     X_train_seq_g = apply_feature_gating_to_sequences(X_train_seq, feature_importance)
     X_val_seq_g   = apply_feature_gating_to_sequences(X_val_seq,   feature_importance)
     X_test_seq_g  = apply_feature_gating_to_sequences(X_test_seq,  feature_importance)
+    # Safety: replace any NaN/Inf introduced by preprocessing
+    X_train_seq_g = np.nan_to_num(X_train_seq_g, nan=0.0, posinf=0.0, neginf=0.0)
+    X_val_seq_g   = np.nan_to_num(X_val_seq_g,   nan=0.0, posinf=0.0, neginf=0.0)
+    X_test_seq_g  = np.nan_to_num(X_test_seq_g,  nan=0.0, posinf=0.0, neginf=0.0)
+
+    # Safety: labels for PatchTST loaders
+    y_train_seq_safe = np.nan_to_num(y_train_seq, nan=0.0, posinf=0.0, neginf=0.0)
+    y_val_seq_safe   = np.nan_to_num(y_val_seq,   nan=0.0, posinf=0.0, neginf=0.0)
 
     # LightGBM: 将序列展开为滞后表（含历法特征已在特征工程中加入）
     X_train_tab = flatten_sequences_for_tabular(X_train_seq_g)
     X_val_tab   = flatten_sequences_for_tabular(X_val_seq_g)
     X_test_tab  = flatten_sequences_for_tabular(X_test_seq_g)
+    # Safety: LightGBM 不接受 NaN/Inf
+    X_train_tab = np.nan_to_num(X_train_tab, nan=0.0, posinf=0.0, neginf=0.0)
+    X_val_tab   = np.nan_to_num(X_val_tab,   nan=0.0, posinf=0.0, neginf=0.0)
+    X_test_tab  = np.nan_to_num(X_test_tab,  nan=0.0, posinf=0.0, neginf=0.0)
 
     # Build models
     feature_dim = X_train_seq.shape[-1]
@@ -1897,8 +1917,8 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     print("\n========== Training Model: PatchTST ==========")
     hist_patch = train_model(
         model         = patch_model,
-        train_loader  = DataLoader(TensorDataset(torch.from_numpy(X_train_seq_g), torch.from_numpy(y_train_seq)), batch_size = batch_size, shuffle = True,  num_workers = num_workers),
-        val_loader    = DataLoader(TensorDataset(torch.from_numpy(X_val_seq_g),   torch.from_numpy(y_val_seq)),   batch_size = batch_size, shuffle = False, num_workers = num_workers),
+        train_loader  = DataLoader(TensorDataset(torch.from_numpy(X_train_seq_g), torch.from_numpy(y_train_seq_safe)), batch_size = batch_size, shuffle = True,  num_workers = num_workers),
+        val_loader    = DataLoader(TensorDataset(torch.from_numpy(X_val_seq_g),   torch.from_numpy(y_val_seq_safe)),   batch_size = batch_size, shuffle = False, num_workers = num_workers),
         model_name    = 'PatchTST',
         learning_rate = learning_rate,
         weight_decay  = weight_decay,
@@ -2021,7 +2041,10 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     (_, rmse_p_std, mape_p_std, r2_p_std, mse_p_std, mae_p_std, preds_patch_std, labels_patch_std) = evaluate(best_patch, test_loader, nn.SmoothL1Loss(beta=1.0))
 
     # 2) LightGBM（与训练/验证域一致：标准化后的 y_seq）
-    booster = train_lightgbm(X_train_tab, y_train_seq, X_val_tab, y_val_seq, patience_rounds=50, seed=42)
+    # Safety: y 序列也需要无 NaN/Inf
+    y_train_seq_safe = np.nan_to_num(y_train_seq, nan=0.0, posinf=0.0, neginf=0.0)
+    y_val_seq_safe   = np.nan_to_num(y_val_seq,   nan=0.0, posinf=0.0, neginf=0.0)
+    booster = train_lightgbm(X_train_tab, y_train_seq_safe, X_val_tab, y_val_seq_safe, patience_rounds=50, seed=42)
     if booster is not None:
         preds_lgb_std = booster.predict(X_test_tab, num_iteration=booster.best_iteration)
     else:
@@ -2029,6 +2052,7 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
 
     # 3) SARIMA（用训练+验证的标准化 y，预测 test_seq 步）
     y_train_val_std = np.concatenate([y_train, y_val])
+    y_train_val_std = np.nan_to_num(y_train_val_std, nan=0.0, posinf=0.0, neginf=0.0)
     n_test_seq = len(y_test_seq)
     preds_sarima_std = fit_predict_sarima(y_train_val_std, n_test=n_test_seq, m=seasonal_period, search_small=True, seed=42)
     if preds_sarima_std is None:
@@ -2036,6 +2060,7 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
 
     # 4) s-naive：y[t] = y[t-m]（标准化域）
     y_all_std = np.concatenate([y_train, y_val, y_test])
+    y_all_std = np.nan_to_num(y_all_std, nan=0.0, posinf=0.0, neginf=0.0)
     start_idx = train_size + val_size + window_size
     preds_snaive_std = predict_snaive_std(y_all_std, start_index=start_idx, n_test=n_test_seq, m=seasonal_period)
 

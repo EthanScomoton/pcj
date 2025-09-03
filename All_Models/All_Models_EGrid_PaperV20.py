@@ -959,14 +959,21 @@ def train_lightgbm(X_train_tab, y_train_seq, X_val_tab, y_val_seq, patience_roun
         "seed": seed,
         "verbosity": -1
     }
+    # LightGBM 4.x: use callbacks for early stopping and logging
+    callbacks = []
+    try:
+        callbacks.append(lgb.early_stopping(stopping_rounds=patience_rounds))
+        callbacks.append(lgb.log_evaluation(period=100))
+    except Exception:
+        # Fallback for older versions; if callbacks are unavailable, train without them
+        pass
     booster = lgb.train(
-        params,
-        train_set,
+        params=params,
+        train_set=train_set,
         num_boost_round=20000,
         valid_sets=[train_set, val_set],
         valid_names=["train","valid"],
-        early_stopping_rounds=patience_rounds,
-        verbose_eval=100
+        callbacks=callbacks
     )
     return booster
 
@@ -2046,7 +2053,11 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     y_val_seq_safe   = np.nan_to_num(y_val_seq,   nan=0.0, posinf=0.0, neginf=0.0)
     booster = train_lightgbm(X_train_tab, y_train_seq_safe, X_val_tab, y_val_seq_safe, patience_rounds=50, seed=42)
     if booster is not None:
-        preds_lgb_std = booster.predict(X_test_tab, num_iteration=booster.best_iteration)
+        best_iter = getattr(booster, 'best_iteration', None)
+        if best_iter is None or best_iter <= 0:
+            preds_lgb_std = booster.predict(X_test_tab)
+        else:
+            preds_lgb_std = booster.predict(X_test_tab, num_iteration=best_iter)
     else:
         preds_lgb_std = np.zeros_like(y_test_seq)
 

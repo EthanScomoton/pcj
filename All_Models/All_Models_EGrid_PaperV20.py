@@ -1,5 +1,4 @@
 import math
-import os
 import numpy as np
 import pandas as pd
 import torch
@@ -40,28 +39,18 @@ mpl.rcParams.update({
     'ytick.labelsize': 24     # y-axis tick label size
 })
 
-# Figure saving/show helper
-FIG_DIR = "figures"
-
-def save_show(fig_name: str):
-    try:
-        os.makedirs(FIG_DIR, exist_ok=True)
-        safe_name = fig_name.replace(" ", "_").replace("/", "-")
-        out_path = os.path.join(FIG_DIR, f"{safe_name}.png")
-        plt.savefig(out_path, dpi = 200, bbox_inches = 'tight')
-        # Show only if backend is interactive
-        backend = mpl.get_backend().lower()
-        if 'agg' not in backend:
-            plt.show()
-        print(f"[Figure saved] {out_path}")
-    except Exception as e:
-        print(f"[Figure save warning] {e}")
-        try:
-            plt.show()
-        except Exception:
-            pass
-    finally:
-        plt.close()
+# Fixed colors for all models (consistent across plots)
+MODEL_COLORS = {
+    'Model1':   '#1f77b4',  # 蓝色
+    'Model2':   '#ff7f0e',  # 橙色
+    'Model3':   '#2ca02c',  # 绿色
+    'Model4':   '#d62728',  # 红色
+    'Model5':   '#9467bd',  # 紫色
+    'PatchTST': '#8c564b',  # 棕色
+    'LightGBM': '#e377c2',  # 粉色
+    'SARIMA':   '#7f7f7f',  # 灰色
+    's-naive':  '#bcbd22'   # 黄绿色
+}
 
 # Global hyperparameters
 learning_rate     = 1e-4   # Learning rate
@@ -1277,7 +1266,7 @@ def plot_correlation_heatmap(df, feature_cols):
     )
     plt.xticks(rotation = 45, ha = 'right')
     plt.tight_layout()
-    save_show("correlation_heatmap")
+    plt.show()
 
 def analyze_target_distribution(data_df, target_col):
     """
@@ -1300,7 +1289,7 @@ def analyze_target_distribution(data_df, target_col):
     plt.ylabel("Frequency")
     plt.grid(True)
     plt.tight_layout()
-    save_show("target_distribution")
+    plt.show()
 
 def plot_Egrid_over_time(data_df):
     """
@@ -1315,7 +1304,7 @@ def plot_Egrid_over_time(data_df):
     plt.ylabel('E_grid (kW·h)')
     plt.grid(True)
     plt.tight_layout()
-    save_show("egrid_over_time")
+    plt.show()
 
 def plot_predictions_comparison(y_actual_real, predictions_dict, timestamps):
     plt.figure(figsize=(14, 6))
@@ -1329,7 +1318,7 @@ def plot_predictions_comparison(y_actual_real, predictions_dict, timestamps):
     
     # 为每个模型的预测绘制曲线
     for i, (model_name, pred_values) in enumerate(predictions_dict.items()):
-        color = colors[i % len(colors)]  
+        color = MODEL_COLORS.get(model_name, colors[i % len(colors)])
         plt.plot(x_axis, pred_values, color=color, label=model_name, linewidth=0.9, linestyle='-', alpha=0.9)
     
     plt.xlabel('Timestamp of TrainValue')
@@ -1338,7 +1327,7 @@ def plot_predictions_comparison(y_actual_real, predictions_dict, timestamps):
     plt.grid(True)
     plt.tight_layout()
     plt.xticks(rotation=45)   # 让时间轴标签斜着显示
-    save_show(f"predictions_comparison_{model_name}" if isinstance(predictions_dict, dict) and len(predictions_dict)>0 else "predictions_comparison")
+    plt.show()
 
 
 def plot_training_curves_allmetrics(hist_dict, model_name = 'Model'):
@@ -1414,7 +1403,7 @@ def plot_training_curves_allmetrics(hist_dict, model_name = 'Model'):
 
     plt.suptitle(f"Training Curves - {model_name}", fontsize = 16)
     plt.tight_layout()
-    save_show(f"training_curves_{model_name}")
+    plt.show()
 
 def plot_dataset_distribution(timestamps, title):
     """
@@ -1429,7 +1418,7 @@ def plot_dataset_distribution(timestamps, title):
     plt.ylabel('Count')
     plt.grid(axis = 'y')
     plt.tight_layout()
-    save_show(f"dataset_distribution_{title}")
+    plt.show()
 
 # 添加新函数计算特征重要性
 def calculate_feature_importance(data_df, feature_cols, target_col):
@@ -1540,12 +1529,14 @@ def plot_predictions_date_range(y_actual_real, predictions_dict, timestamps, sta
     
     # 自定义模型颜色映射和透明度
     model_settings = {
-        'Model1': {'color': '#B0C4DE', 'alpha': 0.9, 'linewidth': 1.5, 'linestyle': '-'},      # 浅钢蓝色，低透明度
-        'Model2': {'color': '#87CEEB', 'alpha': 0.9, 'linewidth': 1.5, 'linestyle': '--'},     # 天蓝色，低透明度
-        'Model3': {'color': '#ADD8E6', 'alpha': 0.9, 'linewidth': 1.5, 'linestyle': '-.'},     # 浅蓝色，低透明度
-        'Model4': {'color': '#00008B', 'alpha': 1.0, 'linewidth': 1.9, 'linestyle': ':'},      # 深红色，完全不透明
-        'Model5': {'color': '#DC143C', 'alpha': 1.0, 'linewidth': 2, 'linestyle': '-'}       # 深蓝色，完全不透明
+        name: {'color': MODEL_COLORS.get(name, '#808080'), 'alpha': 0.9, 'linewidth': 1.5, 'linestyle': '-'}
+        for name in predictions_dict.keys()
     }
+    # Emphasize Model4 and Model5 as before, but keep fixed colors
+    if 'Model4' in model_settings:
+        model_settings['Model4'].update({'alpha': 1.0, 'linewidth': 1.9, 'linestyle': ':'})
+    if 'Model5' in model_settings:
+        model_settings['Model5'].update({'alpha': 1.0, 'linewidth': 2.0, 'linestyle': '-'})
     
     # Create mask for date range
     start = pd.to_datetime(start_date)
@@ -1612,7 +1603,7 @@ def plot_predictions_date_range(y_actual_real, predictions_dict, timestamps, sta
     ax = plt.gca()
     ax.yaxis.set_major_locator(ticker.MultipleLocator(20000))
     
-    save_show(f"predictions_date_range_{start_date}_to_{end_date}")
+    plt.show()
 
 def plot_value_and_error_histograms(y_actual_real, predictions_dict, bins=30):
     """
@@ -1634,13 +1625,7 @@ def plot_value_and_error_histograms(y_actual_real, predictions_dict, bins=30):
     plt.subplot(1, 2, 2)
     
     # 固定的模型颜色映射
-    model_colors = {
-        'Model1': '#1f77b4',  # 蓝色
-        'Model2': '#ff7f0e',  # 橙色  
-        'Model3': '#2ca02c',  # 绿色
-        'Model4': '#d62728',  # 红色
-        'Model5': '#9467bd',  # 紫色
-    }
+    model_colors = dict(MODEL_COLORS)
     
     # 使用固定的bin边界范围，确保所有图表一致
     # 基于xlim(-20000, 20000)设置固定的bin边界
@@ -1665,7 +1650,7 @@ def plot_value_and_error_histograms(y_actual_real, predictions_dict, bins=30):
     plt.grid(True, axis='y')
 
     plt.tight_layout()
-    save_show("value_and_error_histograms")
+    plt.show()
 
 def plot_error_max_curve(y_actual_real,
                          predictions_dict,
@@ -1719,6 +1704,7 @@ def plot_error_max_curve(y_actual_real,
 
     # -------- 2. 绘制顺滑曲线 -------- #
     plt.figure(figsize=(10, 5))
+    # Use fixed colors for consistency
     colors = mpl.cm.tab10.colors
     line_styles = ['-', '--', '-.', ':',(0, (3, 1, 1, 1))]
     marker_styles = ['^', 's', 'o', 'h', 'p']
@@ -1732,7 +1718,7 @@ def plot_error_max_curve(y_actual_real,
             plt.plot(bin_centers,
                      curve,
                      label=model_name,
-                     color=model5_color,              # 使用 Model5 的特殊颜色
+                     color=MODEL_COLORS.get('Model5', model5_color),              # 使用 Model5 的特殊颜色（优先固定颜色表）
                      linewidth=model5_linewidth,      # 使用 Model5 的特殊线条粗细
                      marker=marker_styles[i % len(marker_styles)],
                      linestyle='-',                   # 固定为实线
@@ -1743,7 +1729,7 @@ def plot_error_max_curve(y_actual_real,
             plt.plot(bin_centers,
                      curve,
                      label=model_name,
-                     color=colors[i % len(colors)],
+                     color=MODEL_COLORS.get(model_name, colors[i % len(colors)]),
                      linewidth=default_linewidth,     # 使用默认线条粗细
                      marker=marker_styles[i % len(marker_styles)],
                      linestyle=line_styles[i % len(line_styles)],
@@ -1758,7 +1744,7 @@ def plot_error_max_curve(y_actual_real,
     plt.legend()
     plt.grid(True)
     plt.tight_layout()
-    save_show("error_max_curve")
+    plt.show()
 
 
 # 8. Main Function

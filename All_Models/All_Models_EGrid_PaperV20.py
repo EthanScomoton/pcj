@@ -16,7 +16,19 @@ from sklearn.metrics import mean_squared_error
 from torch.nn.utils import clip_grad_norm_
 from lion_pytorch import Lion
 import matplotlib.ticker as ticker 
- 
+
+try:
+    import lightgbm as lgb
+except Exception as e:
+    lgb = None
+    print("[Warning] lightgbm not found, LightGBM model will be skipped. pip install lightgbm")
+
+try:
+    from statsmodels.tsa.statespace.sarimax import SARIMAX
+except Exception as e:
+    SARIMAX = None
+    print("[Warning] statsmodels not found, SARIMA model will be skipped. pip install statsmodels")
+
 # Global style settings for plots
 mpl.rcParams.update({
     'font.family': 'Times New Roman',
@@ -41,6 +53,8 @@ torch.manual_seed(42)
 np.random.seed(42)
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')  
 
+# 统一季节周期（小时数据通常用24；如你的数据是日级或其他周期，请改这里）
+seasonal_period = 24
 
 # 1. Data Loading Module
 def load_data():
@@ -861,6 +875,147 @@ class EModel_FeatureWeight5(nn.Module):
         output  = mu + noise
         return output.squeeze(-1)
 
+class PatchTST(nn.Module):
+    """
+    简化版 PatchTST:
+    - 将时间维度切成 patch（长度 patch_len，步长 patch_stride）
+    - 每个 patch 展开后线性投影到 d_model
+    - 加位置编码，过 TransformerEncoder
+    - 池化得到序列表征，回归到 1 步预测
+    说明：我们沿用统一的滑窗输入 [B, window, feature_dim]。
+    """
+    def __init__(self, feature_dim, window_size, patch_len=5, patch_stride=5,
+                 d_model=256, n_heads=8, num_layers=2, dropout=0.1):
+        super().__init__()
+        self.feature_dim  = feature_dim
+        self.window_size  = window_size
+        self.patch_len    = patch_len
+        self.patch_stride = patch_stride
+
+        assert patch_len <= window_size
+        self.num_patches = 1 + (window_size - patch_len) // patch_stride
+        self.in_dim = patch_len * feature_dim
+
+        encoder_layer = nn.TransformerEncoderLayer(d_model=d_model, nhead=n_heads,
+                                                   dim_feedforward=4*d_model,
+                                                   dropout=dropout, batch_first=True)
+        self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+        self.proj = nn.Linear(self.in_dim, d_model)
+        self.pos_enc = PositionalEncoding(d_model, max_len=5000)
+        self.head = nn.Sequential(
+            nn.LayerNorm(d_model),
+            nn.Linear(d_model, d_model//2),
+            nn.GELU(),
+            nn.Linear(d_model//2, 1)
+        )
+
+    def forward(self, x):
+        # x: [B, window, feature_dim]
+        B, W, F = x.shape
+        patches = []
+        for s in range(0, W - self.patch_len + 1, self.patch_stride):
+            px = x[:, s:s+self.patch_len, :]                     # [B, patch_len, F]
+            px = px.reshape(B, -1)                               # [B, patch_len*F]
+            patches.append(px)
+        patches = torch.stack(patches, dim=1)                    # [B, num_patches, patch_len*F]
+        z = self.proj(patches)                                   # [B, num_patches, d_model]
+        z = self.pos_enc(z)                                      # 位置编码（沿 patch 维）
+        z = self.encoder(z)                                      # [B, num_patches, d_model]
+        z = z.mean(dim=1)                                        # 池化
+        y = self.head(z).squeeze(-1)                             # [B]
+        return y
+
+def apply_feature_gating_to_sequences(X_seq, feature_importance):
+    """
+    X_seq: [n_samples, window_size, feature_dim]
+    feature_importance: [feature_dim], 来自 Pearson+MIC 的综合权重
+    """
+    if feature_importance is None:
+        return X_seq
+    w = feature_importance.astype(np.float32).reshape(1, 1, -1)
+    return X_seq * w
+
+def flatten_sequences_for_tabular(X_seq):
+    """
+    将 [n, window, feat] 展成 [n, window*feat]，作为 LightGBM 的滞后特征输入。
+    历法特征已在特征工程阶段加入并被统一标准化，这里统一展开即可。
+    """
+    n, w, f = X_seq.shape
+    return X_seq.reshape(n, w * f)
+
+def train_lightgbm(X_train_tab, y_train_seq, X_val_tab, y_val_seq, patience_rounds=50, seed=42):
+    if lgb is None:
+        return None
+    train_set = lgb.Dataset(X_train_tab, label=y_train_seq)
+    val_set   = lgb.Dataset(X_val_tab,   label=y_val_seq, reference=train_set)
+    params = {
+        "objective": "regression",
+        "metric": "rmse",
+        "learning_rate": 0.05,      # 训练协议统一：使用早停与固定随机种子；学习率为树模型合理默认
+        "num_leaves": 31,
+        "feature_fraction": 0.8,
+        "bagging_fraction": 0.8,
+        "bagging_freq": 1,
+        "seed": seed,
+        "verbosity": -1
+    }
+    booster = lgb.train(
+        params,
+        train_set,
+        num_boost_round=20000,
+        valid_sets=[train_set, val_set],
+        valid_names=["train","valid"],
+        early_stopping_rounds=patience_rounds,
+        verbose_eval=100
+    )
+    return booster
+
+def fit_predict_sarima(y_train_val_std, n_test, m=24, search_small=True, seed=42):
+    """
+    在标准化后的 y 序列上拟合 SARIMA（与深度/树模型的评估域一致），预测后再按主流程反标准化。
+    y_train_val_std: 训练+验证集（标准化域）
+    n_test: 需要预测的步数（与 y_test_seq 对齐）
+    m: 季节周期
+    """
+    if SARIMAX is None:
+        return None
+    np.random.seed(seed)
+    # 极小网格，避免耗时
+    pdq = [(0,1,1), (1,1,0), (1,1,1)]
+    PDQ = [(0,1,1), (1,1,0)]
+    best_aic, best_cfg, best_res = 1e18, None, None
+    for (p,d,q) in pdq if search_small else [(1,1,1)]:
+        for (P,D,Q) in PDQ if search_small else [(0,1,1)]:
+            try:
+                model = SARIMAX(y_train_val_std, order=(p,d,q), seasonal_order=(P,D,Q,m), enforce_stationarity=False, enforce_invertibility=False)
+                res = model.fit(disp=False, maxiter=200)
+                if res.aic < best_aic:
+                    best_aic, best_cfg, best_res = res.aic, ((p,d,q),(P,D,Q,m)), res
+            except Exception:
+                continue
+    if best_res is None:
+        return None
+    forecast = best_res.forecast(steps=n_test)  # 标准化域
+    return np.asarray(forecast, dtype=np.float32)
+
+def predict_snaive_std(y_all_std, start_index, n_test, m=24):
+    """
+    s-naive: y_hat[t] = y[t-m]，在标准化域直接做。
+    y_all_std: 整体标准化后的 y（train+val+test 拼接）
+    start_index: 测试集第一条标签对应的全局索引（注意滑窗偏移）
+    n_test: 需要预测的样本数（与 y_test_seq 对齐）
+    m: 季节周期
+    """
+    preds = []
+    for i in range(n_test):
+        t = start_index + i
+        ref = t - m
+        if ref < 0 or ref >= len(y_all_std):
+            preds.append(y_all_std[t-1] if t-1 >= 0 else y_all_std[0])
+        else:
+            preds.append(y_all_std[ref])
+    return np.asarray(preds, dtype=np.float32)
+
 # 5. Evaluation Module
 def evaluate(model, dataloader, criterion, device = device):
     """
@@ -1680,6 +1835,16 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     val_loader   = DataLoader(val_dataset,   batch_size = batch_size, shuffle = False, num_workers = num_workers)
     test_loader  = DataLoader(test_dataset,  batch_size = batch_size, shuffle = False, num_workers = num_workers)
 
+    # 为新增三种模型（PatchTST / LightGBM / SARIMA & s-naive）准备：FeatureGating + 序列展开
+    X_train_seq_g = apply_feature_gating_to_sequences(X_train_seq, feature_importance)
+    X_val_seq_g   = apply_feature_gating_to_sequences(X_val_seq,   feature_importance)
+    X_test_seq_g  = apply_feature_gating_to_sequences(X_test_seq,  feature_importance)
+
+    # LightGBM: 将序列展开为滞后表（含历法特征已在特征工程中加入）
+    X_train_tab = flatten_sequences_for_tabular(X_train_seq_g)
+    X_val_tab   = flatten_sequences_for_tabular(X_val_seq_g)
+    X_test_tab  = flatten_sequences_for_tabular(X_test_seq_g)
+
     # Build models
     feature_dim = X_train_seq.shape[-1]
     model1 = EModel_FeatureWeight1(
@@ -1719,6 +1884,26 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
         lstm_num_layers   = 2,
         lstm_dropout      = 0.2
     ).to(device)
+
+    # Transformer 代表：PatchTST
+    patch_model = PatchTST(
+        feature_dim=feature_dim,
+        window_size=window_size,
+        patch_len=5,
+        patch_stride=5,
+        d_model=256, n_heads=8, num_layers=2, dropout=0.1
+    ).to(device)
+
+    print("\n========== Training Model: PatchTST ==========")
+    hist_patch = train_model(
+        model         = patch_model,
+        train_loader  = DataLoader(TensorDataset(torch.from_numpy(X_train_seq_g), torch.from_numpy(y_train_seq)), batch_size = batch_size, shuffle = True,  num_workers = num_workers),
+        val_loader    = DataLoader(TensorDataset(torch.from_numpy(X_val_seq_g),   torch.from_numpy(y_val_seq)),   batch_size = batch_size, shuffle = False, num_workers = num_workers),
+        model_name    = 'PatchTST',
+        learning_rate = learning_rate,
+        weight_decay  = weight_decay,
+        num_epochs    = num_epochs
+    )
 
     # Train Model: EModel_FeatureWeight1
     print("\n========== Training Model: 1 ==========")
@@ -1828,6 +2013,52 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     print(f"[EModel_FeatureWeight4]  RMSE: {test_rmse4_std:.4f}, MAPE: {test_mape4_std:.2f}%, R²: {test_r24_std:.4f}, mse: {test_mse4_std:.2f}%, MAE: {test_mae4_std:.4f}")
     print(f"[EModel_FeatureWeight5]  RMSE: {test_rmse5_std:.4f}, MAPE: {test_mape5_std:.2f}%, R²: {test_r25_std:.4f}, mse: {test_mse5_std:.2f}%, MAE: {test_mae5_std:.4f}")
 
+    # ----标准化域上的预测 ----
+    # 1) PatchTST
+    best_patch = PatchTST(feature_dim=feature_dim, window_size=window_size, patch_len=5, patch_stride=5,
+                          d_model=256, n_heads=8, num_layers=2, dropout=0.1).to(device)
+    best_patch.load_state_dict(torch.load('best_PatchTST.pth', map_location=device, weights_only=True), strict=False)
+    (_, rmse_p_std, mape_p_std, r2_p_std, mse_p_std, mae_p_std, preds_patch_std, labels_patch_std) = evaluate(best_patch, test_loader, nn.SmoothL1Loss(beta=1.0))
+
+    # 2) LightGBM（与训练/验证域一致：标准化后的 y_seq）
+    booster = train_lightgbm(X_train_tab, y_train_seq, X_val_tab, y_val_seq, patience_rounds=50, seed=42)
+    if booster is not None:
+        preds_lgb_std = booster.predict(X_test_tab, num_iteration=booster.best_iteration)
+    else:
+        preds_lgb_std = np.zeros_like(y_test_seq)
+
+    # 3) SARIMA（用训练+验证的标准化 y，预测 test_seq 步）
+    y_train_val_std = np.concatenate([y_train, y_val])
+    n_test_seq = len(y_test_seq)
+    preds_sarima_std = fit_predict_sarima(y_train_val_std, n_test=n_test_seq, m=seasonal_period, search_small=True, seed=42)
+    if preds_sarima_std is None:
+        preds_sarima_std = np.zeros_like(y_test_seq)
+
+    # 4) s-naive：y[t] = y[t-m]（标准化域）
+    y_all_std = np.concatenate([y_train, y_val, y_test])
+    start_idx = train_size + val_size + window_size
+    preds_snaive_std = predict_snaive_std(y_all_std, start_index=start_idx, n_test=n_test_seq, m=seasonal_period)
+
+    # ---- 反标准化并（可选）反log，与现有五模保持一致 ----
+    preds_patch_real_std   = scaler_y.inverse_transform(preds_patch_std.reshape(-1, 1)).ravel()
+    preds_lgb_real_std     = scaler_y.inverse_transform(preds_lgb_std.reshape(-1, 1)).ravel()
+    preds_sarima_real_std  = scaler_y.inverse_transform(preds_sarima_std.reshape(-1, 1)).ravel()
+    preds_snaive_real_std  = scaler_y.inverse_transform(preds_snaive_std.reshape(-1, 1)).ravel()
+    labels_new_real_std    = scaler_y.inverse_transform(y_test_seq.reshape(-1, 1)).ravel()
+
+    if use_log_transform:
+        preds_patch_real  = np.expm1(preds_patch_real_std)
+        preds_lgb_real    = np.expm1(preds_lgb_real_std)
+        preds_sarima_real = np.expm1(preds_sarima_real_std)
+        preds_snaive_real = np.expm1(preds_snaive_real_std)
+        labels_new_real   = np.expm1(labels_new_real_std)
+    else:
+        preds_patch_real  = preds_patch_real_std
+        preds_lgb_real    = preds_lgb_real_std
+        preds_sarima_real = preds_sarima_real_std
+        preds_snaive_real = preds_snaive_real_std
+        labels_new_real   = labels_new_real_std
+    
     # Inverse standardization and (optionally) inverse logarithmic transformation
     preds1_real_std = scaler_y.inverse_transform(preds1_std.reshape(-1, 1)).ravel()
     preds2_real_std = scaler_y.inverse_transform(preds2_std.reshape(-1, 1)).ravel()
@@ -1894,6 +2125,29 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     # 使用 Model4 与其他模型对比，生成全长与缩放窗口图，以及分布直方图
     primary_preds = {'Model4': preds4_real, 'Model5': preds5_real}
 
+    # 合并原5模 + 新3模
+    all_model_preds_ext = dict(all_model_preds)
+    all_model_preds_ext.update({
+        'PatchTST': preds_patch_real,
+        'LightGBM': preds_lgb_real,
+        'SARIMA':   preds_sarima_real,
+        's-naive':  preds_snaive_real
+    })
+
+    # 可视化（全模型）
+    plot_predictions_date_range(
+        y_actual_real = labels_new_real,
+        predictions_dict = all_model_preds_ext,
+        timestamps = test_timestamps,
+        start_date = '2024-11-25',
+        end_date   = '2024-12-13'
+    )
+    plot_value_and_error_histograms(
+        y_actual_real = labels_new_real,
+        predictions_dict = all_model_preds_ext,
+        bins = 30
+    )
+    
     # 绘制两个时间段的图表
     plot_predictions_date_range(
         y_actual_real = labels5_real,
@@ -1981,6 +2235,38 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
             timestamps = test_timestamps
         )
 
+    # 标准化域（与已有5模一致口径）
+    print(f"[PatchTST]   RMSE: {rmse_p_std:.4f}, MAPE: {mape_p_std:.2f}%, R²: {r2_p_std:.4f}, mse: {mse_p_std:.2f}%, MAE: {mae_p_std:.4f}")
+    # LightGBM / SARIMA / s-naive 在标准化域的指标（与 evaluate 口径一致）：
+    def _calc_std_metrics(y_true_std, y_pred_std):
+        rmse = np.sqrt(mean_squared_error(y_true_std, y_pred_std))
+        nonzero = (y_true_std != 0)
+        mape = (np.mean(np.abs((y_true_std[nonzero] - y_pred_std[nonzero]) / y_true_std[nonzero])) * 100.0) if np.sum(nonzero) else 0.0
+        ss_res = np.sum((y_true_std - y_pred_std) ** 2)
+        ss_tot = np.sum((y_true_std - np.mean(y_true_std)) ** 2)
+        r2 = 1 - (ss_res / ss_tot) if ss_tot != 0 else 0.0
+        mse = np.mean((y_true_std - y_pred_std) ** 2)
+        mae = np.mean(np.abs(y_true_std - y_pred_std))
+        return rmse, mape, r2, mse, mae
+
+    rmse_lgb, mape_lgb, r2_lgb, mse_lgb, mae_lgb = _calc_std_metrics(y_test_seq, preds_lgb_std)
+    rmse_sar, mape_sar, r2_sar, mse_sar, mae_sar = _calc_std_metrics(y_test_seq, preds_sarima_std)
+    rmse_snv, mape_snv, r2_snv, mse_snv, mae_snv = _calc_std_metrics(y_test_seq, preds_snaive_std)
+
+    print(f"[LightGBM]   RMSE: {rmse_lgb:.4f}, MAPE: {mape_lgb:.2f}%, R²: {r2_lgb:.4f}, mse: {mse_lgb:.2f}%, MAE: {mae_lgb:.4f}")
+    print(f"[SARIMA]     RMSE: {rmse_sar:.4f}, MAPE: {mape_sar:.2f}%, R²: {r2_sar:.4f}, mse: {mse_sar:.2f}%, MAE: {mae_sar:.4f}")
+    print(f"[s-naive]    RMSE: {rmse_snv:.4f}, MAPE: {mape_snv:.2f}%, R²: {r2_snv:.4f}, mse: {mse_snv:.2f}%, MAE: {mae_snv:.4f}")
+
+    # 原始域 RMSE（与已有5模一致口径）
+    rmse_patch_real  = np.sqrt(mean_squared_error(labels_new_real, preds_patch_real))
+    rmse_lgb_real    = np.sqrt(mean_squared_error(labels_new_real, preds_lgb_real))
+    rmse_sarima_real = np.sqrt(mean_squared_error(labels_new_real, preds_sarima_real))
+    rmse_snaive_real = np.sqrt(mean_squared_error(labels_new_real, preds_snaive_real))
+    print(f"[PatchTST] => RMSE (original): {rmse_patch_real:.2f}")
+    print(f"[LightGBM] => RMSE (original): {rmse_lgb_real:.2f}")
+    print(f"[SARIMA]   => RMSE (original): {rmse_sarima_real:.2f}")
+    print(f"[s-naive]  => RMSE (original): {rmse_snaive_real:.2f}")
+    
     # ----------------- 3) 训练曲线 -----------------
     plot_training_curves_allmetrics(hist1, model_name = 'EModel_FeatureWeight1')
     plot_training_curves_allmetrics(hist2, model_name = 'EModel_FeatureWeight2')

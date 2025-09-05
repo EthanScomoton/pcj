@@ -964,26 +964,29 @@ def train_lightgbm(X_train_tab, y_train_seq, X_val_tab, y_val_seq, patience_roun
     params = {
         "objective": "regression",
         "metric": "rmse",
-        "learning_rate": 0.05,      # 训练协议统一：使用早停与固定随机种子；学习率为树模型合理默认
-        "num_leaves": 31,
-        "feature_fraction": 0.8,
-        "bagging_fraction": 0.8,
+        "learning_rate": 0.03,
+        "num_leaves": 64,
+        "max_depth": -1,
+        "min_data_in_leaf": 32,
+        "lambda_l1": 0.1,
+        "lambda_l2": 0.2,
+        "feature_fraction": 0.9,
+        "bagging_fraction": 0.9,
         "bagging_freq": 1,
         "seed": seed,
-        "verbosity": -1
+        "verbosity": -1,
+        "force_col_wise": True
     }
-    # LightGBM 4.x: use callbacks for early stopping and logging
     callbacks = []
     try:
-        callbacks.append(lgb.early_stopping(stopping_rounds=patience_rounds))
+        callbacks.append(lgb.early_stopping(stopping_rounds=200))
         callbacks.append(lgb.log_evaluation(period=100))
     except Exception:
-        # Fallback for older versions; if callbacks are unavailable, train without them
         pass
     booster = lgb.train(
         params=params,
         train_set=train_set,
-        num_boost_round=20000,
+        num_boost_round=5000,
         valid_sets=[train_set, val_set],
         valid_names=["train","valid"],
         callbacks=callbacks
@@ -992,30 +995,33 @@ def train_lightgbm(X_train_tab, y_train_seq, X_val_tab, y_val_seq, patience_roun
 
 def fit_predict_sarima(y_train_val_std, n_test, m=24, search_small=True, seed=42):
     """
-    在标准化后的 y 序列上拟合 SARIMA（与深度/树模型的评估域一致），预测后再按主流程反标准化。
-    y_train_val_std: 训练+验证集（标准化域）
-    n_test: 需要预测的步数（与 y_test_seq 对齐）
-    m: 季节周期
+    在标准化后的 y 序列上拟合 SARIMA，预测后再反标准化。
     """
     if SARIMAX is None:
         return None
     np.random.seed(seed)
-    # 极小网格，避免耗时
-    pdq = [(0,1,1), (1,1,0), (1,1,1)]
-    PDQ = [(0,1,1), (1,1,0)]
+    # 扩大网格以减少系统性偏移
+    pdq = [(0,1,1), (1,1,0), (1,1,1), (2,1,0), (0,1,2), (2,1,1), (1,1,2)]
+    PDQ = [(0,1,1), (1,1,0), (1,1,1)]
     best_aic, best_cfg, best_res = 1e18, None, None
-    for (p,d,q) in pdq if search_small else [(1,1,1)]:
-        for (P,D,Q) in PDQ if search_small else [(0,1,1)]:
+    for (p,d,q) in (pdq if search_small else [(2,1,2)]):
+        for (P,D,Q) in (PDQ if search_small else [(1,1,1)]):
             try:
-                model = SARIMAX(y_train_val_std, order=(p,d,q), seasonal_order=(P,D,Q,m), enforce_stationarity=False, enforce_invertibility=False)
-                res = model.fit(disp=False, maxiter=200)
+                model = SARIMAX(
+                    y_train_val_std,
+                    order=(p,d,q),
+                    seasonal_order=(P,D,Q,m),
+                    enforce_stationarity=False,
+                    enforce_invertibility=False
+                )
+                res = model.fit(disp=False, maxiter=400)
                 if res.aic < best_aic:
                     best_aic, best_cfg, best_res = res.aic, ((p,d,q),(P,D,Q,m)), res
             except Exception:
                 continue
     if best_res is None:
         return None
-    forecast = best_res.forecast(steps=n_test)  # 标准化域
+    forecast = best_res.forecast(steps=n_test)
     return np.asarray(forecast, dtype=np.float32)
 
 def predict_snaive_std(y_all_std, start_index, n_test, m=24):
@@ -1036,6 +1042,38 @@ def predict_snaive_std(y_all_std, start_index, n_test, m=24):
             preds.append(y_all_std[ref])
     return np.asarray(preds, dtype=np.float32)
 
+def train_model_robust(model, train_loader, val_loader, model_name='Model', learning_rate=1e-4, weight_decay=1e-4, num_epochs=150, huber_beta=1.0):
+    criterion = nn.SmoothL1Loss(beta=huber_beta)
+    optimizer = Lion(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+    total_steps  = num_epochs * len(train_loader)
+    warmup_steps = int(0.1 * total_steps)
+    scheduler = LambdaLR(optimizer, lambda step: min(step / warmup_steps, 1.0) if step < warmup_steps else max(0.0, 1 - (step - warmup_steps) / (total_steps - warmup_steps)))
+    best_val_loss, counter = float('inf'), 0
+    hist = {k: [] for k in ["train_loss","train_rmse","train_mape","train_r2","train_mse","train_mae","val_loss","val_rmse","val_mape","val_r2","val_mse","val_mae"]}
+    for epoch in range(num_epochs):
+        model.train()
+        for xb, yb in train_loader:
+            xb, yb = xb.to(device), yb.to(device)
+            optimizer.zero_grad()
+            pred = model(xb)
+            loss = criterion(pred, yb)
+            loss.backward()
+            clip_grad_norm_(model.parameters(), max_norm=3.0)
+            optimizer.step(); scheduler.step()
+        # 评估与早停
+        trL, trR, trM, trR2, trMSE, trMAE, _, _ = evaluate(model, train_loader, criterion, device)
+        vlL, vlR, vlM, vlR2, vlMSE, vlMAE, _, _ = evaluate(model, val_loader,   criterion, device)
+        for k, v in zip(hist.keys(), [trL,trR,trM,trR2,trMSE,trMAE,vlL,vlR,vlM,vlR2,vlMSE,vlMAE]): hist[k].append(v)
+        print(f"[{model_name}-Robust] Epoch {epoch+1}/{num_epochs}, ValLoss: {vlL:.4f}, ValRMSE: {vlR:.4f}, ValMAPE: {vlM:.2f}%")
+        if vlL < best_val_loss:
+            best_val_loss, counter = vlL, 0
+            torch.save(model.state_dict(), f"best_{model_name}.pth")
+        else:
+            counter += 1
+            if counter >= patience:
+                print(f"[{model_name}-Robust] Early stopping.")
+                break
+    return hist
 # 5. Evaluation Module
 def evaluate(model, dataloader, criterion, device = device):
     """
@@ -1656,89 +1694,62 @@ def plot_error_max_curve(y_actual_real,
                          predictions_dict,
                          bins: int = 30,
                          smooth_sigma: float = 1.0,
-                         # 新增参数
-                         alpha: float = 0.9,                # 默认透明度
-                         model5_alpha: float = 1.0,         # Model5 的透明度  
-                         model5_linewidth: float = 2.3,     # Model5 的线条粗细
-                         model5_color: str = '#DC143C',     # Model5 的颜色（深红色）
-                         default_linewidth: float = 1.7):   # 其他模型的默认线条粗细
+                         alpha: float = 0.9,
+                         model5_alpha: float = 1.0,
+                         model5_linewidth: float = 2.3,
+                         model5_color: str = '#DC143C',
+                         default_linewidth: float = 1.7,
+                         bin_range: tuple = (-20000, 20000)):
     """
-    为 predictions_dict 中的每个模型绘制一条曲线：
-    曲线上的点来自该模型误差直方图每个 bin 的最高计数，
-    再经高斯平滑后连接而成。
-
-    参数
-    ----
-    y_actual_real : ndarray
-        真实值（原始尺度）。
-    predictions_dict : Dict[str, ndarray]
-        {'模型名': 预测值}。
-    bins : int
-        直方图分箱数量（应与直方图保持一致）。
-    smooth_sigma : float
-        高斯平滑 σ；设为 0 可关闭平滑。
-    alpha : float
-        所有曲线的默认透明度（0-1），默认0.9。
-    model5_alpha : float
-        Model5 的特殊透明度（0-1），默认1.0（不透明）。
-    model5_linewidth : float
-        Model5 的线条粗细，默认2.0。
-    model5_color : str
-        Model5 的颜色，默认深红色。
-    default_linewidth : float
-        其他模型的默认线条粗细，默认1.7。
+    为每个模型绘制“误差直方图每个 bin 的最高计数”曲线，并进行可选平滑。
+    关键修正：所有模型使用完全一致的 bin 边界，避免曲线因分箱不一致而整体偏移。
     """
     from scipy.ndimage import gaussian_filter1d
 
-    # -------- 1. 计算各模型直方图计数 -------- #
-    bin_edges = None
+    # 1) 统一的 bin 边界（显式范围或由数据自动推断）
+    bin_edges = np.linspace(bin_range[0], bin_range[1], bins + 1)
+
+    # 2) 统计各模型在相同 bin_edges 下的计数
     model_curves = {}
     for model_name, preds in predictions_dict.items():
         errors = preds - y_actual_real
-        counts, edges = np.histogram(errors, bins=bins)
-        model_curves[model_name] = counts          # 每个 bin 的最高点即计数
-        if bin_edges is None:
-            bin_edges = edges                      # 记录一次 bin 边界
+        counts, _ = np.histogram(errors, bins=bin_edges)
+        model_curves[model_name] = counts
 
     bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
 
-    # -------- 2. 绘制顺滑曲线 -------- #
+    # 3) 绘制
     plt.figure(figsize=(10, 5))
-    # Use fixed colors for consistency
     colors = mpl.cm.tab10.colors
-    line_styles = ['-', '--', '-.', ':',(0, (3, 1, 1, 1))]
+    line_styles = ['-', '--', '-.', ':', (0, (3, 1, 1, 1))]
     marker_styles = ['^', 's', 'o', 'h', 'p']
-    
+
     for i, (model_name, counts) in enumerate(model_curves.items()):
         curve = (gaussian_filter1d(counts.astype(float), sigma=smooth_sigma)
                  if smooth_sigma > 0 else counts)
-        
-        # 检查是否为 Model5，应用特殊设置
+
         if model_name == 'Model5':
-            plt.plot(bin_centers,
-                     curve,
+            plt.plot(bin_centers, curve,
                      label=model_name,
-                     color=MODEL_COLORS.get('Model5', model5_color),              # 使用 Model5 的特殊颜色（优先固定颜色表）
-                     linewidth=model5_linewidth,      # 使用 Model5 的特殊线条粗细
+                     color=MODEL_COLORS.get('Model5', model5_color),
+                     linewidth=model5_linewidth,
                      marker=marker_styles[i % len(marker_styles)],
-                     linestyle='-',                   # 固定为实线
+                     linestyle='-',
                      markersize=10,
-                     alpha=model5_alpha,              # 使用 Model5 的特殊透明度
-                     zorder=10)                       # 确保 Model5 在最上层
+                     alpha=model5_alpha,
+                     zorder=10)
         else:
-            plt.plot(bin_centers,
-                     curve,
+            plt.plot(bin_centers, curve,
                      label=model_name,
                      color=MODEL_COLORS.get(model_name, colors[i % len(colors)]),
-                     linewidth=default_linewidth,     # 使用默认线条粗细
+                     linewidth=default_linewidth,
                      marker=marker_styles[i % len(marker_styles)],
                      linestyle=line_styles[i % len(line_styles)],
                      markersize=10,
-                     alpha=alpha)                     # 使用默认透明度
+                     alpha=alpha)
 
-    # -------- 3. 图形美化 -------- #
-    #plt.title('Smoothed Histogram Curves of Prediction Errors')
-    plt.xlim(-20000, 20000)
+    if bin_range is not None:
+        plt.xlim(bin_range[0], bin_range[1])
     plt.xlabel('Prediction Error of Model and Actual Value(kW·h)')
     plt.ylabel('Frequency')
     plt.legend()
@@ -1926,13 +1937,16 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     patch_model = PatchTST(
         feature_dim=feature_dim,
         window_size=window_size,
-        patch_len=5,
-        patch_stride=5,
-        d_model=256, n_heads=8, num_layers=2, dropout=0.1
+        patch_len=8,          # 增大补丁长度
+        patch_stride=4,       # 使用重叠补丁以平滑输出
+        d_model=256,          # 降低维度防止过拟合激增
+        n_heads=6,
+        num_layers=3,
+        dropout=0.2
     ).to(device)
 
     print("\n========== Training Model: PatchTST ==========")
-    hist_patch = train_model(
+    hist_patch = train_model_robust(   # 使用稳健损失的训练函数
         model         = patch_model,
         train_loader  = DataLoader(TensorDataset(torch.from_numpy(X_train_seq_g), torch.from_numpy(y_train_seq_safe)), batch_size = batch_size, shuffle = True,  num_workers = num_workers),
         val_loader    = DataLoader(TensorDataset(torch.from_numpy(X_val_seq_g),   torch.from_numpy(y_val_seq_safe)),   batch_size = batch_size, shuffle = False, num_workers = num_workers),
@@ -1940,7 +1954,7 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
         learning_rate = learning_rate,
         weight_decay  = weight_decay,
         num_epochs    = num_epochs
-    )
+    ) 
 
     # Train Model: EModel_FeatureWeight1
     print("\n========== Training Model: 1 ==========")

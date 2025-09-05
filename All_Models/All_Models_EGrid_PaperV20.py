@@ -1940,7 +1940,7 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
         patch_len=8,          # 增大补丁长度
         patch_stride=4,       # 使用重叠补丁以平滑输出
         d_model=256,          # 降低维度防止过拟合激增
-        n_heads=6,
+        n_heads=8,
         num_layers=3,
         dropout=0.2
     ).to(device)

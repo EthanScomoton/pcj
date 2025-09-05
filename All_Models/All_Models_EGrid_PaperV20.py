@@ -2066,8 +2066,17 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
 
     # ----标准化域上的预测 ----
     # 1) PatchTST
-    best_patch = PatchTST(feature_dim=feature_dim, window_size=window_size, patch_len=5, patch_stride=5,
-                          d_model=256, n_heads=8, num_layers=2, dropout=0.1).to(device)
+    best_patch = PatchTST(
+        feature_dim=feature_dim, 
+        window_size=window_size, 
+        patch_len=8, 
+        patch_stride=4,
+        d_model=256, 
+        n_heads=8, 
+        num_layers=3,
+        dropout=0.2
+    ).to(device)
+    
     best_patch.load_state_dict(torch.load('best_PatchTST.pth', map_location=device, weights_only=True), strict=False)
     (_, rmse_p_std, mape_p_std, r2_p_std, mse_p_std, mae_p_std, preds_patch_std, labels_patch_std) = evaluate(best_patch, test_loader, nn.SmoothL1Loss(beta=1.0))
 

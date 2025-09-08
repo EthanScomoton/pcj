@@ -956,7 +956,7 @@ def flatten_sequences_for_tabular(X_seq):
     n, w, f = X_seq.shape
     return X_seq.reshape(n, w * f)
 
-def train_lightgbm(X_train_tab, y_train_seq, X_val_tab, y_val_seq, patience_rounds=50, seed=42):
+def train_lightgbm(X_train_tab, y_train_seq, X_val_tab, y_val_seq, patience_rounds=300, seed=42):
     if lgb is None:
         return None
     train_set = lgb.Dataset(X_train_tab, label=y_train_seq)

@@ -956,7 +956,7 @@ def flatten_sequences_for_tabular(X_seq):
     n, w, f = X_seq.shape
     return X_seq.reshape(n, w * f)
 
-def train_lightgbm(X_train_tab, y_train_seq, X_val_tab, y_val_seq, patience_rounds=300, seed=42):
+def train_lightgbm(X_train_tab, y_train_seq, X_val_tab, y_val_seq, patience_rounds=50, seed=42):
     if lgb is None:
         return None
     train_set = lgb.Dataset(X_train_tab, label=y_train_seq)
@@ -1015,7 +1015,7 @@ def fit_predict_sarima(y_train_val_std, n_test, m=24, search_small=True, seed=42
                     enforce_stationarity=False,
                     enforce_invertibility=False
                 )
-                res = model.fit(disp=False, maxiter=200)
+                res = model.fit(disp=False, maxiter=150)
                 if res.aic < best_aic:
                     best_aic, best_cfg, best_res = res.aic, ((p,d,q),(P,D,Q,m)), res
             except Exception:
@@ -2083,23 +2083,19 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
 
     # 2) LightGBM（与训练/验证域一致：标准化后的 y_seq）
     # Safety: y 序列也需要无 NaN/Inf
+    print("[LightGBM] Training start...")
     y_train_seq_safe = np.nan_to_num(y_train_seq, nan=0.0, posinf=0.0, neginf=0.0)
     y_val_seq_safe   = np.nan_to_num(y_val_seq,   nan=0.0, posinf=0.0, neginf=0.0)
     booster = train_lightgbm(X_train_tab, y_train_seq_safe, X_val_tab, y_val_seq_safe, patience_rounds=50, seed=42)
-    if booster is not None:
-        best_iter = getattr(booster, 'best_iteration', None)
-        if best_iter is None or best_iter <= 0:
-            preds_lgb_std = booster.predict(X_test_tab)
-        else:
-            preds_lgb_std = booster.predict(X_test_tab, num_iteration=best_iter)
-    else:
-        preds_lgb_std = np.zeros_like(y_test_seq)
+    print("[LightGBM] Training done.")
 
     # 3) SARIMA（用训练+验证的标准化 y，预测 test_seq 步）
     y_train_val_std = np.concatenate([y_train, y_val])
     y_train_val_std = np.nan_to_num(y_train_val_std, nan=0.0, posinf=0.0, neginf=0.0)
     n_test_seq = len(y_test_seq)
-    preds_sarima_std = fit_predict_sarima(y_train_val_std, n_test=n_test_seq, m=seasonal_period, search_small=True, seed=42)
+    print("[SARIMA] Fitting start...")
+    preds_sarima_std = fit_predict_sarima(y_train_val_std, n_test=n_test_seq, m=seasonal_period, search_small=False, seed=42)
+    print("[SARIMA] Fitting done.")
     if preds_sarima_std is None:
         preds_sarima_std = np.zeros_like(y_test_seq)
 

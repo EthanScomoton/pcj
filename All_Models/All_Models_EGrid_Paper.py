@@ -63,32 +63,21 @@ def load_data():
 # 2. Feature Engineering Module
 def feature_engineering(data_df):
     """
-    [Feature Engineering Module - Fixed]
-    - EWMA 平滑 E_grid
-    - 只对“确认为类别型”的列做 LabelEncoder
-    - 连续变量保持为 float，不做离散化
-    - 构造时间特征（sin/cos）
-    - 返回：处理后数据、特征列、目标名、元信息字典
+    [Feature Engineering Module]
+    - Apply EWMA smoothing to 'E_grid' (span = 10)
+    - Construct time features: dayofweek, hour, month and their sin/cos transformations
+    - Encode categorical features using LabelEncoder
+    - Returns: processed data, list of feature columns, target column name
     """
-    span = 8
-    data_df = data_df.copy()
+    span = 8  # EWMA smoothing parameter
+    data_df['E_grid'] = data_df['E_grid'].ewm(span = span, adjust = False).mean()  # Smooth E_grid
 
-    # 基础缺失值处理（按需可改为更复杂插值）
-    data_df = data_df.sort_values('timestamp').reset_index(drop = True)
-    for col in data_df.columns:
-        if col != 'timestamp':
-            if data_df[col].dtype.kind in 'biufc':
-                data_df[col] = data_df[col].interpolate(limit_direction='both')
-            else:
-                data_df[col] = data_df[col].ffill().bfill()
+    # Construct time features
+    data_df['dayofweek'] = data_df['timestamp'].dt.dayofweek  # dayofweek: weekday index
+    data_df['hour']      = data_df['timestamp'].dt.hour       # hour: hour of the day
+    data_df['month']     = data_df['timestamp'].dt.month      # month: month of the year
 
-    data_df['E_grid'] = data_df['E_grid'].ewm(span = span, adjust = False).mean()
-
-    # 时间特征
-    data_df['dayofweek'] = data_df['timestamp'].dt.dayofweek
-    data_df['hour']      = data_df['timestamp'].dt.hour
-    data_df['month']     = data_df['timestamp'].dt.month
-
+    # Sin/Cos transformations
     data_df['dayofweek_sin'] = np.sin(2 * np.pi * data_df['dayofweek'] / 7)
     data_df['dayofweek_cos'] = np.cos(2 * np.pi * data_df['dayofweek'] / 7)
     data_df['hour_sin']      = np.sin(2 * np.pi * data_df['hour'] / 24)
@@ -96,45 +85,29 @@ def feature_engineering(data_df):
     data_df['month_sin']     = np.sin(2 * np.pi * (data_df['month'] - 1) / 12)
     data_df['month_cos']     = np.cos(2 * np.pi * (data_df['month'] - 1) / 12)
 
-    # 明确划分类别变量与连续变量（依据你现有字段）
-    categorical_cols = [
-        'season', 'holiday', 'weather', 'working_hours',
-        'ship_grade', 'dock_position', 'destination'
+    # Categorical feature encoding
+    renewable_features = [
+        'season', 'holiday', 'weather', 'temperature',
+        'working_hours', 'E_wind', 'E_storage_discharge',
+        'ESCFR', 'ESCFG','v_wind', 'wind_direction','E_PV'
     ]
-    numeric_cols = [
-        'temperature', 'E_wind', 'E_storage_discharge', 'ESCFR', 'ESCFG',
-        'v_wind', 'wind_direction', 'E_PV', 'energyconsumption'
+    load_features = [
+        'ship_grade', 'dock_position', 'destination', 'energyconsumption'
     ]
-
-    # 仅对存在的列做处理
-    categorical_cols = [c for c in categorical_cols if c in data_df.columns]
-    numeric_cols     = [c for c in numeric_cols     if c in data_df.columns]
-
-    # LabelEncoder 仅用于类别列
-    for col in categorical_cols:
-        le = LabelEncoder()
-        data_df[col] = le.fit_transform(data_df[col].astype(str))
-
-    # 连续列保证为 float
-    for col in numeric_cols:
-        data_df[col] = pd.to_numeric(data_df[col], errors='coerce').astype(float)
-        data_df[col] = data_df[col].interpolate(limit_direction='both')
+    for col in renewable_features + load_features:
+        if col in data_df.columns:
+            le = LabelEncoder()
+            data_df[col] = le.fit_transform(data_df[col].astype(str))  # Encode feature
 
     time_feature_cols = [
         'dayofweek_sin', 'dayofweek_cos',
         'hour_sin', 'hour_cos',
         'month_sin', 'month_cos'
     ]
-
-    feature_columns = categorical_cols + numeric_cols + time_feature_cols
+    feature_columns = renewable_features + load_features + time_feature_cols  # All feature columns
     target_column   = 'E_grid'
-
-    meta = {
-        'categorical_cols': categorical_cols,
-        'numeric_cols': numeric_cols,
-        'time_cols': time_feature_cols
-    }
-    return data_df, feature_columns, target_column, meta
+    
+    return data_df, feature_columns, target_column
 
 
 # 3. Sequence Construction Module
@@ -533,9 +506,8 @@ class EModel_FeatureWeight2(nn.Module):
         combined = torch.cat([temporal, feature], dim=1)
         output = self.fc(combined)
         mu, logvar = torch.chunk(output, 2, dim=1)
-        logvar = torch.clamp(logvar, -10.0, 10.0)
-        if not self.training:
-            return mu.squeeze(-1)
+        
+        # Reparameterization trick with noise
         noise = 0.1 * torch.randn_like(mu, device=x.device) * torch.exp(0.5 * logvar)
         output = mu + noise
         return output.squeeze(-1)
@@ -657,9 +629,8 @@ class EModel_FeatureWeight3(nn.Module):
         combined = torch.cat([temporal, feature], dim = 1)
         output = self.fc(combined)
         mu, logvar = torch.chunk(output, 2, dim = 1)
-        logvar = torch.clamp(logvar, -10.0, 10.0)
-        if not self.training:
-            return mu.squeeze(-1)
+        
+        # Reparameterization trick with noise
         noise = 0.1 * torch.randn_like(mu, device = x.device) * torch.exp(0.5 * logvar)
         output = mu + noise
         
@@ -810,234 +781,84 @@ class EModel_FeatureWeight4(nn.Module):
         combined = torch.cat([temporal, feature], dim = 1)
         output = self.fc(combined)
         mu, logvar = torch.chunk(output, 2, dim = 1)
-        logvar = torch.clamp(logvar, -10.0, 10.0)
         
-        if not self.training:
-            return mu.squeeze(-1)
-        
+        # Reparameterization trick with noise
         noise = 0.1 * torch.randn_like(mu, device = x.device) * torch.exp(0.5 * logvar)
         output = mu + noise
         
         return output.squeeze(-1)
 
 class EModel_FeatureWeight5(nn.Module):
+
     def __init__(self,
                  feature_dim,
-                 lstm_hidden_size = 384,  # 增加隐藏层大小
-                 lstm_num_layers = 3,     # 保持较深的层次
-                 lstm_dropout = 0.15,     # 适当增加dropout
-                 window_size = 20,  
-                 proj_dim = 512
+                 window_size=window_size,          # 序列窗口长度
+                 lstm_hidden_size=256,
+                 lstm_num_layers=2,
+                 lstm_dropout=0.2, 
                 ):
+        # ------- 修正父类调用名称 ------- #
         super(EModel_FeatureWeight5, self).__init__()
+
         self.feature_dim = feature_dim
-        self.hidden_size = lstm_hidden_size * 2  # 双向LSTM隐藏层维度
-        
-        # 选择5为局部注意力窗口大小(20可以被5整除)
-        self.local_attn_window_size = 5
-        
-        # 1. 增强版特征门控 - 结合Model4的优势
-        self.feature_gate = nn.Sequential(
-            nn.Linear(feature_dim, feature_dim*2),
-            nn.GELU(),
-            nn.LayerNorm(feature_dim*2),
-            nn.Dropout(0.1),
-            nn.Linear(feature_dim*2, feature_dim),
-            nn.Sigmoid()
-        )
-        
-        # 2. 频率域特征提取 - 使用不同卷积核大小捕获多尺度频率特征
-        self.freq_extract = nn.Sequential(
-            nn.Conv1d(feature_dim, feature_dim*2, kernel_size=3, padding=1),
-            nn.GELU(),
-            nn.Conv1d(feature_dim*2, feature_dim, kernel_size=5, padding=2),
-            nn.GELU()
-        )
-        
-        # 3. 更大更强的单一BiLSTM
+
+        # 1) CNN-FeatureGate
+        self.feature_gate = CNN_FeatureGate(feature_dim, window_size)
+
+        # 2) MLP-Attention
+        self.temporal_attn = Attention(input_dim=2 * lstm_hidden_size)
+
+        # 3) 双向 LSTM 及其初始化（
         self.lstm = nn.LSTM(
-            input_size = feature_dim,
-            hidden_size = lstm_hidden_size,
-            num_layers = lstm_num_layers,
-            batch_first = True,
-            bidirectional = True,
-            dropout = lstm_dropout
+            input_size=feature_dim,
+            hidden_size=lstm_hidden_size,
+            num_layers=lstm_num_layers,
+            batch_first=True,
+            bidirectional=True,
+            dropout=lstm_dropout if lstm_num_layers > 1 else 0
         )
-        
-        # 特殊权重初始化
-        self._init_weights()
-        
-        # 4. 强化版局部注意力
-        from local_attention.local_attention import LocalAttention
-        self.local_attn = LocalAttention(
-            dim = self.hidden_size,
-            window_size = self.local_attn_window_size,
-            causal = False,
-            dropout = 0.1
-        )
-        
-        # 5. 跨窗口注意力聚合器 - 解决局部注意力的局限性
-        self.window_aggregate = nn.Sequential(
-            nn.Linear(self.hidden_size, self.hidden_size),
-            nn.LayerNorm(self.hidden_size),
-            nn.GELU()
-        )
-        
-        # 6. 多层特征注意力
-        self.feature_attn = nn.Sequential(
-            nn.LayerNorm(window_size),  # 先归一化序列维度
-            nn.Linear(window_size, window_size*2),
-            nn.GELU(),
+
+        self._init_lstm_weights()
+
+        # 5) 全连接输出层
+        self.fc = nn.Sequential(
+            nn.Linear(2 * lstm_hidden_size, 128),  
+            nn.ReLU(),
             nn.Dropout(0.1),
-            nn.Linear(window_size*2, window_size),
-            nn.GELU(),
-            nn.Linear(window_size, 1),
-            nn.Sigmoid()
+            nn.Linear(128, 2)   # 输出 μ 与 log σ²
         )
-        
-        # 7. 特征投影模块 - 针对高幅值区域特殊处理
-        self.feature_proj = nn.Sequential(
-            nn.Linear(self.hidden_size, proj_dim),
-            nn.LayerNorm(proj_dim),
-            nn.GELU(),
-            nn.Dropout(0.1),
-            nn.Linear(proj_dim, proj_dim),
-            nn.LayerNorm(proj_dim),
-            nn.GELU()
-        )
-        
-        # 8. 高波动适应层 - 特殊处理高幅值区域
-        self.high_volatility_adapter = nn.Sequential(
-            nn.Linear(proj_dim, proj_dim//2),
-            nn.GELU(),
-            nn.Linear(proj_dim//2, proj_dim),
-            nn.Tanh()  # 使用Tanh适应高低波动
-        )
-        
-        # 9. 梯度流控制器 - 防止梯度消失/爆炸
-        self.gradient_gate = nn.Parameter(torch.ones(1) * 0.5, requires_grad=True)
-        
-        # 10. 高级输出网络
-        self.output_network = nn.Sequential(
-            nn.Linear(self.hidden_size + proj_dim, 512),
-            nn.LayerNorm(512),
-            nn.GELU(),
-            nn.Dropout(0.15),
-            nn.Linear(512, 256),
-            nn.LayerNorm(256), 
-            nn.GELU(),
-            nn.Dropout(0.1),
-            nn.Linear(256, 128),
-            nn.LayerNorm(128),
-            nn.GELU(),
-            nn.Linear(128, 2)
-        )
-        
-        # 11. 动态噪声控制器
-        self.noise_controller = nn.Sequential(
-            nn.Linear(3, 32),  # 增加输入维度包含额外信息
-            nn.GELU(),
-            nn.Linear(32, 16),
-            nn.Tanh(),
-            nn.Linear(16, 1),
-            nn.Sigmoid()
-        )
-        self.base_noise_level = nn.Parameter(torch.tensor(0.05), requires_grad=True)
-        
-    def _init_weights(self):
-        """特殊的权重初始化策略"""
+    
+    def _init_lstm_weights(self):
+        """LSTM权重初始化"""
         for name, param in self.lstm.named_parameters():
             if 'weight_ih' in name:
-                # 使用He初始化
-                nn.init.kaiming_normal_(param.data, nonlinearity='tanh')
+                nn.init.xavier_uniform_(param.data)
             elif 'weight_hh' in name:
-                # 使用正交初始化提高RNN稳定性
-                nn.init.orthogonal_(param.data, gain=0.9)
+                nn.init.orthogonal_(param.data)
             elif 'bias' in name:
                 param.data.fill_(0)
                 n = param.size(0)
-                # 特殊设置遗忘门bias为1，帮助长期记忆
-                param.data[(n // 4):(n // 2)].fill_(1.0)
+                param.data[(n // 4):(n // 2)].fill_(1.0)  # 设置遗忘门偏置为1
                 
     def forward(self, x):
-        batch_size, seq_len, _ = x.shape
-        
-        # 1. 动态特征加权 - 从Model4借鉴的设计
-        x_mean = x.mean(dim=1)
-        gate = self.feature_gate(x_mean)
-        x_weighted = x * gate.unsqueeze(1)
-        
-        # 2. 频率域特征提取 - 特别有助于捕获高频波动
-        x_freq = self.freq_extract(x_weighted.transpose(1, 2)).transpose(1, 2)
-        # 残差连接但增强频率特征的贡献
-        x_combined = x_weighted + 0.4 * x_freq
-        
-        # 3. BiLSTM处理
-        lstm_out, (h_n, c_n) = self.lstm(x_combined)
-        
-        # 4. 应用局部注意力
-        local_attn_out = self.local_attn(lstm_out, lstm_out, lstm_out)
-        
-        # 5. 增强跨窗口连接 - 解决局部注意力的局限性
-        window_features = []
-        for i in range(0, seq_len, self.local_attn_window_size):
-            # 对每个窗口内的特征聚合
-            window_feature = local_attn_out[:, i:i+self.local_attn_window_size, :].sum(dim=1)
-            window_features.append(window_feature)
-        
-        # 处理所有窗口特征
-        window_features = torch.stack(window_features, dim=1)  # [B, num_windows, hidden]
-        cross_window = self.window_aggregate(window_features.mean(dim=1))
-        
-        # 6. 特征维度注意力 - 增强全局特征表示
-        feature_weights = self.feature_attn(lstm_out.transpose(1, 2))
-        feature_weighted = lstm_out * feature_weights.transpose(1, 2)
-        attended_features = feature_weighted.sum(dim=1)
-        
-        # 7. 特征投影
-        projected_features = self.feature_proj(attended_features)
-        
-        # 8. 高波动适应处理 - 专门针对大幅波动区域
-        volatility_features = self.high_volatility_adapter(projected_features)
-        
-        # 计算波动幅度估计
-        magnitude_factor = torch.sigmoid(projected_features.mean(dim=1, keepdim=True))
-        
-        # 自适应融合 - 高幅值区域更多使用volatility特征
-        adaptive_weight = 0.2 + 0.6 * magnitude_factor
-        enhanced_features = projected_features + adaptive_weight * volatility_features
-        
-        # 9. 梯度控制 - 通过可学习参数控制信息流
-        gated_features = enhanced_features * self.gradient_gate
-        
-        # 10. 特征组合
-        combined_features = torch.cat([cross_window, gated_features], dim=1)
-        output = self.output_network(combined_features)
-        
-        # 11. 高度自适应的噪声控制
-        mu, logvar = torch.chunk(output, 2, dim=1)
-        logvar = torch.clamp(logvar, -10.0, 10.0)
-        if not self.training:
-            return mu.squeeze(-1)
-        
-        # 结合多种信号进行噪声控制
-        signal_strength = torch.abs(mu).mean(dim=1, keepdim=True)  # 信号强度
-        noise_input = torch.cat([
-            mu, 
-            logvar, 
-            signal_strength  # 额外信号强度特征
-        ], dim=1)
-        
-        noise_factor = self.noise_controller(noise_input)
-        
-        # 复杂波动适应性噪声
-        # 高振幅区域需要较小噪声，低振幅区域可以有较大噪声
-        amplitude_mask = torch.sigmoid((torch.abs(mu) - mu.abs().mean()) * 5)  # 锐化的幅值掩码
-        scaled_noise = self.base_noise_level * noise_factor * torch.randn_like(mu) * torch.exp(0.5 * logvar)
-        adjusted_noise = scaled_noise * (1.0 - 0.8 * amplitude_mask)  # 高幅值区域大幅降低噪声
-        
-        # 最终输出
-        output = mu + adjusted_noise
+        """
+        x: [batch, seq_len, feature_dim]
+        """
+        # ---------- 动态特征加权 ---------- #
+        gate = self.feature_gate(x)                # [batch, feature_dim]
+        x = x * gate.unsqueeze(1)                  # [batch, seq_len, feature_dim]
+
+        # ---------- LSTM ---------- #
+        lstm_out, _ = self.lstm(x)                 # [batch, seq_len, 2*hidden]
+
+        # ---------- Temporal Attention ---------- #
+        temporal = self.temporal_attn(lstm_out)    # [batch, 2*hidden]
+
+        mu, logvar = torch.chunk(self.fc(temporal), 2, dim=1)
+
+        # Re-parameterization trick
+        noise   = 0.1 * torch.randn_like(mu) * torch.exp(0.5 * logvar)
+        output  = mu + noise
         return output.squeeze(-1)
 
 # 5. Evaluation Module
@@ -1062,9 +883,6 @@ def evaluate(model, dataloader, criterion, device = device):
             batch_labels  = batch_labels.to(device)
 
             outputs = model(batch_inputs)
-            # 数值清洗，避免 NaN/Inf 进入指标计算
-            if torch.isnan(outputs).any() or torch.isinf(outputs).any():
-                outputs = torch.where(torch.isfinite(outputs), outputs, torch.zeros_like(outputs))
             loss    = criterion(outputs, batch_labels)
 
             running_loss += loss.item() * batch_inputs.size(0)
@@ -1076,13 +894,6 @@ def evaluate(model, dataloader, criterion, device = device):
     val_loss   = running_loss / num_samples
     preds_arr  = np.concatenate(preds_list, axis = 0)
     labels_arr = np.concatenate(labels_list, axis = 0)
-
-    # 汇总后的再清洗（双保险）
-    finite_mask = np.isfinite(preds_arr) & np.isfinite(labels_arr)
-    preds_arr = preds_arr[finite_mask]
-    labels_arr = labels_arr[finite_mask]
-    if preds_arr.size == 0:
-        return val_loss, np.nan, np.nan, np.nan, np.nan, np.nan, preds_arr, labels_arr
 
     # Compute RMSE
     rmse_std = np.sqrt(mean_squared_error(labels_arr, preds_arr))
@@ -1479,44 +1290,41 @@ def calculate_feature_importance(data_df, feature_cols, target_col):
 # ------------------------------------------------------------------
 def calculate_feature_importance_mic(data_df, feature_cols, target_col):
     """
-    使用 MIC 计算特征重要性；若 minepy 不可用，自动退化为 Pearson 的 |r|
+    使用 MIC 计算特征重要性，返回 0~1 归一化后的权重数组。
+    需要安装 minepy:  pip install minepy
     """
-    try:
-        from minepy import MINE
-        use_mic = True
-    except Exception as e:
-        print("[Info] minepy not found, MIC falls back to Pearson |r|.")
-        use_mic = False
+    from minepy import MINE
+    df_encoded = data_df.copy()
+    mic_importance = np.ones(len(feature_cols), dtype=np.float32)
 
-    df = data_df.copy()
-    imp = np.ones(len(feature_cols), dtype=np.float32)
+    mine = MINE(alpha=0.6, c=15)                 # 官方推荐参数
+    for i, col in enumerate(feature_cols):
+        # 类别型特征先标签编码
+        if df_encoded[col].dtype == 'object':
+            le = LabelEncoder()
+            df_encoded[col] = le.fit_transform(df_encoded[col].astype(str))
 
-    if use_mic:
-        mine = MINE(alpha=0.6, c=15)
-        for i, col in enumerate(feature_cols):
-            if df[col].dtype == 'object':
-                le = LabelEncoder()
-                df[col] = le.fit_transform(df[col].astype(str))
-            x = df[col].values
-            y = df[target_col].values
-            mine.compute_score(x, y)
-            imp[i] = max(mine.mic(), 0.1)
-    else:
-        for i, col in enumerate(feature_cols):
-            if df[col].dtype == 'object':
-                le = LabelEncoder()
-                df[col] = le.fit_transform(df[col].astype(str))
-            imp[i] = max(abs(df[col].corr(df[target_col])), 0.1)
+        x = df_encoded[col].values
+        y = df_encoded[target_col].values
 
-    imp /= imp.max()
-    ranking = sorted(zip(feature_cols, imp), key=lambda z: z[1], reverse=True)
-    print("\n基于MIC(或退化Pearson)的特征影响度：")
+        mine.compute_score(x, y)
+        mic_val = mine.mic()
+        mic_importance[i] = max(mic_val, 0.1)     # 最小 0.1，避免 0
+
+    # 归一化到 0~1
+    mic_importance /= mic_importance.max()
+
+    # 输出排序结果
+    ranking = sorted(zip(feature_cols, mic_importance),
+                     key=lambda z: z[1], reverse=True)
+    print("\n基于MIC的特征对E_grid影响度（线性+非线性相关性）：")
     for feat, score in ranking:
         print(f"{feat}: {score:.4f}")
-    return imp
+
+    return mic_importance
 
 
-def plot_predictions_date_range(y_actual_real, predictions_dict, timestamps, start_date, end_date, title=""):
+def plot_predictions_date_range(y_actual_real, predictions_dict, timestamps, start_date, end_date):
     """
     Plot predictions for a specific date range.
     
@@ -1536,22 +1344,15 @@ def plot_predictions_date_range(y_actual_real, predictions_dict, timestamps, sta
     # Convert timestamps to pandas DatetimeIndex
     time_index = pd.to_datetime(timestamps)
     
-    # 自定义模型颜色映射（由浅到深的蓝色 + 红色）
-    model_colors = {
-        'Model1': '#ADD8E6',   # light blue
-        'Model2': '#6495ED',   # cornflower blue
-        'Model3': '#1E90FF',   # dodger blue
-        'Model5': '#00008B',   # dark blue
-        'Model4': 'red'
+    # 自定义模型颜色映射和透明度
+    model_settings = {
+        'Model1': {'color': '#B0C4DE', 'alpha': 0.9, 'linewidth': 1.5, 'linestyle': '-'},      # 浅钢蓝色，低透明度
+        'Model2': {'color': '#87CEEB', 'alpha': 0.9, 'linewidth': 1.5, 'linestyle': '--'},     # 天蓝色，低透明度
+        'Model3': {'color': '#ADD8E6', 'alpha': 0.9, 'linewidth': 1.5, 'linestyle': '-.'},     # 浅蓝色，低透明度
+        'Model4': {'color': '#00008B', 'alpha': 1.0, 'linewidth': 1.9, 'linestyle': ':'},      # 深红色，完全不透明
+        'Model5': {'color': '#DC143C', 'alpha': 1.0, 'linewidth': 2, 'linestyle': '-'}       # 深蓝色，完全不透明
     }
     
-    model_styles = {
-        'Model1': '-',
-        'Model2': '--',
-        'Model3': '-.',
-        'Model5': ':',
-        'Model4': (0, (3, 1, 1, 1))
-    }
     # Create mask for date range
     start = pd.to_datetime(start_date)
     end = pd.to_datetime(end_date)
@@ -1563,19 +1364,53 @@ def plot_predictions_date_range(y_actual_real, predictions_dict, timestamps, sta
     
     # Plot
     plt.figure(figsize=(14, 6))
-    plt.plot(time_index[mask], y_actual_real[mask], 
-             label='Actual', color='black', linewidth=1.5)
     
+    # 绘制实际值
+    plt.plot(time_index[mask], y_actual_real[mask], 
+             label='Actual', color='black', linewidth=1.5, zorder=10)
+    
+    # 先绘制非重点模型（使其在底层）
     for model_name, preds in predictions_dict.items():
-        color = model_colors.get(model_name, '#808080')
-        ls = model_styles.get(model_name, '-')
-        plt.plot(time_index[mask], preds[mask], 
-                 label=model_name, color=color, linewidth=1.8, alpha=1, linestyle=ls)
+        if model_name not in ['Model4', 'Model5']:
+            settings = model_settings.get(model_name, {'color': '#808080', 'alpha': 0.4, 'linewidth': 1.0, 'linestyle': '-'})
+            plt.plot(time_index[mask], preds[mask], 
+                     label=model_name, 
+                     color=settings['color'], 
+                     linewidth=settings['linewidth'], 
+                     alpha=settings['alpha'], 
+                     linestyle=settings['linestyle'],
+                     zorder=5)
+    
+    # 再绘制重点模型（使其在顶层）
+    for model_name, preds in predictions_dict.items():
+        if model_name in ['Model4', 'Model5']:
+            settings = model_settings.get(model_name)
+            plt.plot(time_index[mask], preds[mask], 
+                     label=model_name, 
+                     color=settings['color'], 
+                     linewidth=settings['linewidth'], 
+                     alpha=settings['alpha'], 
+                     linestyle=settings['linestyle'],
+                     zorder=15)
     
     plt.xlabel('Timestamp')
     plt.ylabel('Grid Energy Compensation Value (kW·h)')
-    plt.legend()
-    plt.grid(True)
+    
+    # 调整图例顺序
+    handles, labels = plt.gca().get_legend_handles_labels()
+    order = [0]  # Actual first
+    # Model4 and Model5 next
+    for i, label in enumerate(labels):
+        if label in ['Model4', 'Model5'] and i != 0:
+            order.append(i)
+    # Other models last
+    for i, label in enumerate(labels):
+        if label not in ['Model4', 'Model5', 'Actual'] and i != 0:
+            order.append(i)
+    
+    plt.legend([handles[idx] for idx in order], [labels[idx] for idx in order], 
+               loc='best', framealpha=0.9)
+    plt.grid(True, alpha=0.3)
     plt.tight_layout()
     plt.xticks(rotation=45)
     
@@ -1603,13 +1438,34 @@ def plot_value_and_error_histograms(y_actual_real, predictions_dict, bins=30):
 
     # -------- Histogram of prediction errors -------- #
     plt.subplot(1, 2, 2)
-    colors = mpl.cm.tab10.colors
-    for i, (model_name, preds) in enumerate(predictions_dict.items()):
+    
+    # 固定的模型颜色映射
+    model_colors = {
+        'Model1': '#1f77b4',  # 蓝色
+        'Model2': '#ff7f0e',  # 橙色  
+        'Model3': '#2ca02c',  # 绿色
+        'Model4': '#d62728',  # 红色
+        'Model5': '#9467bd',  # 紫色
+    }
+    
+    # 使用固定的bin边界范围，确保所有图表一致
+    # 基于xlim(-20000, 20000)设置固定的bin边界
+    bin_edges = np.linspace(-20000, 20000, bins + 1)
+    
+    for model_name, preds in predictions_dict.items():
         errors = preds - y_actual_real
-        plt.hist(errors, bins=bins, alpha=0.5, label=model_name, color=colors[i % len(colors)], edgecolor='black')
+        # 使用固定的颜色映射，如果模型名不在映射中，使用默认颜色
+        color = model_colors.get(model_name, '#808080')  # 灰色作为默认
+        
+        plt.hist(errors,
+                 bins=bin_edges,        # 使用固定的bin边界
+                 alpha=0.5,
+                 label=model_name,
+                 color=color,
+                 edgecolor='black')
 
     plt.xlim(-20000, 20000)
-    plt.xlabel('Prediction Error (kW·h)')
+    plt.xlabel('Prediction Error of Model and Actual Value(kW·h)')
     plt.ylabel('Frequency')
     plt.legend()
     plt.grid(True, axis='y')
@@ -1620,7 +1476,13 @@ def plot_value_and_error_histograms(y_actual_real, predictions_dict, bins=30):
 def plot_error_max_curve(y_actual_real,
                          predictions_dict,
                          bins: int = 30,
-                         smooth_sigma: float = 1.0):
+                         smooth_sigma: float = 1.0,
+                         # 新增参数
+                         alpha: float = 0.9,                # 默认透明度
+                         model5_alpha: float = 1.0,         # Model5 的透明度  
+                         model5_linewidth: float = 2.0,     # Model5 的线条粗细
+                         model5_color: str = '#DC143C',     # Model5 的颜色（深红色）
+                         default_linewidth: float = 1.7):   # 其他模型的默认线条粗细
     """
     为 predictions_dict 中的每个模型绘制一条曲线：
     曲线上的点来自该模型误差直方图每个 bin 的最高计数，
@@ -1636,6 +1498,16 @@ def plot_error_max_curve(y_actual_real,
         直方图分箱数量（应与直方图保持一致）。
     smooth_sigma : float
         高斯平滑 σ；设为 0 可关闭平滑。
+    alpha : float
+        所有曲线的默认透明度（0-1），默认0.9。
+    model5_alpha : float
+        Model5 的特殊透明度（0-1），默认1.0（不透明）。
+    model5_linewidth : float
+        Model5 的线条粗细，默认2.0。
+    model5_color : str
+        Model5 的颜色，默认深红色。
+    default_linewidth : float
+        其他模型的默认线条粗细，默认1.7。
     """
     from scipy.ndimage import gaussian_filter1d
 
@@ -1656,22 +1528,38 @@ def plot_error_max_curve(y_actual_real,
     colors = mpl.cm.tab10.colors
     line_styles = ['-', '--', '-.', ':',(0, (3, 1, 1, 1))]
     marker_styles = ['^', 's', 'o', 'h', 'p']
+    
     for i, (model_name, counts) in enumerate(model_curves.items()):
         curve = (gaussian_filter1d(counts.astype(float), sigma=smooth_sigma)
                  if smooth_sigma > 0 else counts)
-        plt.plot(bin_centers,
-                 curve,
-                 label=model_name,
-                 color=colors[i % len(colors)],
-                 linewidth=2,  
-                 marker=marker_styles[i % len(marker_styles)],
-                 linestyle=line_styles[i % len(line_styles)],
-                 markersize = 10)
+        
+        # 检查是否为 Model5，应用特殊设置
+        if model_name == 'Model5':
+            plt.plot(bin_centers,
+                     curve,
+                     label=model_name,
+                     color=model5_color,              # 使用 Model5 的特殊颜色
+                     linewidth=model5_linewidth,      # 使用 Model5 的特殊线条粗细
+                     marker=marker_styles[i % len(marker_styles)],
+                     linestyle='-',                   # 固定为实线
+                     markersize=10,
+                     alpha=model5_alpha,              # 使用 Model5 的特殊透明度
+                     zorder=10)                       # 确保 Model5 在最上层
+        else:
+            plt.plot(bin_centers,
+                     curve,
+                     label=model_name,
+                     color=colors[i % len(colors)],
+                     linewidth=default_linewidth,     # 使用默认线条粗细
+                     marker=marker_styles[i % len(marker_styles)],
+                     linestyle=line_styles[i % len(line_styles)],
+                     markersize=10,
+                     alpha=alpha)                     # 使用默认透明度
 
     # -------- 3. 图形美化 -------- #
     #plt.title('Smoothed Histogram Curves of Prediction Errors')
     plt.xlim(-20000, 20000)
-    plt.xlabel('Prediction Error (kW·h)')
+    plt.xlabel('Prediction Error of Model and Actual Value(kW·h)')
     plt.ylabel('Frequency')
     plt.legend()
     plt.grid(True)
@@ -1701,7 +1589,7 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     data_df.reset_index(drop = True, inplace = True)
 
     # Feature engineering (without standardization to avoid data leakage)
-    data_df, feature_cols, target_col, meta = feature_engineering(data_df)
+    data_df, feature_cols, target_col = feature_engineering(data_df)
     
     # ------------- 计算特征重要性 -------------
     pearson_importance = calculate_feature_importance(
@@ -1818,19 +1706,18 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     ).to(device)
 
     model4 = EModel_FeatureWeight4(
-        feature_dim = feature_dim,
-        lstm_hidden_size = 256,
-        lstm_num_layers  = 2,
-        lstm_dropout     = 0.1,
-        window_size      = window_size,
-        feature_importance = feature_importance
+        feature_dim       = feature_dim,
+        lstm_hidden_size  = 256, 
+        lstm_num_layers   = 2,
+        lstm_dropout      = 0.1,
+        feature_importance = feature_importance  # 使用加权后的特征重要性
     ).to(device)
 
     model5 = EModel_FeatureWeight5(
         feature_dim       = feature_dim,
         lstm_hidden_size  = 256, 
-        lstm_num_layers   = 3,
-        lstm_dropout      = 0.1
+        lstm_num_layers   = 2,
+        lstm_dropout      = 0.2
     ).to(device)
 
     # Train Model: EModel_FeatureWeight1
@@ -1922,7 +1809,7 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     best_model5 = EModel_FeatureWeight5(
         feature_dim       = feature_dim,
         lstm_hidden_size  = 256, 
-        lstm_num_layers   = 3
+        lstm_num_layers   = 2
     ).to(device)
     best_model5.load_state_dict(torch.load('best_EModel_FeatureWeight5.pth', map_location=device, weights_only=True), strict=False)
 
@@ -1987,11 +1874,11 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     for m_name, m_preds in [('Model1', preds1_real),
                            ('Model2', preds2_real),
                            ('Model3', preds3_real),
-                           ('Model5', preds5_real)]:
-        pair_preds = {'Model4': preds4_real, m_name: m_preds}
+                           ('Model4', preds4_real)]:
+        pair_preds = {'Model5': preds5_real, m_name: m_preds}
         
         plot_value_and_error_histograms(
-            y_actual_real = labels4_real,
+            y_actual_real = labels5_real,
             predictions_dict = pair_preds,
             bins = 30
         )
@@ -2009,7 +1896,7 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
 
     # 绘制两个时间段的图表
     plot_predictions_date_range(
-        y_actual_real = labels4_real,
+        y_actual_real = labels5_real,
         predictions_dict = primary_preds,
         timestamps = test_timestamps,
         start_date = '2024-11-25',
@@ -2017,7 +1904,7 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     )
 
     plot_predictions_date_range(
-        y_actual_real = labels4_real,
+        y_actual_real = labels5_real,
         predictions_dict = primary_preds,
         timestamps = test_timestamps,
         start_date = '2024-12-13',
@@ -2026,7 +1913,7 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
 
     # 绘制两个时间段的图表（所有模型）
     plot_predictions_date_range(
-        y_actual_real = labels4_real,
+        y_actual_real = labels5_real,
         predictions_dict = all_model_preds,
         timestamps = test_timestamps,
         start_date = '2024-11-25',
@@ -2034,7 +1921,7 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     )
 
     plot_predictions_date_range(
-        y_actual_real = labels4_real,
+        y_actual_real = labels5_real,
         predictions_dict = all_model_preds,
         timestamps = test_timestamps,
         start_date = '2024-12-13',
@@ -2042,7 +1929,7 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     )
 
     plot_error_max_curve(
-        y_actual_real = labels4_real,
+        y_actual_real = labels5_real,
         predictions_dict = primary_preds,
         bins = 30,
         smooth_sigma = 1.0
@@ -2070,13 +1957,13 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     # ----------------- 1) 五个模型整体对比 -----------------
 
     plot_value_and_error_histograms(
-        y_actual_real = labels4_real,
+        y_actual_real = labels5_real,
         predictions_dict = all_model_preds,
         bins = 30
     )
 
     plot_error_max_curve(
-        y_actual_real = labels4_real,
+        y_actual_real = labels5_real,
         predictions_dict = all_model_preds,  # 或 primary_preds
         bins = 30,
         smooth_sigma = 1.0
@@ -2089,8 +1976,8 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
                             ('Model3', preds3_real),
                             ('Model5', preds5_real)]:   # 追加 Model5
         plot_predictions_comparison(
-            y_actual_real = labels4_real,
-            predictions_dict = {'Model4': preds4_real, m_name: m_preds},
+            y_actual_real = labels5_real,
+            predictions_dict = {'Model5': preds5_real, m_name: m_preds},
             timestamps = test_timestamps
         )
 

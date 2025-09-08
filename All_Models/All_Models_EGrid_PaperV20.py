@@ -2173,7 +2173,20 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     test_rmse4_real = np.sqrt(mean_squared_error(labels4_real, preds4_real))
     test_rmse5_real = np.sqrt(mean_squared_error(labels5_real, preds5_real))
 
-    # 使用 Model4 与其他模型对比，生成全长与缩放窗口图，以及分布直方图
+    pair_ext = [
+        ('PatchTST', preds_patch_real),
+        ('LightGBM', preds_lgb_real),
+        ('SARIMA', preds_sarima_real),
+        ('s-naive', preds_snaive_real)
+    ]
+    for m_name, m_preds in pair_ext:
+        plot_value_and_error_histograms(
+            y_actual_real = labels_new_real,
+            predictions_dict = {'Model5': preds5_real, m_name: m_preds},
+            timestamps = test_timestamps
+        )
+        
+    # 使用 Model5 与其他模型对比，生成全长与缩放窗口图，以及分布直方图
     for m_name, m_preds in [('Model1', preds1_real),
                            ('Model2', preds2_real),
                            ('Model3', preds3_real),

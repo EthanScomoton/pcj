@@ -2184,18 +2184,17 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
             y_actual_real = labels_new_real,
             predictions_dict = {'Model5': preds5_real, m_name: m_preds}
         )
-        
-    # 使用 Model5 与其他模型对比，生成全长与缩放窗口图，以及分布直方图
-    for m_name, m_preds in [('Model1', preds1_real),
-                           ('Model2', preds2_real),
-                           ('Model3', preds3_real),
-                           ('Model4', preds4_real)]:
-        pair_preds = {'Model5': preds5_real, m_name: m_preds}
-        
+
+    # === Baselines vs Model4（新增）===
+    for m_name, m_preds in pair_ext:
         plot_value_and_error_histograms(
-            y_actual_real = labels5_real,
-            predictions_dict = pair_preds,
-            bins = 30
+            y_actual_real = labels4_real,
+            predictions_dict = {'Model4': preds4_real, m_name: m_preds}
+        )
+        plot_predictions_comparison(
+            y_actual_real = labels4_real,
+            predictions_dict = {'Model4': preds4_real, m_name: m_preds},
+            timestamps = test_timestamps
         )
 
     all_model_preds = {
@@ -2351,6 +2350,48 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     print(f"[SARIMA]   => RMSE (original): {rmse_sarima_real:.2f}")
     print(f"[s-naive]  => RMSE (original): {rmse_snaive_real:.2f}")
     
+     # === 统一形成标准化域指标字典（RMSE / MAPE / MAE / R^2）===
+    std_metrics = {
+        'Model1':   {'RMSE': test_rmse1_std, 'MAPE': test_mape1_std, 'MAE': test_mae1_std, 'R2': test_r21_std, 'MSE': test_mse1_std},
+        'Model2':   {'RMSE': test_rmse2_std, 'MAPE': test_mape2_std, 'MAE': test_mae2_std, 'R2': test_r22_std, 'MSE': test_mse2_std},
+        'Model3':   {'RMSE': test_rmse3_std, 'MAPE': test_mape3_std, 'MAE': test_mae3_std, 'R2': test_r23_std, 'MSE': test_mse3_std},
+        'Model4':   {'RMSE': test_rmse4_std, 'MAPE': test_mape4_std, 'MAE': test_mae4_std, 'R2': test_r24_std, 'MSE': test_mse4_std},
+        'Model5':   {'RMSE': test_rmse5_std, 'MAPE': test_mape5_std, 'MAE': test_mae5_std, 'R2': test_r25_std, 'MSE': test_mse5_std},
+        'PatchTST': {'RMSE': rmse_p_std,     'MAPE': mape_p_std,     'MAE': mae_p_std,     'R2': r2_p_std,     'MSE': mse_p_std},
+        'LightGBM': {'RMSE': rmse_lgb,       'MAPE': mape_lgb,       'MAE': mae_lgb,       'R2': r2_lgb,       'MSE': mse_lgb},
+        'SARIMA':   {'RMSE': rmse_sar,       'MAPE': mape_sar,       'MAE': mae_sar,       'R2': r2_sar,       'MSE': mse_sar},
+        's-naive':  {'RMSE': rmse_snv,       'MAPE': mape_snv,       'MAE': mae_snv,       'R2': r2_snv,       'MSE': mse_snv},
+    }
+
+    def _print_std_delta_table(metrics, baseline_name):
+        b = metrics[baseline_name]
+        print(f"\n=== Standardized metrics: Δ vs {baseline_name} (error类越负越好，R²越正越好) ===")
+        for name, m in metrics.items():
+            print(f"{name:>10}  RMSE:{m['RMSE']:.4f} (Δ{m['RMSE']-b['RMSE']:+.4f})"
+                  f"  MAPE:{m['MAPE']:.2f}% (Δ{m['MAPE']-b['MAPE']:+.2f})"
+                  f"  MAE:{m['MAE']:.4f} (Δ{m['MAE']-b['MAE']:+.4f})"
+                  f"  R²:{m['R2']:.4f} (Δ{m['R2']-b['R2']:+.4f})")
+
+    _print_std_delta_table(std_metrics, 'Model4')  # 说明系列模型相对 M4 的有益性
+    _print_std_delta_table(std_metrics, 'Model5')  # 说明 M5 在系列中的优异性
+
+    # === 原始域 RMSE：相对 Model4/Model5 的改进量 ===
+    rmse_orig = {
+        'Model1': test_rmse1_real, 'Model2': test_rmse2_real, 'Model3': test_rmse3_real,
+        'Model4': test_rmse4_real, 'Model5': test_rmse5_real,
+        'PatchTST': rmse_patch_real, 'LightGBM': rmse_lgb_real,
+        'SARIMA': rmse_sarima_real, 's-naive': rmse_snaive_real
+    }
+
+    def _print_rmse_delta(rmse_dict, baseline_name):
+        b = rmse_dict[baseline_name]
+        print(f"\n=== Original-scale RMSE: Δ vs {baseline_name} (越负越好) ===")
+        for k, v in rmse_dict.items():
+            print(f"{k:>10}  RMSE:{v:.2f} (Δ{v-b:+.2f})")
+
+    _print_rmse_delta(rmse_orig, 'Model4')  # 相对 M4 的改进：系列有益性
+    _print_rmse_delta(rmse_orig, 'Model5')  # 相对 M5 的改进：M5 的优异性
+
     # ----------------- 3) 训练曲线 -----------------
     plot_training_curves_allmetrics(hist1, model_name = 'EModel_FeatureWeight1')
     plot_training_curves_allmetrics(hist2, model_name = 'EModel_FeatureWeight2')

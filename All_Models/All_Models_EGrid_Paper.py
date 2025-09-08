@@ -1571,7 +1571,9 @@ def plot_stacked_error_histogram(y_actual_real,
                                  bins: int = 30,
                                  xlim = (-20000, 20000),
                                  normalize: bool = False,
-                                 model_colors=None):
+                                 model_colors=None,
+                                 others_alpha: float = 0.5,
+                                 model5_alpha: float = 0.9):
 
     if model_colors is None:
         model_colors = {
@@ -1601,6 +1603,7 @@ def plot_stacked_error_histogram(y_actual_real,
     bottom = np.zeros_like(lefts, dtype=float)
     for i, (name, counts) in enumerate(model_counts.items()):
         color = model_colors.get(name, plt.cm.tab10(i % 10))
+        alpha_val = model5_alpha if name == 'Model5' else others_alpha
         plt.bar(lefts,
                 counts,
                 width=widths,
@@ -1608,7 +1611,7 @@ def plot_stacked_error_histogram(y_actual_real,
                 align='edge',
                 color=color,
                 edgecolor='black',
-                alpha=0.9,
+                alpha=alpha_val,
                 label=name)
         bottom = bottom + counts
 

@@ -1572,7 +1572,7 @@ def plot_stacked_error_histogram(y_actual_real,
                                  xlim = (-20000, 20000),
                                  normalize: bool = False,
                                  model_colors=None,
-                                 others_alpha: float = 0.5,
+                                 others_alpha: float = 0.6,
                                  model5_alpha: float = 0.9):
 
     if model_colors is None:

@@ -1566,6 +1566,63 @@ def plot_error_max_curve(y_actual_real,
     plt.tight_layout()
     plt.show()
 
+def plot_stacked_error_histogram(y_actual_real,
+                                 predictions_dict,
+                                 bins: int = 30,
+                                 xlim = (-20000, 20000),
+                                 normalize: bool = False,
+                                 model_colors: dict | None = None):
+    """
+    绘制各模型误差 (prediction - actual) 的堆叠直方图（stacked histogram）。
+    - 与现有直方图/曲线保持一致的 bin 设置与坐标范围。
+    - normalize=True 时，显示每个模型在各 bin 的比例（总和为1）。
+    """
+    if model_colors is None:
+        model_colors = {
+            'Model1': '#1f77b4',
+            'Model2': '#ff7f0e',
+            'Model3': '#2ca02c',
+            'Model4': '#d62728',
+            'Model5': '#9467bd',
+        }
+
+    bin_edges = np.linspace(xlim[0], xlim[1], bins + 1)
+    widths = np.diff(bin_edges)
+    lefts = bin_edges[:-1]
+
+    # 计算各模型在各 bin 的计数
+    model_counts = {}
+    for name, preds in predictions_dict.items():
+        errors = preds - y_actual_real
+        counts, _ = np.histogram(errors, bins=bin_edges)
+        if normalize:
+            total = counts.sum()
+            counts = counts / total if total > 0 else counts
+        model_counts[name] = counts
+
+    # 堆叠绘制
+    plt.figure(figsize=(10, 5))
+    bottom = np.zeros_like(lefts, dtype=float)
+    for i, (name, counts) in enumerate(model_counts.items()):
+        color = model_colors.get(name, plt.cm.tab10(i % 10))
+        plt.bar(lefts,
+                counts,
+                width=widths,
+                bottom=bottom,
+                align='edge',
+                color=color,
+                edgecolor='black',
+                alpha=0.9,
+                label=name)
+        bottom = bottom + counts
+
+    plt.xlim(xlim[0], xlim[1])
+    plt.xlabel('Prediction Error of Model and Actual Value(kW·h)')
+    plt.ylabel('Proportion' if normalize else 'Frequency')
+    plt.grid(True, axis='y', alpha=0.3)
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
 
 # 8. Main Function
 def main(use_log_transform = True, min_egrid_threshold = 1.0):
@@ -1935,6 +1992,13 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
         smooth_sigma = 1.0
     )
     print("[Info] Processing complete!")
+
+    # all_model_preds 示例：{'Model1': preds1_real, ..., 'Model5': preds5_real}
+    plot_stacked_error_histogram(y_actual_real=labels5_real,
+                             predictions_dict=all_model_preds,
+                             bins=30,
+                             xlim=(-20000, 20000),
+                             normalize=False)
 
     print("\n========== [Test Set Evaluation (Original Domain)] ==========")
     print(f"[EModel_FeatureWeight1] => RMSE (original): {test_rmse1_real:.2f}")

@@ -2182,8 +2182,7 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     for m_name, m_preds in pair_ext:
         plot_value_and_error_histograms(
             y_actual_real = labels_new_real,
-            predictions_dict = {'Model5': preds5_real, m_name: m_preds},
-            timestamps = test_timestamps
+            predictions_dict = {'Model5': preds5_real, m_name: m_preds}
         )
         
     # 使用 Model5 与其他模型对比，生成全长与缩放窗口图，以及分布直方图

@@ -979,8 +979,9 @@ def train_lightgbm(X_train_tab, y_train_seq, X_val_tab, y_val_seq, patience_roun
     }
     callbacks = []
     try:
-        callbacks.append(lgb.early_stopping(stopping_rounds=200))
-        callbacks.append(lgb.log_evaluation(period=100))
+        # 关键修复：使用传入的 patience_rounds，而不是 200
+        callbacks.append(lgb.early_stopping(stopping_rounds=patience_rounds))
+        callbacks.append(lgb.log_evaluation(period=50))
     except Exception:
         pass
     booster = lgb.train(
@@ -1014,7 +1015,7 @@ def fit_predict_sarima(y_train_val_std, n_test, m=24, search_small=True, seed=42
                     enforce_stationarity=False,
                     enforce_invertibility=False
                 )
-                res = model.fit(disp=False, maxiter=400)
+                res = model.fit(disp=False, maxiter=200)
                 if res.aic < best_aic:
                     best_aic, best_cfg, best_res = res.aic, ((p,d,q),(P,D,Q,m)), res
             except Exception:

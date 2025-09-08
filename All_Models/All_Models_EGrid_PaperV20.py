@@ -2083,11 +2083,17 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
 
     # 2) LightGBM（与训练/验证域一致：标准化后的 y_seq）
     # Safety: y 序列也需要无 NaN/Inf
-    print("[LightGBM] Training start...")
     y_train_seq_safe = np.nan_to_num(y_train_seq, nan=0.0, posinf=0.0, neginf=0.0)
     y_val_seq_safe   = np.nan_to_num(y_val_seq,   nan=0.0, posinf=0.0, neginf=0.0)
     booster = train_lightgbm(X_train_tab, y_train_seq_safe, X_val_tab, y_val_seq_safe, patience_rounds=50, seed=42)
-    print("[LightGBM] Training done.")
+    if booster is not None:
+        best_iter = getattr(booster, 'best_iteration', None)
+        if best_iter is None or best_iter <= 0:
+            preds_lgb_std = booster.predict(X_test_tab)
+        else:
+            preds_lgb_std = booster.predict(X_test_tab, num_iteration=best_iter)
+    else:
+        preds_lgb_std = np.zeros_like(y_test_seq)
 
     # 3) SARIMA（用训练+验证的标准化 y，预测 test_seq 步）
     y_train_val_std = np.concatenate([y_train, y_val])

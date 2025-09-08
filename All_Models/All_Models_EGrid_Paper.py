@@ -1571,12 +1571,8 @@ def plot_stacked_error_histogram(y_actual_real,
                                  bins: int = 30,
                                  xlim = (-20000, 20000),
                                  normalize: bool = False,
-                                 model_colors: dict | None = None):
-    """
-    绘制各模型误差 (prediction - actual) 的堆叠直方图（stacked histogram）。
-    - 与现有直方图/曲线保持一致的 bin 设置与坐标范围。
-    - normalize=True 时，显示每个模型在各 bin 的比例（总和为1）。
-    """
+                                 model_colors=None):
+
     if model_colors is None:
         model_colors = {
             'Model1': '#1f77b4',

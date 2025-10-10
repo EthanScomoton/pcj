@@ -1562,15 +1562,15 @@ def export_latency_memory_tables(models: dict,
             "p50_ms": round(p50, 3), "p95_ms": round(p95, 3),
             "Throughput_sps": round(thp, 2), "PeakMem_MB": round(mem, 1)
         })
-        print(f"    Done - p50: {p50:.2f}ms, Throughput: {thp:.1f} samples/s")
+        print(f"    Done - p50: {p50:.2f}ms, Throughput: {thp:.1f} samples/s, PeakMem: {mem:.1f}MB")
 
     # GPU（若可用）
     if torch.cuda.is_available():
         print("\n[GPU Benchmarking]")
         dev_gpu = torch.device('cuda')
         for name, mdl in models.items():
-            # 快速模式下只测试 batch=1
-            batch_sizes = [1] if quick_mode else [1, 128]
+            # 修改：始终测试 batch=1 和 batch=128，不管quick_mode
+            batch_sizes = [1, 128]  # 移除了quick_mode的条件判断
             for b in batch_sizes:
                 _append_infer(dev_gpu, b, name, mdl)
             
@@ -1585,24 +1585,8 @@ def export_latency_memory_tables(models: dict,
             })
             print(f"    Done - p50: {tp50:.2f}ms")
 
-    # CPU - 可选择跳过
-    if not quick_mode:  # 快速模式下跳过CPU测试
-        print("\n[CPU Benchmarking]")
-        dev_cpu = torch.device('cpu')
-        for name, mdl in models.items():
-            for b in [1]:  # CPU只测试小batch
-                _append_infer(dev_cpu, b, name, mdl)
-            
-            print(f"  Testing {name} training step on CPU...")
-            tp50, tp95 = benchmark_train_step(mdl, train_loader, dev_cpu,
-                                             warmup_steps=5, 
-                                             timed_steps=10)  # CPU用更少的迭代
-            rows_trn.append({
-                "Model": name, "Device": "CPU",
-                "Batch(train_loader)": train_loader.batch_size,
-                "p50_ms": round(tp50, 3), "p95_ms": round(tp95, 3)
-            })
-            print(f"    Done - p50: {tp50:.2f}ms")
+    # 移除了整个CPU测试部分
+    # 不再有 if not quick_mode 的CPU测试代码块
 
     df_inf = pd.DataFrame(rows_inf)
     df_trn = pd.DataFrame(rows_trn)

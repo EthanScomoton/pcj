@@ -1420,6 +1420,231 @@ def plot_predictions_date_range(y_actual_real, predictions_dict, timestamps, sta
     
     plt.show()
 
+def plot_stacked_proportion_histogram(y_actual_real, 
+                                     predictions_dict,
+                                     bins=20,
+                                     xlim=None,
+                                     figsize=(12, 6),
+                                     title=None):
+    """
+    绘制类似示例图片中的堆叠比例直方图
+    每个bin中显示各模型预测误差的相对比例
+    
+    Parameters:
+    -----------
+    y_actual_real : array
+        实际值
+    predictions_dict : dict
+        模型预测字典 {模型名: 预测值数组}
+    bins : int
+        分箱数量
+    xlim : tuple
+        x轴范围，如 (-20000, 20000)
+    figsize : tuple
+        图形大小
+    title : str
+        图表标题
+    """
+    import matplotlib.patches as mpatches
+    
+    # 设置颜色映射 - 使用更鲜艳的颜色
+    model_colors = {
+        'Model1': '#FF6B6B',  # 红色
+        'Model2': '#FFA500',  # 橙色  
+        'Model3': '#4ECDC4',  # 青色
+        'Model4': '#45B7D1',  # 蓝色
+        'Model5': '#9B59B6',  # 紫色
+    }
+    
+    # 如果没有指定xlim，自动计算
+    if xlim is None:
+        all_errors = []
+        for name, preds in predictions_dict.items():
+            errors = preds - y_actual_real
+            all_errors.extend(errors)
+        xlim = (np.min(all_errors), np.max(all_errors))
+    
+    # 创建bins
+    bin_edges = np.linspace(xlim[0], xlim[1], bins + 1)
+    bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+    bin_width = bin_edges[1] - bin_edges[0]
+    
+    # 计算每个模型在每个bin中的计数
+    model_counts = {}
+    for name, preds in predictions_dict.items():
+        errors = preds - y_actual_real
+        counts, _ = np.histogram(errors, bins=bin_edges)
+        model_counts[name] = counts
+    
+    # 转换为比例（每个bin内各模型的相对比例）
+    total_counts = np.zeros(bins)
+    for counts in model_counts.values():
+        total_counts += counts
+    
+    # 避免除零
+    total_counts[total_counts == 0] = 1
+    
+    # 计算比例
+    model_proportions = {}
+    for name, counts in model_counts.items():
+        model_proportions[name] = counts / total_counts
+    
+    # 绘图
+    fig, ax = plt.subplots(figsize=figsize)
+    
+    # 堆叠条形图
+    bottom = np.zeros(bins)
+    bars = []
+    labels = []
+    
+    for i, (name, proportions) in enumerate(model_proportions.items()):
+        color = model_colors.get(name, f'C{i}')
+        bar = ax.bar(bin_centers, proportions, 
+                     width=bin_width * 0.8,  # 稍微窄一点
+                     bottom=bottom,
+                     color=color,
+                     edgecolor='white',
+                     linewidth=0.5,
+                     alpha=0.9,
+                     label=name)
+        bars.append(bar)
+        labels.append(name)
+        bottom += proportions
+    
+    # 设置坐标轴
+    ax.set_xlim(xlim[0] - bin_width, xlim[1] + bin_width)
+    ax.set_ylim(0, 1.05)
+    
+    # 添加网格
+    ax.yaxis.grid(True, linestyle='--', alpha=0.3)
+    ax.set_axisbelow(True)
+    
+    # 设置标签
+    ax.set_xlabel('Prediction Error (kW·h)', fontsize=12)
+    ax.set_ylabel('Proportion', fontsize=12)
+    
+    if title:
+        ax.set_title(title, fontsize=14, fontweight='bold')
+    
+    # 设置y轴刻度为百分比格式
+    y_ticks = np.arange(0, 1.1, 0.2)
+    ax.set_yticks(y_ticks)
+    ax.set_yticklabels([f'{int(y*100)}%' for y in y_ticks])
+    
+    # 创建图例
+    ax.legend(title='Model', 
+             loc='upper right',
+             framealpha=0.95,
+             edgecolor='gray')
+    
+    plt.tight_layout()
+    plt.show()
+
+def plot_model_preference_distribution(y_actual_real,
+                                      predictions_dict,
+                                      n_bins=20,
+                                      error_threshold=5000):
+    """
+    绘制模型偏好分布图（类似PREFERENCE因子图）
+    显示在不同误差区间内，哪个模型表现最好的比例
+    
+    Parameters:
+    -----------
+    y_actual_real : array
+        实际值
+    predictions_dict : dict
+        模型预测字典
+    n_bins : int
+        将数据分成多少个区间
+    error_threshold : float
+        误差阈值，用于判断"最佳"模型
+    """
+    # 将测试数据分成n个区间
+    n_samples = len(y_actual_real)
+    bin_size = n_samples // n_bins
+    
+    # 存储每个区间的模型偏好
+    preferences = []
+    
+    for i in range(n_bins):
+        start_idx = i * bin_size
+        end_idx = start_idx + bin_size if i < n_bins - 1 else n_samples
+        
+        # 获取当前区间的数据
+        actual_bin = y_actual_real[start_idx:end_idx]
+        
+        # 计算每个模型在该区间的表现
+        model_scores = {}
+        for name, preds in predictions_dict.items():
+            preds_bin = preds[start_idx:end_idx]
+            # 使用MAE作为评分标准
+            mae = np.mean(np.abs(preds_bin - actual_bin))
+            model_scores[name] = mae
+        
+        # 按MAE排序，找出表现最好的模型
+        sorted_models = sorted(model_scores.items(), key=lambda x: x[1])
+        preferences.append([model for model, _ in sorted_models])
+    
+    # 创建偏好矩阵
+    model_names = list(predictions_dict.keys())
+    preference_matrix = np.zeros((n_bins, len(model_names)))
+    
+    for i, pref_list in enumerate(preferences):
+        for j, model in enumerate(pref_list):
+            # 给每个模型分配权重，最好的权重最高
+            weight = (len(model_names) - j) / len(model_names)
+            model_idx = model_names.index(model)
+            preference_matrix[i, model_idx] = weight
+    
+    # 归一化每行，使总和为1
+    preference_matrix = preference_matrix / preference_matrix.sum(axis=1, keepdims=True)
+    
+    # 绘图
+    fig, ax = plt.subplots(figsize=(14, 6))
+    
+    # 定义颜色
+    colors = ['#FF6B6B', '#FFA500', '#4ECDC4', '#45B7D1', '#9B59B6']
+    
+    # 创建堆叠条形图
+    x = np.arange(n_bins)
+    bottom = np.zeros(n_bins)
+    
+    for j, model in enumerate(model_names):
+        ax.bar(x, preference_matrix[:, j],
+               bottom=bottom,
+               color=colors[j % len(colors)],
+               label=f'{model}',
+               edgecolor='white',
+               linewidth=0.5)
+        bottom += preference_matrix[:, j]
+    
+    # 美化图表
+    ax.set_xlabel('Data Segment', fontsize=12)
+    ax.set_ylabel('Model Preference Score', fontsize=12)
+    ax.set_title('Model Performance Preference Distribution Across Data Segments', 
+                 fontsize=14, fontweight='bold')
+    ax.set_xticks(x)
+    ax.set_xticklabels([str(i+1) for i in x])
+    ax.set_ylim(0, 1)
+    
+    # 添加y轴百分比标签
+    y_ticks = np.arange(0, 1.1, 0.2)
+    ax.set_yticks(y_ticks)
+    ax.set_yticklabels([f'{int(y*100)}%' for y in y_ticks])
+    
+    # 添加网格
+    ax.yaxis.grid(True, linestyle='--', alpha=0.3)
+    ax.set_axisbelow(True)
+    
+    # 添加图例
+    ax.legend(title='Model Preference',
+             loc='center left',
+             bbox_to_anchor=(1, 0.5),
+             framealpha=0.95)
+    
+    plt.tight_layout()
+    plt.show()
+
 def plot_value_and_error_histograms(y_actual_real, predictions_dict, bins=30):
     """
     Draw histograms of (1) actual value distribution and (2) prediction error distribution.
@@ -2030,6 +2255,22 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
         predictions_dict = all_model_preds,  # 或 primary_preds
         bins = 30,
         smooth_sigma = 1.0
+    )
+    # 绘制堆叠比例直方图（类似示例图片）
+    plot_stacked_proportion_histogram(
+        y_actual_real=labels5_real,
+        predictions_dict=all_model_preds,
+        bins=20,
+        xlim=(-20000, 20000),
+        title='Model Prediction Error Distribution (Proportional)'
+    )
+
+    # 绘制模型偏好分布图
+    plot_model_preference_distribution(
+        y_actual_real=labels5_real,
+        predictions_dict=all_model_preds,
+        n_bins=20,
+        error_threshold=5000
     )
 
     # ----------------- 2) 与 Model4 的两两对比 -----------------

@@ -1542,42 +1542,67 @@ def export_latency_memory_tables(models: dict,
                                  window_size: int,
                                  feature_dim: int,
                                  train_loader: torch.utils.data.DataLoader,
-                                 out_csv: str = "latency_and_memory.csv"):
+                                 out_csv: str = "latency_and_memory.csv",
+                                 quick_mode: bool = True):  # 添加快速模式参数
     rows_inf = []
     rows_trn = []
+    
+    # 快速模式下减少迭代次数
+    warmup = 10 if quick_mode else 50
+    iters = 50 if quick_mode else 200
+    train_warmup = 5 if quick_mode else 20
+    train_iters = 20 if quick_mode else 200
 
     def _append_infer(dev: torch.device, b: int, name: str, mdl: nn.Module):
-        p50, p95, thp, mem = benchmark_inference(mdl, b, window_size, feature_dim, dev)
+        print(f"  Testing {name} on {dev.type.upper()} with batch={b}...")
+        p50, p95, thp, mem = benchmark_inference(mdl, b, window_size, feature_dim, dev, 
+                                                 warmup=warmup, iters=iters)
         rows_inf.append({
             "Model": name, "Device": dev.type.upper(), "Batch": b,
             "p50_ms": round(p50, 3), "p95_ms": round(p95, 3),
             "Throughput_sps": round(thp, 2), "PeakMem_MB": round(mem, 1)
         })
+        print(f"    Done - p50: {p50:.2f}ms, Throughput: {thp:.1f} samples/s")
 
     # GPU（若可用）
     if torch.cuda.is_available():
+        print("\n[GPU Benchmarking]")
         dev_gpu = torch.device('cuda')
         for name, mdl in models.items():
-            for b in [1, 128]:
+            # 快速模式下只测试 batch=1
+            batch_sizes = [1] if quick_mode else [1, 128]
+            for b in batch_sizes:
                 _append_infer(dev_gpu, b, name, mdl)
-            tp50, tp95 = benchmark_train_step(mdl, train_loader, dev_gpu)
+            
+            print(f"  Testing {name} training step on GPU...")
+            tp50, tp95 = benchmark_train_step(mdl, train_loader, dev_gpu, 
+                                             warmup_steps=train_warmup, 
+                                             timed_steps=train_iters)
             rows_trn.append({
                 "Model": name, "Device": "GPU",
                 "Batch(train_loader)": train_loader.batch_size,
                 "p50_ms": round(tp50, 3), "p95_ms": round(tp95, 3)
             })
+            print(f"    Done - p50: {tp50:.2f}ms")
 
-    # CPU
-    dev_cpu = torch.device('cpu')
-    for name, mdl in models.items():
-        for b in [1, 128]:
-            _append_infer(dev_cpu, b, name, mdl)
-        tp50, tp95 = benchmark_train_step(mdl, train_loader, dev_cpu)
-        rows_trn.append({
-            "Model": name, "Device": "CPU",
-            "Batch(train_loader)": train_loader.batch_size,
-            "p50_ms": round(tp50, 3), "p95_ms": round(tp95, 3)
-        })
+    # CPU - 可选择跳过
+    if not quick_mode:  # 快速模式下跳过CPU测试
+        print("\n[CPU Benchmarking]")
+        dev_cpu = torch.device('cpu')
+        for name, mdl in models.items():
+            for b in [1]:  # CPU只测试小batch
+                _append_infer(dev_cpu, b, name, mdl)
+            
+            print(f"  Testing {name} training step on CPU...")
+            tp50, tp95 = benchmark_train_step(mdl, train_loader, dev_cpu,
+                                             warmup_steps=5, 
+                                             timed_steps=10)  # CPU用更少的迭代
+            rows_trn.append({
+                "Model": name, "Device": "CPU",
+                "Batch(train_loader)": train_loader.batch_size,
+                "p50_ms": round(tp50, 3), "p95_ms": round(tp95, 3)
+            })
+            print(f"    Done - p50: {tp50:.2f}ms")
 
     df_inf = pd.DataFrame(rows_inf)
     df_trn = pd.DataFrame(rows_trn)
@@ -2037,7 +2062,7 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
 
     best_model3 = EModel_FeatureWeight3(
         feature_dim       = feature_dim,
-        gru_hidden_size   = 128,  # 固定为10个隐藏层节点
+        gru_hidden_size   = 128,  
         gru_num_layers    = 2
     ).to(device)
     best_model3.load_state_dict(torch.load('best_EModel_FeatureWeight3.pth', map_location=device, weights_only=True), strict=False)
@@ -2066,13 +2091,14 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
         "Model5": best_model5
     }
     
-    # Run benchmarking
+    # 使用快速模式进行测试
     df_inf, df_trn = export_latency_memory_tables(
         models_for_eval,
         window_size = window_size,
         feature_dim = feature_dim,
         train_loader = train_loader,
-        out_csv = "latency_and_memory.csv"
+        out_csv = "latency_and_memory.csv",
+        quick_mode = True  # 启用快速模式
     )
     print("========== [Benchmarking Complete] ==========\n")
 

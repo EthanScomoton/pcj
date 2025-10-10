@@ -1424,8 +1424,7 @@ def plot_stacked_proportion_histogram(y_actual_real,
                                      predictions_dict,
                                      bins=20,
                                      xlim=None,
-                                     figsize=(12, 6),
-                                     title=None):
+                                     figsize=(12, 6)):
     """
     绘制类似示例图片中的堆叠比例直方图
     每个bin中显示各模型预测误差的相对比例
@@ -1442,18 +1441,16 @@ def plot_stacked_proportion_histogram(y_actual_real,
         x轴范围，如 (-20000, 20000)
     figsize : tuple
         图形大小
-    title : str
-        图表标题
     """
     import matplotlib.patches as mpatches
     
     # 设置颜色映射 - 使用更鲜艳的颜色
     model_colors = {
-        'Model1': '#B0C4DE',  # 红色
-        'Model2': '#87CEEB',  # 橙色  
-        'Model3': '#ADD8E6',  # 青色
-        'Model4': '#00008B',  # 蓝色
-        'Model5': '#DC143C',  # 紫色
+        'Model1': '#1f77b4',
+        'Model2': '#ff7f0e',
+        'Model3': '#2ca02c',
+        'Model4': '#d62728',
+        'Model5': '#9467bd',
     }
     
     # 如果没有指定xlim，自动计算
@@ -1594,7 +1591,7 @@ def plot_model_preference_distribution(y_actual_real,
     fig, ax = plt.subplots(figsize=(14, 6))
     
     # 定义颜色
-    colors = ['#FF6B6B', '#FFA500', '#4ECDC4', '#45B7D1', '#9B59B6']
+    colors = ['#1f77b4','#ff7f0e','#2ca02c','#d62728','#9467bd']
     
     # 创建堆叠条形图
     x = np.arange(n_bins)
@@ -1657,11 +1654,11 @@ def plot_value_and_error_histograms(y_actual_real, predictions_dict, bins=30):
     
     # 固定的模型颜色映射
     model_colors = {
-        'Model1': '#1f77b4',  # 蓝色
-        'Model2': '#ff7f0e',  # 橙色  
-        'Model3': '#2ca02c',  # 绿色
-        'Model4': '#d62728',  # 红色
-        'Model5': '#9467bd',  # 紫色
+        'Model1': '#1f77b4',
+        'Model2': '#ff7f0e',
+        'Model3': '#2ca02c',
+        'Model4': '#d62728',
+        'Model5': '#9467bd',
     }
     
     # 使用固定的bin边界范围，确保所有图表一致

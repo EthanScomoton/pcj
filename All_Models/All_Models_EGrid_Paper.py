@@ -1424,7 +1424,8 @@ def plot_stacked_proportion_histogram(y_actual_real,
                                      predictions_dict,
                                      bins=20,
                                      xlim=None,
-                                     figsize=(12, 6)):
+                                     figsize=(12, 6),
+                                     title=None):
     """
     绘制类似示例图片中的堆叠比例直方图
     每个bin中显示各模型预测误差的相对比例
@@ -1441,6 +1442,8 @@ def plot_stacked_proportion_histogram(y_actual_real,
         x轴范围，如 (-20000, 20000)
     figsize : tuple
         图形大小
+    title : str
+        图表标题
     """
     import matplotlib.patches as mpatches
     

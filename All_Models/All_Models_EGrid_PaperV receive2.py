@@ -1025,6 +1025,327 @@ def fit_predict_sarima(y_train_val_std, n_test, m=24, search_small=True, seed=42
     forecast = best_res.forecast(steps=n_test)
     return np.asarray(forecast, dtype=np.float32)
 
+# ====== Efficiency & Lightweight Utilities (minimal, drop-in) ======
+import io, os, time, gc, math
+from contextlib import contextmanager
+
+try:
+    import psutil
+except Exception:
+    psutil = None
+
+from torch.nn.utils import prune
+from typing import Dict, List, Tuple
+
+@contextmanager
+def _inference_mode():
+    with torch.inference_mode():
+        yield
+
+def count_trainable_params(model: nn.Module) -> int:
+    return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+def state_dict_size_mb(model: nn.Module) -> float:
+    buffer = io.BytesIO()
+    torch.save(model.state_dict(), buffer)
+    return len(buffer.getvalue()) / (1024 ** 2)
+
+def _cpu_rss_mb() -> float:
+    if psutil is None:
+        return float('nan')
+    return psutil.Process(os.getpid()).memory_info().rss / (1024 ** 2)
+
+def benchmark_inference_latency(model: nn.Module,
+                                dummy_input: torch.Tensor,
+                                device: torch.device,
+                                warmup: int = 20,
+                                iters: int = 200) -> Dict[str, float]:
+    model.eval()
+    dummy_input = dummy_input.to(device)
+    times_ms = []
+
+    if device.type == 'cuda':
+        torch.cuda.synchronize()
+        starter = torch.cuda.Event(enable_timing = True)
+        ender   = torch.cuda.Event(enable_timing = True)
+        with _inference_mode():
+            for _ in range(warmup):
+                _ = model(dummy_input)
+        torch.cuda.synchronize()
+
+        with _inference_mode():
+            for _ in range(iters):
+                starter.record()
+                _ = model(dummy_input)
+                ender.record()
+                torch.cuda.synchronize()
+                times_ms.append(starter.elapsed_time(ender))
+    else:
+        with _inference_mode():
+            for _ in range(warmup):
+                _ = model(dummy_input)
+        with _inference_mode():
+            for _ in range(iters):
+                t0 = time.perf_counter()
+                _ = model(dummy_input)
+                times_ms.append((time.perf_counter() - t0) * 1000.0)
+
+    times = np.asarray(times_ms, dtype = np.float64)
+    return {
+        "lat_p50_ms": float(np.percentile(times, 50)),
+        "lat_p95_ms": float(np.percentile(times, 95)),
+        "lat_mean_ms": float(times.mean()),
+        "throughput_sps": float(dummy_input.size(0) / (times.mean() / 1000.0))
+    }
+
+def measure_peak_memory_inference(model: nn.Module,
+                                  dummy_input: torch.Tensor,
+                                  device: torch.device) -> float:
+    model.eval()
+    dummy_input = dummy_input.to(device)
+
+    if device.type == 'cuda':
+        torch.cuda.empty_cache()
+        torch.cuda.reset_peak_memory_stats(device)
+        with _inference_mode():
+            _ = model(dummy_input)
+        torch.cuda.synchronize()
+        peak = torch.cuda.max_memory_reserved(device = device) / (1024 ** 2)
+        return float(peak)
+    else:
+        if psutil is None:
+            return float('nan')
+        rss0 = _cpu_rss_mb()
+        with _inference_mode():
+            _ = model(dummy_input)
+        rss1 = _cpu_rss_mb()
+        return max(0.0, float(rss1 - rss0))
+
+def export_efficiency_table(models: Dict[str, nn.Module],
+                            feature_dim: int,
+                            window_size: int = window_size,
+                            batch_sizes: List[int] = [1, 128],
+                            device: torch.device = device,
+                            csv_path: str = "efficiency_summary.csv") -> pd.DataFrame:
+    rows = []
+    for name, mdl in models.items():
+        # Dummy input: [B, T, F]
+        for bsz in batch_sizes:
+            dummy = torch.zeros((bsz, window_size, feature_dim), dtype = torch.float32, device = device)
+            # Params & on-disk size
+            params_m = count_trainable_params(mdl)
+            size_mb  = state_dict_size_mb(mdl)
+            # Latency & Throughput
+            lat = benchmark_inference_latency(mdl, dummy, device)
+            # Peak memory
+            mem_mb = measure_peak_memory_inference(mdl, dummy, device)
+            rows.append({
+                "model": name,
+                "batch_size": bsz,
+                "params": params_m,
+                "state_dict_MB": round(size_mb, 3),
+                "lat_p50_ms": round(lat["lat_p50_ms"], 3),
+                "lat_p95_ms": round(lat["lat_p95_ms"], 3),
+                "lat_mean_ms": round(lat["lat_mean_ms"], 3),
+                "throughput_sps": round(lat["throughput_sps"], 2),
+                "peak_mem_MB": round(mem_mb, 1)
+            })
+            gc.collect()
+    df = pd.DataFrame(rows)
+    df.to_csv(csv_path, index = False)
+    print(f"[Saved] Efficiency table -> {csv_path}")
+    return df
+
+# ---- Lightweight degradation without retraining ----
+def make_quantized_cpu_copy(model: nn.Module) -> nn.Module:
+    """
+    Post-training dynamic quantization on CPU (INT8) for LSTM/GRU/Linear.
+    """
+    from torch.ao.quantization import quantize_dynamic, default_dynamic_qconfig
+    qtypes = {nn.Linear, nn.LSTM, nn.GRU}
+    m_cpu = copy_model_to_device(model, torch.device('cpu'))
+    m_cpu.eval()
+    qmodel = quantize_dynamic(m_cpu, qtypes, dtype = torch.qint8)
+    return qmodel
+
+def copy_model_to_device(model: nn.Module, dest: torch.device) -> nn.Module:
+    import copy
+    m2 = copy.deepcopy(model).to(dest)
+    m2.eval()
+    return m2
+
+def apply_global_linear_pruning(model: nn.Module, amount: float) -> nn.Module:
+    """
+    Global unstructured magnitude pruning on Linear weights only (no retraining).
+    """
+    import copy
+    m2 = copy.deepcopy(model)
+    parameters_to_prune = []
+    for mod in m2.modules():
+        if isinstance(mod, nn.Linear):
+            parameters_to_prune.append((mod, "weight"))
+    if parameters_to_prune:
+        prune.global_unstructured(parameters_to_prune, pruning_method = prune.L1Unstructured, amount = amount)
+        # Permanently remove reparam so the model is standalone
+        for mod, _ in parameters_to_prune:
+            prune.remove(mod, "weight")
+    m2.eval()
+    return m2
+
+def evaluate_std_metrics_array(y_true_std: np.ndarray, y_pred_std: np.ndarray) -> Dict[str, float]:
+    rmse = float(np.sqrt(mean_squared_error(y_true_std, y_pred_std)))
+    nonzero = (y_true_std != 0)
+    mape = float(np.mean(np.abs((y_true_std[nonzero] - y_pred_std[nonzero]) / y_true_std[nonzero])) * 100.0) if np.sum(nonzero) else 0.0
+    ss_res = float(np.sum((y_true_std - y_pred_std) ** 2))
+    ss_tot = float(np.sum((y_true_std - np.mean(y_true_std)) ** 2))
+    r2 = float(1 - (ss_res / ss_tot)) if ss_tot != 0 else 0.0
+    mse = float(np.mean((y_true_std - y_pred_std) ** 2))
+    mae = float(np.mean(np.abs(y_true_std - y_pred_std)))
+    return {"RMSE": rmse, "MAPE": mape, "R2": r2, "MSE": mse, "MAE": mae}
+
+def make_degradation_curve(model_name: str,
+                           base_model: nn.Module,
+                           test_loader: DataLoader,
+                           y_test_std: np.ndarray,
+                           feature_dim: int,
+                           window_size: int = window_size,
+                           device: torch.device = device,
+                           sparsities: List[float] = [0.3, 0.5, 0.7]) -> pd.DataFrame:
+    """
+    Produce points for FP32 baseline (device), INT8 dynamic (CPU), and pruned (device) models.
+    """
+    rows = []
+
+    # 0) FP32 baseline on current device
+    preds_std = []
+    criterion_tmp = nn.MSELoss()
+    with torch.no_grad():
+        for xb, _ in test_loader:
+            xb = xb.to(device)
+            preds_std.append(base_model(xb).detach().cpu().numpy())
+    preds_std = np.concatenate(preds_std, axis = 0)
+    met = evaluate_std_metrics_array(y_test_std, preds_std)
+    rows.append({"name": f"{model_name}_fp32", "kind": "fp32", "compress": 1.0,
+                 "params": count_trainable_params(base_model),
+                 "size_MB": state_dict_size_mb(base_model),
+                 **met})
+
+    # 1) INT8 dynamic on CPU
+    try:
+        qmodel = make_quantized_cpu_copy(base_model)
+        preds_q = []
+        with torch.no_grad():
+            for xb, _ in test_loader:
+                xb_cpu = xb.to(torch.device('cpu'))
+                preds_q.append(qmodel(xb_cpu).detach().cpu().numpy())
+        preds_q = np.concatenate(preds_q, axis = 0)
+        met_q = evaluate_std_metrics_array(y_test_std, preds_q)
+        rows.append({"name": f"{model_name}_int8", "kind": "int8", "compress": None,
+                     "params": count_trainable_params(qmodel),
+                     "size_MB": state_dict_size_mb(qmodel),
+                     **met_q})
+    except Exception as e:
+        print(f"[Warn] INT8 quantization failed for {model_name}: {e}")
+
+    # 2) Pruned variants on current device
+    for sp in sparsities:
+        pm = apply_global_linear_pruning(base_model, amount = sp).to(device)
+        preds_p = []
+        with torch.no_grad():
+            for xb, _ in test_loader:
+                xb = xb.to(device)
+                preds_p.append(pm(xb).detach().cpu().numpy())
+        preds_p = np.concatenate(preds_p, axis = 0)
+        met_p = evaluate_std_metrics_array(y_test_std, preds_p)
+        rows.append({"name": f"{model_name}_prune_{int(sp*100)}", "kind": f"prune@{sp:.1f}",
+                     "compress": (1.0 - sp),
+                     "params": count_trainable_params(pm),
+                     "size_MB": state_dict_size_mb(pm),
+                     **met_p})
+
+    df = pd.DataFrame(rows)
+    out_csv = f"degradation_{model_name}.csv"
+    df.to_csv(out_csv, index = False)
+    print(f"[Saved] Degradation curve -> {out_csv}")
+    return df
+
+def plot_error_histograms_faceted(y_actual_real: np.ndarray,
+                                  predictions_dict: Dict[str, np.ndarray],
+                                  bins: int = 30,
+                                  bin_range: Tuple[float, float] = (-20000, 20000)):
+    """
+    分面直方图：每个模型一幅，显示误差分布，并在每个 bin 顶部标注“该模型在该区间的样本占比（%）”。
+    """
+    model_names = list(predictions_dict.keys())
+    n = len(model_names)
+    cols = 2
+    rows = int(math.ceil(n / cols))
+    bin_edges = np.linspace(bin_range[0], bin_range[1], bins + 1)
+
+    plt.figure(figsize = (12, 4 * rows))
+    for i, name in enumerate(model_names):
+        ax = plt.subplot(rows, cols, i + 1)
+        errors = predictions_dict[name] - y_actual_real
+        counts, _ = np.histogram(errors, bins = bin_edges)
+        total = counts.sum() if counts.sum() > 0 else 1
+        props = counts / total
+
+        ax.bar(0.5 * (bin_edges[:-1] + bin_edges[1:]), props,
+               width = np.diff(bin_edges),
+               color = MODEL_COLORS.get(name, '#808080'),
+               edgecolor = 'black', alpha = 0.8, align = 'center')
+        # 标注占比
+        for x, p in zip(0.5 * (bin_edges[:-1] + bin_edges[1:]), props):
+            if p > 0.01:
+                ax.text(x, p, f"{p*100:.1f}%", ha = 'center', va = 'bottom', fontsize = 10)
+        ax.set_title(f"{name} (proportion per bin)")
+        ax.set_xlabel("Prediction Error (kW·h)")
+        ax.set_ylabel("Proportion")
+        ax.grid(True, axis = 'y', alpha = 0.3)
+    plt.tight_layout()
+    plt.show()
+
+def plot_error_histograms_stacked(y_actual_real: np.ndarray,
+                                  predictions_dict: Dict[str, np.ndarray],
+                                  bins: int = 30,
+                                  bin_range: Tuple[float, float] = (-20000, 20000)):
+    """
+    堆叠归一化直方图：各模型在同一图中堆叠，纵轴为比例；每个 bin 顶部标注“总体占比（%）”。
+    """
+    bin_edges = np.linspace(bin_range[0], bin_range[1], bins + 1)
+    errors_list = [pred - y_actual_real for pred in predictions_dict.values()]
+    labels = list(predictions_dict.keys())
+    colors = [MODEL_COLORS.get(n, '#808080') for n in labels]
+
+    # 计算各模型 counts，并归一化为比例后堆叠
+    counts_all = [np.histogram(err, bins = bin_edges)[0].astype(float) for err in errors_list]
+    total_counts = np.sum(counts_all, axis = 0)
+    total_counts[total_counts == 0] = 1.0
+    props_all = [c / total_counts for c in counts_all]  # 每个模型在该 bin 的相对占比
+    heights = np.vstack(props_all)
+
+    centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
+    bottom = np.zeros_like(centers, dtype = float)
+
+    plt.figure(figsize = (14, 6))
+    for i, (label, h) in enumerate(zip(labels, heights)):
+        plt.bar(centers, h, width = np.diff(bin_edges), bottom = bottom,
+                color = colors[i], edgecolor = 'black', alpha = 0.85, label = label, align = 'center')
+        bottom += h
+
+    # 顶部标总占比（总样本按比例归一，此处显示 100% 或略低于 100% 的数值）
+    for x, tot_p in zip(centers, bottom):
+        if tot_p > 0.01:
+            plt.text(x, tot_p, f"{tot_p*100:.0f}%", ha = 'center', va = 'bottom', fontsize = 9)
+
+    plt.xlabel("Prediction Error (kW·h)")
+    plt.ylabel("Proportion (stacked)")
+    plt.legend()
+    plt.grid(True, axis = 'y', alpha = 0.3)
+    plt.tight_layout()
+    plt.show()
+
+
 def predict_snaive_std(y_all_std, start_index, n_test, m=24):
     """
     s-naive: y_hat[t] = y[t-m]，在标准化域直接做。
@@ -1783,6 +2104,30 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     # Feature engineering (without standardization to avoid data leakage)
     data_df, feature_cols, target_col = feature_engineering(data_df)
     
+    # === 在训练和评估都完成之后，加以下几行 ===
+    feature_dim = X_train_seq.shape[-1]
+
+    # A) 生成效率表（训练/推理延迟、参数、峰值显存/内存）
+    models_for_eff = {
+        'Model1': best_model1, 'Model2': best_model2, 'Model3': best_model3,
+        'Model4': best_model4, 'Model5': best_model5, 'PatchTST': best_patch
+    }
+    eff_df = export_efficiency_table(models_for_eff, feature_dim = feature_dim, window_size = window_size, batch_sizes = [1, 128], device = device)
+
+    # B) 退化曲线（无需重训）：对核心模型（例如 Model4）做 INT8 动态量化 + 轻量剪枝
+    deg_df = make_degradation_curve('Model4', best_model4, test_loader, y_test_seq, feature_dim, window_size, device, sparsities = [0.3, 0.5, 0.7])
+
+    # C) Fig.14 升级版本（任选其一或两个都生成）
+    # (i) 分面图：每模型单独一幅，且在每个误差 bin 标注占比
+    plot_error_histograms_faceted(y_actual_real = labels_new_real,
+                              predictions_dict = all_model_preds_ext,
+                              bins = 30, bin_range = (-20000, 20000))
+    # (ii) 堆叠归一化直方图：所有模型在同图堆叠，每个 bin 顶部标总占比
+    plot_error_histograms_stacked(y_actual_real = labels_new_real,
+                              predictions_dict = all_model_preds_ext,
+                              bins = 30, bin_range = (-20000, 20000))
+
+
     # ------------- 计算特征重要性 -------------
     pearson_importance = calculate_feature_importance(
         data_df, feature_cols, target_col)

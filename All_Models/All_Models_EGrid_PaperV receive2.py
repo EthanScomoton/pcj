@@ -2103,30 +2103,6 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
 
     # Feature engineering (without standardization to avoid data leakage)
     data_df, feature_cols, target_col = feature_engineering(data_df)
-    
-    # === 在训练和评估都完成之后，加以下几行 ===
-    feature_dim = X_train_seq.shape[-1]
-
-    # A) 生成效率表（训练/推理延迟、参数、峰值显存/内存）
-    models_for_eff = {
-        'Model1': best_model1, 'Model2': best_model2, 'Model3': best_model3,
-        'Model4': best_model4, 'Model5': best_model5, 'PatchTST': best_patch
-    }
-    eff_df = export_efficiency_table(models_for_eff, feature_dim = feature_dim, window_size = window_size, batch_sizes = [1, 128], device = device)
-
-    # B) 退化曲线（无需重训）：对核心模型（例如 Model4）做 INT8 动态量化 + 轻量剪枝
-    deg_df = make_degradation_curve('Model4', best_model4, test_loader, y_test_seq, feature_dim, window_size, device, sparsities = [0.3, 0.5, 0.7])
-
-    # C) Fig.14 升级版本（任选其一或两个都生成）
-    # (i) 分面图：每模型单独一幅，且在每个误差 bin 标注占比
-    plot_error_histograms_faceted(y_actual_real = labels_new_real,
-                              predictions_dict = all_model_preds_ext,
-                              bins = 30, bin_range = (-20000, 20000))
-    # (ii) 堆叠归一化直方图：所有模型在同图堆叠，每个 bin 顶部标总占比
-    plot_error_histograms_stacked(y_actual_real = labels_new_real,
-                              predictions_dict = all_model_preds_ext,
-                              bins = 30, bin_range = (-20000, 20000))
-
 
     # ------------- 计算特征重要性 -------------
     pearson_importance = calculate_feature_importance(
@@ -2745,6 +2721,30 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     plot_training_curves_allmetrics(hist5, model_name = 'EModel_FeatureWeight5')
 
     print("[Info] Processing complete!")
+
+    # === 在训练和评估都完成之后，加以下几行 ===
+    feature_dim = X_train_seq.shape[-1]
+
+    # A) 生成效率表（训练/推理延迟、参数、峰值显存/内存）
+    models_for_eff = {
+        'Model1': best_model1, 'Model2': best_model2, 'Model3': best_model3,
+        'Model4': best_model4, 'Model5': best_model5, 'PatchTST': best_patch
+    }
+    eff_df = export_efficiency_table(models_for_eff, feature_dim = feature_dim, window_size = window_size, batch_sizes = [1, 128], device = device)
+
+    # B) 退化曲线（无需重训）：对核心模型（例如 Model4）做 INT8 动态量化 + 轻量剪枝
+    deg_df = make_degradation_curve('Model4', best_model4, test_loader, y_test_seq, feature_dim, window_size, device, sparsities = [0.3, 0.5, 0.7])
+
+    # C) Fig.14 升级版本（任选其一或两个都生成）
+    # (i) 分面图：每模型单独一幅，且在每个误差 bin 标注占比
+    plot_error_histograms_faceted(y_actual_real = labels_new_real,
+                              predictions_dict = all_model_preds_ext,
+                              bins = 30, bin_range = (-20000, 20000))
+    # (ii) 堆叠归一化直方图：所有模型在同图堆叠，每个 bin 顶部标总占比
+    plot_error_histograms_stacked(y_actual_real = labels_new_real,
+                              predictions_dict = all_model_preds_ext,
+                              bins = 30, bin_range = (-20000, 20000))
+
 
 if __name__ == "__main__":
     main(use_log_transform = True, min_egrid_threshold = 1.0)

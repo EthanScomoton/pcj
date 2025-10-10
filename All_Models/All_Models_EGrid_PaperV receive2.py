@@ -16,18 +16,14 @@ from sklearn.metrics import mean_squared_error
 from torch.nn.utils import clip_grad_norm_
 from lion_pytorch import Lion
 import matplotlib.ticker as ticker 
-
+import time
+import io
+import os
+import gc
 try:
-    import lightgbm as lgb
-except Exception as e:
-    lgb = None
-    print("[Warning] lightgbm not found, LightGBM model will be skipped. pip install lightgbm")
-
-try:
-    from statsmodels.tsa.statespace.sarimax import SARIMAX
-except Exception as e:
-    SARIMAX = None
-    print("[Warning] statsmodels not found, SARIMA model will be skipped. pip install statsmodels")
+    import psutil
+except Exception:
+    psutil = None
 
 # Global style settings for plots
 mpl.rcParams.update({
@@ -38,19 +34,6 @@ mpl.rcParams.update({
     'xtick.labelsize': 24,    # x-axis tick label size
     'ytick.labelsize': 24     # y-axis tick label size
 })
-
-# Fixed colors for all models (consistent across plots)
-MODEL_COLORS = {
-    'Model1':   '#1f77b4',  # 蓝色
-    'Model2':   '#ff7f0e',  # 橙色
-    'Model3':   '#2ca02c',  # 绿色
-    'Model4':   '#d62728',  # 红色
-    'Model5':   '#9467bd',  # 紫色
-    'PatchTST': '#8c564b',  # 棕色
-    'LightGBM': '#e377c2',  # 粉色
-    'SARIMA':   '#7f7f7f',  # 灰色
-    's-naive':  '#bcbd22'   # 黄绿色
-}
 
 # Global hyperparameters
 learning_rate     = 1e-4   # Learning rate
@@ -66,8 +49,6 @@ torch.manual_seed(42)
 np.random.seed(42)
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')  
 
-# 统一季节周期（小时数据通常用24；如你的数据是日级或其他周期，请改这里）
-seasonal_period = 24
 
 # 1. Data Loading Module
 def load_data():
@@ -888,514 +869,6 @@ class EModel_FeatureWeight5(nn.Module):
         output  = mu + noise
         return output.squeeze(-1)
 
-class PatchTST(nn.Module):
-    """
-    简化版 PatchTST:
-    - 将时间维度切成 patch（长度 patch_len，步长 patch_stride）
-    - 每个 patch 展开后线性投影到 d_model
-    - 加位置编码，过 TransformerEncoder
-    - 池化得到序列表征，回归到 1 步预测
-    说明：我们沿用统一的滑窗输入 [B, window, feature_dim]。
-    """
-    def __init__(self, feature_dim, window_size, patch_len=5, patch_stride=5,
-                 d_model=256, n_heads=8, num_layers=2, dropout=0.1):
-        super().__init__()
-        self.feature_dim  = feature_dim
-        self.window_size  = window_size
-        self.patch_len    = patch_len
-        self.patch_stride = patch_stride
-
-        assert patch_len <= window_size
-        self.num_patches = 1 + (window_size - patch_len) // patch_stride
-        self.in_dim = patch_len * feature_dim
-
-        encoder_layer = nn.TransformerEncoderLayer(d_model=d_model, nhead=n_heads,
-                                                   dim_feedforward=4*d_model,
-                                                   dropout=dropout, batch_first=True)
-        self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
-        self.proj = nn.Linear(self.in_dim, d_model)
-        self.pos_enc = PositionalEncoding(d_model, max_len=5000)
-        self.head = nn.Sequential(
-            nn.LayerNorm(d_model),
-            nn.Linear(d_model, d_model//2),
-            nn.GELU(),
-            nn.Linear(d_model//2, 1)
-        )
-
-    def forward(self, x):
-        # x: [B, window, feature_dim]
-        B, W, F = x.shape
-        patches = []
-        for s in range(0, W - self.patch_len + 1, self.patch_stride):
-            px = x[:, s:s+self.patch_len, :]                     # [B, patch_len, F]
-            px = px.reshape(B, -1)                               # [B, patch_len*F]
-            patches.append(px)
-        patches = torch.stack(patches, dim=1)                    # [B, num_patches, patch_len*F]
-        z = self.proj(patches)                                   # [B, num_patches, d_model]
-        z = self.pos_enc(z)                                      # 位置编码（沿 patch 维）
-        z = self.encoder(z)                                      # [B, num_patches, d_model]
-        z = z.mean(dim=1)                                        # 池化
-        y = self.head(z).squeeze(-1)                             # [B]
-        return y
-
-def apply_feature_gating_to_sequences(X_seq, feature_importance):
-    """
-    X_seq: [n_samples, window_size, feature_dim]
-    feature_importance: [feature_dim], 来自 Pearson+MIC 的综合权重
-    """
-    if feature_importance is None:
-        return X_seq
-    w = feature_importance.astype(np.float32).reshape(1, 1, -1)
-    return X_seq * w
-
-def flatten_sequences_for_tabular(X_seq):
-    """
-    将 [n, window, feat] 展成 [n, window*feat]，作为 LightGBM 的滞后特征输入。
-    历法特征已在特征工程阶段加入并被统一标准化，这里统一展开即可。
-    """
-    n, w, f = X_seq.shape
-    return X_seq.reshape(n, w * f)
-
-def train_lightgbm(X_train_tab, y_train_seq, X_val_tab, y_val_seq, patience_rounds=50, seed=42):
-    if lgb is None:
-        return None
-    train_set = lgb.Dataset(X_train_tab, label=y_train_seq)
-    val_set   = lgb.Dataset(X_val_tab,   label=y_val_seq, reference=train_set)
-    params = {
-        "objective": "regression",
-        "metric": "rmse",
-        "learning_rate": 0.03,
-        "num_leaves": 64,
-        "max_depth": -1,
-        "min_data_in_leaf": 32,
-        "lambda_l1": 0.1,
-        "lambda_l2": 0.2,
-        "feature_fraction": 0.9,
-        "bagging_fraction": 0.9,
-        "bagging_freq": 1,
-        "seed": seed,
-        "verbosity": -1,
-        "force_col_wise": True
-    }
-    callbacks = []
-    try:
-        # 关键修复：使用传入的 patience_rounds，而不是 200
-        callbacks.append(lgb.early_stopping(stopping_rounds=patience_rounds))
-        callbacks.append(lgb.log_evaluation(period=50))
-    except Exception:
-        pass
-    booster = lgb.train(
-        params=params,
-        train_set=train_set,
-        num_boost_round=5000,
-        valid_sets=[train_set, val_set],
-        valid_names=["train","valid"],
-        callbacks=callbacks
-    )
-    return booster
-
-def fit_predict_sarima(y_train_val_std, n_test, m=24, search_small=True, seed=42):
-    """
-    在标准化后的 y 序列上拟合 SARIMA，预测后再反标准化。
-    """
-    if SARIMAX is None:
-        return None
-    np.random.seed(seed)
-    # 扩大网格以减少系统性偏移
-    pdq = [(0,1,1), (1,1,0), (1,1,1), (2,1,0), (0,1,2), (2,1,1), (1,1,2)]
-    PDQ = [(0,1,1), (1,1,0), (1,1,1)]
-    best_aic, best_cfg, best_res = 1e18, None, None
-    for (p,d,q) in (pdq if search_small else [(2,1,2)]):
-        for (P,D,Q) in (PDQ if search_small else [(1,1,1)]):
-            try:
-                model = SARIMAX(
-                    y_train_val_std,
-                    order=(p,d,q),
-                    seasonal_order=(P,D,Q,m),
-                    enforce_stationarity=False,
-                    enforce_invertibility=False
-                )
-                res = model.fit(disp=False, maxiter=150)
-                if res.aic < best_aic:
-                    best_aic, best_cfg, best_res = res.aic, ((p,d,q),(P,D,Q,m)), res
-            except Exception:
-                continue
-    if best_res is None:
-        return None
-    forecast = best_res.forecast(steps=n_test)
-    return np.asarray(forecast, dtype=np.float32)
-
-# ====== Efficiency & Lightweight Utilities (minimal, drop-in) ======
-import io, os, time, gc, math
-from contextlib import contextmanager
-
-try:
-    import psutil
-except Exception:
-    psutil = None
-
-from torch.nn.utils import prune
-from typing import Dict, List, Tuple
-
-@contextmanager
-def _inference_mode():
-    with torch.inference_mode():
-        yield
-
-def count_trainable_params(model: nn.Module) -> int:
-    return sum(p.numel() for p in model.parameters() if p.requires_grad)
-
-def state_dict_size_mb(model: nn.Module) -> float:
-    buffer = io.BytesIO()
-    torch.save(model.state_dict(), buffer)
-    return len(buffer.getvalue()) / (1024 ** 2)
-
-def _cpu_rss_mb() -> float:
-    if psutil is None:
-        return float('nan')
-    return psutil.Process(os.getpid()).memory_info().rss / (1024 ** 2)
-
-def benchmark_inference_latency(model: nn.Module,
-                                dummy_input: torch.Tensor,
-                                device: torch.device,
-                                warmup: int = 20,
-                                iters: int = 200) -> Dict[str, float]:
-    model.eval()
-    dummy_input = dummy_input.to(device)
-    times_ms = []
-
-    if device.type == 'cuda':
-        torch.cuda.synchronize()
-        starter = torch.cuda.Event(enable_timing = True)
-        ender   = torch.cuda.Event(enable_timing = True)
-        with _inference_mode():
-            for _ in range(warmup):
-                _ = model(dummy_input)
-        torch.cuda.synchronize()
-
-        with _inference_mode():
-            for _ in range(iters):
-                starter.record()
-                _ = model(dummy_input)
-                ender.record()
-                torch.cuda.synchronize()
-                times_ms.append(starter.elapsed_time(ender))
-    else:
-        with _inference_mode():
-            for _ in range(warmup):
-                _ = model(dummy_input)
-        with _inference_mode():
-            for _ in range(iters):
-                t0 = time.perf_counter()
-                _ = model(dummy_input)
-                times_ms.append((time.perf_counter() - t0) * 1000.0)
-
-    times = np.asarray(times_ms, dtype = np.float64)
-    return {
-        "lat_p50_ms": float(np.percentile(times, 50)),
-        "lat_p95_ms": float(np.percentile(times, 95)),
-        "lat_mean_ms": float(times.mean()),
-        "throughput_sps": float(dummy_input.size(0) / (times.mean() / 1000.0))
-    }
-
-def measure_peak_memory_inference(model: nn.Module,
-                                  dummy_input: torch.Tensor,
-                                  device: torch.device) -> float:
-    model.eval()
-    dummy_input = dummy_input.to(device)
-
-    if device.type == 'cuda':
-        torch.cuda.empty_cache()
-        torch.cuda.reset_peak_memory_stats(device)
-        with _inference_mode():
-            _ = model(dummy_input)
-        torch.cuda.synchronize()
-        peak = torch.cuda.max_memory_reserved(device = device) / (1024 ** 2)
-        return float(peak)
-    else:
-        if psutil is None:
-            return float('nan')
-        rss0 = _cpu_rss_mb()
-        with _inference_mode():
-            _ = model(dummy_input)
-        rss1 = _cpu_rss_mb()
-        return max(0.0, float(rss1 - rss0))
-
-def export_efficiency_table(models: Dict[str, nn.Module],
-                            feature_dim: int,
-                            window_size: int = window_size,
-                            batch_sizes: List[int] = [1, 128],
-                            device: torch.device = device,
-                            csv_path: str = "efficiency_summary.csv") -> pd.DataFrame:
-    rows = []
-    for name, mdl in models.items():
-        # Dummy input: [B, T, F]
-        for bsz in batch_sizes:
-            dummy = torch.zeros((bsz, window_size, feature_dim), dtype = torch.float32, device = device)
-            # Params & on-disk size
-            params_m = count_trainable_params(mdl)
-            size_mb  = state_dict_size_mb(mdl)
-            # Latency & Throughput
-            lat = benchmark_inference_latency(mdl, dummy, device)
-            # Peak memory
-            mem_mb = measure_peak_memory_inference(mdl, dummy, device)
-            rows.append({
-                "model": name,
-                "batch_size": bsz,
-                "params": params_m,
-                "state_dict_MB": round(size_mb, 3),
-                "lat_p50_ms": round(lat["lat_p50_ms"], 3),
-                "lat_p95_ms": round(lat["lat_p95_ms"], 3),
-                "lat_mean_ms": round(lat["lat_mean_ms"], 3),
-                "throughput_sps": round(lat["throughput_sps"], 2),
-                "peak_mem_MB": round(mem_mb, 1)
-            })
-            gc.collect()
-    df = pd.DataFrame(rows)
-    df.to_csv(csv_path, index = False)
-    print(f"[Saved] Efficiency table -> {csv_path}")
-    return df
-
-# ---- Lightweight degradation without retraining ----
-def make_quantized_cpu_copy(model: nn.Module) -> nn.Module:
-    """
-    Post-training dynamic quantization on CPU (INT8) for LSTM/GRU/Linear.
-    """
-    from torch.ao.quantization import quantize_dynamic, default_dynamic_qconfig
-    qtypes = {nn.Linear, nn.LSTM, nn.GRU}
-    m_cpu = copy_model_to_device(model, torch.device('cpu'))
-    m_cpu.eval()
-    qmodel = quantize_dynamic(m_cpu, qtypes, dtype = torch.qint8)
-    return qmodel
-
-def copy_model_to_device(model: nn.Module, dest: torch.device) -> nn.Module:
-    import copy
-    m2 = copy.deepcopy(model).to(dest)
-    m2.eval()
-    return m2
-
-def apply_global_linear_pruning(model: nn.Module, amount: float) -> nn.Module:
-    """
-    Global unstructured magnitude pruning on Linear weights only (no retraining).
-    """
-    import copy
-    m2 = copy.deepcopy(model)
-    parameters_to_prune = []
-    for mod in m2.modules():
-        if isinstance(mod, nn.Linear):
-            parameters_to_prune.append((mod, "weight"))
-    if parameters_to_prune:
-        prune.global_unstructured(parameters_to_prune, pruning_method = prune.L1Unstructured, amount = amount)
-        # Permanently remove reparam so the model is standalone
-        for mod, _ in parameters_to_prune:
-            prune.remove(mod, "weight")
-    m2.eval()
-    return m2
-
-def evaluate_std_metrics_array(y_true_std: np.ndarray, y_pred_std: np.ndarray) -> Dict[str, float]:
-    rmse = float(np.sqrt(mean_squared_error(y_true_std, y_pred_std)))
-    nonzero = (y_true_std != 0)
-    mape = float(np.mean(np.abs((y_true_std[nonzero] - y_pred_std[nonzero]) / y_true_std[nonzero])) * 100.0) if np.sum(nonzero) else 0.0
-    ss_res = float(np.sum((y_true_std - y_pred_std) ** 2))
-    ss_tot = float(np.sum((y_true_std - np.mean(y_true_std)) ** 2))
-    r2 = float(1 - (ss_res / ss_tot)) if ss_tot != 0 else 0.0
-    mse = float(np.mean((y_true_std - y_pred_std) ** 2))
-    mae = float(np.mean(np.abs(y_true_std - y_pred_std)))
-    return {"RMSE": rmse, "MAPE": mape, "R2": r2, "MSE": mse, "MAE": mae}
-
-def make_degradation_curve(model_name: str,
-                           base_model: nn.Module,
-                           test_loader: DataLoader,
-                           y_test_std: np.ndarray,
-                           feature_dim: int,
-                           window_size: int = window_size,
-                           device: torch.device = device,
-                           sparsities: List[float] = [0.3, 0.5, 0.7]) -> pd.DataFrame:
-    """
-    Produce points for FP32 baseline (device), INT8 dynamic (CPU), and pruned (device) models.
-    """
-    rows = []
-
-    # 0) FP32 baseline on current device
-    preds_std = []
-    criterion_tmp = nn.MSELoss()
-    with torch.no_grad():
-        for xb, _ in test_loader:
-            xb = xb.to(device)
-            preds_std.append(base_model(xb).detach().cpu().numpy())
-    preds_std = np.concatenate(preds_std, axis = 0)
-    met = evaluate_std_metrics_array(y_test_std, preds_std)
-    rows.append({"name": f"{model_name}_fp32", "kind": "fp32", "compress": 1.0,
-                 "params": count_trainable_params(base_model),
-                 "size_MB": state_dict_size_mb(base_model),
-                 **met})
-
-    # 1) INT8 dynamic on CPU
-    try:
-        qmodel = make_quantized_cpu_copy(base_model)
-        preds_q = []
-        with torch.no_grad():
-            for xb, _ in test_loader:
-                xb_cpu = xb.to(torch.device('cpu'))
-                preds_q.append(qmodel(xb_cpu).detach().cpu().numpy())
-        preds_q = np.concatenate(preds_q, axis = 0)
-        met_q = evaluate_std_metrics_array(y_test_std, preds_q)
-        rows.append({"name": f"{model_name}_int8", "kind": "int8", "compress": None,
-                     "params": count_trainable_params(qmodel),
-                     "size_MB": state_dict_size_mb(qmodel),
-                     **met_q})
-    except Exception as e:
-        print(f"[Warn] INT8 quantization failed for {model_name}: {e}")
-
-    # 2) Pruned variants on current device
-    for sp in sparsities:
-        pm = apply_global_linear_pruning(base_model, amount = sp).to(device)
-        preds_p = []
-        with torch.no_grad():
-            for xb, _ in test_loader:
-                xb = xb.to(device)
-                preds_p.append(pm(xb).detach().cpu().numpy())
-        preds_p = np.concatenate(preds_p, axis = 0)
-        met_p = evaluate_std_metrics_array(y_test_std, preds_p)
-        rows.append({"name": f"{model_name}_prune_{int(sp*100)}", "kind": f"prune@{sp:.1f}",
-                     "compress": (1.0 - sp),
-                     "params": count_trainable_params(pm),
-                     "size_MB": state_dict_size_mb(pm),
-                     **met_p})
-
-    df = pd.DataFrame(rows)
-    out_csv = f"degradation_{model_name}.csv"
-    df.to_csv(out_csv, index = False)
-    print(f"[Saved] Degradation curve -> {out_csv}")
-    return df
-
-def plot_error_histograms_faceted(y_actual_real: np.ndarray,
-                                  predictions_dict: Dict[str, np.ndarray],
-                                  bins: int = 30,
-                                  bin_range: Tuple[float, float] = (-20000, 20000)):
-    """
-    分面直方图：每个模型一幅，显示误差分布，并在每个 bin 顶部标注“该模型在该区间的样本占比（%）”。
-    """
-    model_names = list(predictions_dict.keys())
-    n = len(model_names)
-    cols = 2
-    rows = int(math.ceil(n / cols))
-    bin_edges = np.linspace(bin_range[0], bin_range[1], bins + 1)
-
-    plt.figure(figsize = (12, 4 * rows))
-    for i, name in enumerate(model_names):
-        ax = plt.subplot(rows, cols, i + 1)
-        errors = predictions_dict[name] - y_actual_real
-        counts, _ = np.histogram(errors, bins = bin_edges)
-        total = counts.sum() if counts.sum() > 0 else 1
-        props = counts / total
-
-        ax.bar(0.5 * (bin_edges[:-1] + bin_edges[1:]), props,
-               width = np.diff(bin_edges),
-               color = MODEL_COLORS.get(name, '#808080'),
-               edgecolor = 'black', alpha = 0.8, align = 'center')
-        # 标注占比
-        for x, p in zip(0.5 * (bin_edges[:-1] + bin_edges[1:]), props):
-            if p > 0.01:
-                ax.text(x, p, f"{p*100:.1f}%", ha = 'center', va = 'bottom', fontsize = 10)
-        ax.set_title(f"{name} (proportion per bin)")
-        ax.set_xlabel("Prediction Error (kW·h)")
-        ax.set_ylabel("Proportion")
-        ax.grid(True, axis = 'y', alpha = 0.3)
-    plt.tight_layout()
-    plt.show()
-
-def plot_error_histograms_stacked(y_actual_real: np.ndarray,
-                                  predictions_dict: Dict[str, np.ndarray],
-                                  bins: int = 30,
-                                  bin_range: Tuple[float, float] = (-20000, 20000)):
-    """
-    堆叠归一化直方图：各模型在同一图中堆叠，纵轴为比例；每个 bin 顶部标注“总体占比（%）”。
-    """
-    bin_edges = np.linspace(bin_range[0], bin_range[1], bins + 1)
-    errors_list = [pred - y_actual_real for pred in predictions_dict.values()]
-    labels = list(predictions_dict.keys())
-    colors = [MODEL_COLORS.get(n, '#808080') for n in labels]
-
-    # 计算各模型 counts，并归一化为比例后堆叠
-    counts_all = [np.histogram(err, bins = bin_edges)[0].astype(float) for err in errors_list]
-    total_counts = np.sum(counts_all, axis = 0)
-    total_counts[total_counts == 0] = 1.0
-    props_all = [c / total_counts for c in counts_all]  # 每个模型在该 bin 的相对占比
-    heights = np.vstack(props_all)
-
-    centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
-    bottom = np.zeros_like(centers, dtype = float)
-
-    plt.figure(figsize = (14, 6))
-    for i, (label, h) in enumerate(zip(labels, heights)):
-        plt.bar(centers, h, width = np.diff(bin_edges), bottom = bottom,
-                color = colors[i], edgecolor = 'black', alpha = 0.85, label = label, align = 'center')
-        bottom += h
-
-    # 顶部标总占比（总样本按比例归一，此处显示 100% 或略低于 100% 的数值）
-    for x, tot_p in zip(centers, bottom):
-        if tot_p > 0.01:
-            plt.text(x, tot_p, f"{tot_p*100:.0f}%", ha = 'center', va = 'bottom', fontsize = 9)
-
-    plt.xlabel("Prediction Error (kW·h)")
-    plt.ylabel("Proportion (stacked)")
-    plt.legend()
-    plt.grid(True, axis = 'y', alpha = 0.3)
-    plt.tight_layout()
-    plt.show()
-
-
-def predict_snaive_std(y_all_std, start_index, n_test, m=24):
-    """
-    s-naive: y_hat[t] = y[t-m]，在标准化域直接做。
-    y_all_std: 整体标准化后的 y（train+val+test 拼接）
-    start_index: 测试集第一条标签对应的全局索引（注意滑窗偏移）
-    n_test: 需要预测的样本数（与 y_test_seq 对齐）
-    m: 季节周期
-    """
-    preds = []
-    for i in range(n_test):
-        t = start_index + i
-        ref = t - m
-        if ref < 0 or ref >= len(y_all_std):
-            preds.append(y_all_std[t-1] if t-1 >= 0 else y_all_std[0])
-        else:
-            preds.append(y_all_std[ref])
-    return np.asarray(preds, dtype=np.float32)
-
-def train_model_robust(model, train_loader, val_loader, model_name='Model', learning_rate=1e-4, weight_decay=1e-4, num_epochs=150, huber_beta=1.0):
-    criterion = nn.SmoothL1Loss(beta=huber_beta)
-    optimizer = Lion(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
-    total_steps  = num_epochs * len(train_loader)
-    warmup_steps = int(0.1 * total_steps)
-    scheduler = LambdaLR(optimizer, lambda step: min(step / warmup_steps, 1.0) if step < warmup_steps else max(0.0, 1 - (step - warmup_steps) / (total_steps - warmup_steps)))
-    best_val_loss, counter = float('inf'), 0
-    hist = {k: [] for k in ["train_loss","train_rmse","train_mape","train_r2","train_mse","train_mae","val_loss","val_rmse","val_mape","val_r2","val_mse","val_mae"]}
-    for epoch in range(num_epochs):
-        model.train()
-        for xb, yb in train_loader:
-            xb, yb = xb.to(device), yb.to(device)
-            optimizer.zero_grad()
-            pred = model(xb)
-            loss = criterion(pred, yb)
-            loss.backward()
-            clip_grad_norm_(model.parameters(), max_norm=3.0)
-            optimizer.step(); scheduler.step()
-        # 评估与早停
-        trL, trR, trM, trR2, trMSE, trMAE, _, _ = evaluate(model, train_loader, criterion, device)
-        vlL, vlR, vlM, vlR2, vlMSE, vlMAE, _, _ = evaluate(model, val_loader,   criterion, device)
-        for k, v in zip(hist.keys(), [trL,trR,trM,trR2,trMSE,trMAE,vlL,vlR,vlM,vlR2,vlMSE,vlMAE]): hist[k].append(v)
-        print(f"[{model_name}-Robust] Epoch {epoch+1}/{num_epochs}, ValLoss: {vlL:.4f}, ValRMSE: {vlR:.4f}, ValMAPE: {vlM:.2f}%")
-        if vlL < best_val_loss:
-            best_val_loss, counter = vlL, 0
-            torch.save(model.state_dict(), f"best_{model_name}.pth")
-        else:
-            counter += 1
-            if counter >= patience:
-                print(f"[{model_name}-Robust] Early stopping.")
-                break
-    return hist
 # 5. Evaluation Module
 def evaluate(model, dataloader, criterion, device = device):
     """
@@ -1429,14 +902,6 @@ def evaluate(model, dataloader, criterion, device = device):
     val_loss   = running_loss / num_samples
     preds_arr  = np.concatenate(preds_list, axis = 0)
     labels_arr = np.concatenate(labels_list, axis = 0)
-
-    # Safety: guard against NaN/Inf in predictions or labels
-    if np.isnan(preds_arr).any() or np.isinf(preds_arr).any():
-        print("[Warning] NaN/Inf detected in predictions. They will be replaced by 0 for metrics computation.")
-    if np.isnan(labels_arr).any() or np.isinf(labels_arr).any():
-        print("[Warning] NaN/Inf detected in labels. They will be replaced by 0 for metrics computation.")
-    preds_arr  = np.nan_to_num(preds_arr, nan = 0.0, posinf = 0.0, neginf = 0.0)
-    labels_arr = np.nan_to_num(labels_arr, nan = 0.0, posinf = 0.0, neginf = 0.0)
 
     # Compute RMSE
     rmse_std = np.sqrt(mean_squared_error(labels_arr, preds_arr))
@@ -1678,7 +1143,7 @@ def plot_predictions_comparison(y_actual_real, predictions_dict, timestamps):
     
     # 为每个模型的预测绘制曲线
     for i, (model_name, pred_values) in enumerate(predictions_dict.items()):
-        color = MODEL_COLORS.get(model_name, colors[i % len(colors)])
+        color = colors[i % len(colors)]  
         plt.plot(x_axis, pred_values, color=color, label=model_name, linewidth=0.9, linestyle='-', alpha=0.9)
     
     plt.xlabel('Timestamp of TrainValue')
@@ -1889,14 +1354,12 @@ def plot_predictions_date_range(y_actual_real, predictions_dict, timestamps, sta
     
     # 自定义模型颜色映射和透明度
     model_settings = {
-        name: {'color': MODEL_COLORS.get(name, '#808080'), 'alpha': 0.9, 'linewidth': 1.5, 'linestyle': '-'}
-        for name in predictions_dict.keys()
+        'Model1': {'color': '#B0C4DE', 'alpha': 0.9, 'linewidth': 1.5, 'linestyle': '-'},      # 浅钢蓝色，低透明度
+        'Model2': {'color': '#87CEEB', 'alpha': 0.9, 'linewidth': 1.5, 'linestyle': '--'},     # 天蓝色，低透明度
+        'Model3': {'color': '#ADD8E6', 'alpha': 0.9, 'linewidth': 1.5, 'linestyle': '-.'},     # 浅蓝色，低透明度
+        'Model4': {'color': '#00008B', 'alpha': 1.0, 'linewidth': 1.9, 'linestyle': ':'},      # 深红色，完全不透明
+        'Model5': {'color': '#DC143C', 'alpha': 1.0, 'linewidth': 2, 'linestyle': '-'}       # 深蓝色，完全不透明
     }
-    # Emphasize Model4 and Model5 as before, but keep fixed colors
-    if 'Model4' in model_settings:
-        model_settings['Model4'].update({'alpha': 1.0, 'linewidth': 1.9, 'linestyle': ':'})
-    if 'Model5' in model_settings:
-        model_settings['Model5'].update({'alpha': 1.0, 'linewidth': 2.0, 'linestyle': '-'})
     
     # Create mask for date range
     start = pd.to_datetime(start_date)
@@ -1965,6 +1428,185 @@ def plot_predictions_date_range(y_actual_real, predictions_dict, timestamps, sta
     
     plt.show()
 
+# ==== Minimal latency & memory profiler (drop-in, no training changes) ====
+def _sync(dev: torch.device):
+    if dev.type == 'cuda':
+        torch.cuda.synchronize()
+
+def _cpu_rss_mb() -> float:
+    if psutil is None:
+        return float('nan')
+    return psutil.Process(os.getpid()).memory_info().rss / (1024 ** 2)
+
+@torch.no_grad()
+def benchmark_inference(model: nn.Module,
+                        batch_size: int,
+                        window_size: int,
+                        feature_dim: int,
+                        device: torch.device,
+                        warmup: int = 50,
+                        iters: int = 200):
+    model.eval().to(device)
+    xb = torch.zeros(batch_size, window_size, feature_dim,
+                     dtype = torch.float32, device = device)
+
+    # warmup
+    for _ in range(warmup):
+        _ = model(xb)
+    _sync(device)
+
+    # timed
+    times_ms = []
+    if device.type == 'cuda':
+        starter = torch.cuda.Event(enable_timing = True)
+        ender   = torch.cuda.Event(enable_timing = True)
+        for _ in range(iters):
+            starter.record()
+            _ = model(xb)
+            ender.record()
+            _sync(device)
+            times_ms.append(starter.elapsed_time(ender))  # ms
+    else:
+        for _ in range(iters):
+            t0 = time.perf_counter()
+            _ = model(xb)
+            times_ms.append((time.perf_counter() - t0) * 1000.0)
+
+    arr = np.asarray(times_ms, dtype = np.float64)
+    p50 = float(np.percentile(arr, 50))
+    p95 = float(np.percentile(arr, 95))
+    thp = float(batch_size / (arr.mean() / 1000.0))
+
+    # peak memory (inference)
+    if device.type == 'cuda':
+        torch.cuda.empty_cache()
+        torch.cuda.reset_peak_memory_stats(device)
+        _ = model(xb)
+        _sync(device)
+        peak_mem_mb = float(torch.cuda.max_memory_reserved(device = device) / (1024 ** 2))
+    else:
+        rss0 = _cpu_rss_mb()
+        _ = model(xb)
+        rss1 = _cpu_rss_mb()
+        peak_mem_mb = max(0.0, float(rss1 - rss0))
+
+    return p50, p95, thp, peak_mem_mb
+
+def benchmark_train_step(model: nn.Module,
+                         train_loader: torch.utils.data.DataLoader,
+                         device: torch.device,
+                         warmup_steps: int = 20,
+                         timed_steps: int = 200,
+                         lr: float = 1e-5):
+    mdl = model.train().to(device)
+    opt = torch.optim.SGD(mdl.parameters(), lr = lr)  # 轻量优化器，避免破坏已训权重
+    loss_fn = nn.MSELoss()
+
+    it = iter(train_loader)
+    # warmup
+    for _ in range(warmup_steps):
+        try:
+            xb, yb = next(it)
+        except StopIteration:
+            it = iter(train_loader); xb, yb = next(it)
+        xb, yb = xb.to(device), yb.to(device)
+        opt.zero_grad()
+        yhat = mdl(xb)
+        loss = loss_fn(yhat, yb)
+        loss.backward()
+        opt.step()
+    _sync(device)
+
+    # timed
+    times_ms = []
+    it = iter(train_loader)
+    for _ in range(timed_steps):
+        try:
+            xb, yb = next(it)
+        except StopIteration:
+            it = iter(train_loader); xb, yb = next(it)
+        xb, yb = xb.to(device), yb.to(device)
+        t0 = time.perf_counter()
+        opt.zero_grad()
+        yhat = mdl(xb)
+        loss = loss_fn(yhat, yb)
+        loss.backward()
+        opt.step()
+        _sync(device)
+        times_ms.append((time.perf_counter() - t0) * 1000.0)
+
+    arr = np.asarray(times_ms, dtype = np.float64)
+    return float(np.percentile(arr, 50)), float(np.percentile(arr, 95))
+
+def export_latency_memory_tables(models: dict,
+                                 window_size: int,
+                                 feature_dim: int,
+                                 train_loader: torch.utils.data.DataLoader,
+                                 out_csv: str = "latency_and_memory.csv"):
+    rows_inf = []
+    rows_trn = []
+
+    def _append_infer(dev: torch.device, b: int, name: str, mdl: nn.Module):
+        p50, p95, thp, mem = benchmark_inference(mdl, b, window_size, feature_dim, dev)
+        rows_inf.append({
+            "Model": name, "Device": dev.type.upper(), "Batch": b,
+            "p50_ms": round(p50, 3), "p95_ms": round(p95, 3),
+            "Throughput_sps": round(thp, 2), "PeakMem_MB": round(mem, 1)
+        })
+
+    # GPU（若可用）
+    if torch.cuda.is_available():
+        dev_gpu = torch.device('cuda')
+        for name, mdl in models.items():
+            for b in [1, 128]:
+                _append_infer(dev_gpu, b, name, mdl)
+            tp50, tp95 = benchmark_train_step(mdl, train_loader, dev_gpu)
+            rows_trn.append({
+                "Model": name, "Device": "GPU",
+                "Batch(train_loader)": train_loader.batch_size,
+                "p50_ms": round(tp50, 3), "p95_ms": round(tp95, 3)
+            })
+
+    # CPU
+    dev_cpu = torch.device('cpu')
+    for name, mdl in models.items():
+        for b in [1, 128]:
+            _append_infer(dev_cpu, b, name, mdl)
+        tp50, tp95 = benchmark_train_step(mdl, train_loader, dev_cpu)
+        rows_trn.append({
+            "Model": name, "Device": "CPU",
+            "Batch(train_loader)": train_loader.batch_size,
+            "p50_ms": round(tp50, 3), "p95_ms": round(tp95, 3)
+        })
+
+    df_inf = pd.DataFrame(rows_inf)
+    df_trn = pd.DataFrame(rows_trn)
+
+    # 保存合并 CSV（便于投稿材料归档）
+    df_inf.assign(Phase = "Inference").to_csv(out_csv.replace(".csv", "_inference.csv"), index = False)
+    df_trn.assign(Phase = "TrainingStep").to_csv(out_csv.replace(".csv", "_trainstep.csv"), index = False)
+    print(f"[Saved] {out_csv.replace('.csv', '_inference.csv')}")
+    print(f"[Saved] {out_csv.replace('.csv', '_trainstep.csv')}")
+
+    # 打印为"论文风格"表格
+    def _print_inf_table(dfi):
+        print("\n=== Table: Inference latency & memory (per-sample) ===")
+        print(dfi.rename(columns={
+            "p50_ms": "p50 Latency (ms)", "p95_ms": "p95 Latency (ms)",
+            "Throughput_sps": "Throughput (samples/s)", "PeakMem_MB": "Peak Memory (MB)"
+        }).to_string(index = False))
+
+    def _print_trn_table(dft):
+        print("\n=== Table: Training-step latency (forward+backward+update) ===")
+        print(dft.rename(columns={
+            "p50_ms": "p50 Step Latency (ms)", "p95_ms": "p95 Step Latency (ms)"
+        }).to_string(index = False))
+
+    _print_inf_table(df_inf.sort_values(["Model","Device","Batch"]))
+    _print_trn_table(df_trn.sort_values(["Model","Device"]))
+
+    return df_inf, df_trn
+
 def plot_value_and_error_histograms(y_actual_real, predictions_dict, bins=30):
     """
     Draw histograms of (1) actual value distribution and (2) prediction error distribution.
@@ -1985,7 +1627,13 @@ def plot_value_and_error_histograms(y_actual_real, predictions_dict, bins=30):
     plt.subplot(1, 2, 2)
     
     # 固定的模型颜色映射
-    model_colors = dict(MODEL_COLORS)
+    model_colors = {
+        'Model1': '#1f77b4',  # 蓝色
+        'Model2': '#ff7f0e',  # 橙色  
+        'Model3': '#2ca02c',  # 绿色
+        'Model4': '#d62728',  # 红色
+        'Model5': '#9467bd',  # 紫色
+    }
     
     # 使用固定的bin边界范围，确保所有图表一致
     # 基于xlim(-20000, 20000)设置固定的bin边界
@@ -2016,62 +1664,88 @@ def plot_error_max_curve(y_actual_real,
                          predictions_dict,
                          bins: int = 30,
                          smooth_sigma: float = 1.0,
-                         alpha: float = 0.9,
-                         model5_alpha: float = 1.0,
-                         model5_linewidth: float = 2.3,
-                         model5_color: str = '#DC143C',
-                         default_linewidth: float = 1.7,
-                         bin_range: tuple = (-20000, 20000)):
+                         # 新增参数
+                         alpha: float = 0.9,                # 默认透明度
+                         model5_alpha: float = 1.0,         # Model5 的透明度  
+                         model5_linewidth: float = 2.0,     # Model5 的线条粗细
+                         model5_color: str = '#DC143C',     # Model5 的颜色（深红色）
+                         default_linewidth: float = 1.7):   # 其他模型的默认线条粗细
     """
-    为每个模型绘制“误差直方图每个 bin 的最高计数”曲线，并进行可选平滑。
-    关键修正：所有模型使用完全一致的 bin 边界，避免曲线因分箱不一致而整体偏移。
+    为 predictions_dict 中的每个模型绘制一条曲线：
+    曲线上的点来自该模型误差直方图每个 bin 的最高计数，
+    再经高斯平滑后连接而成。
+
+    参数
+    ----
+    y_actual_real : ndarray
+        真实值（原始尺度）。
+    predictions_dict : Dict[str, ndarray]
+        {'模型名': 预测值}。
+    bins : int
+        直方图分箱数量（应与直方图保持一致）。
+    smooth_sigma : float
+        高斯平滑 σ；设为 0 可关闭平滑。
+    alpha : float
+        所有曲线的默认透明度（0-1），默认0.9。
+    model5_alpha : float
+        Model5 的特殊透明度（0-1），默认1.0（不透明）。
+    model5_linewidth : float
+        Model5 的线条粗细，默认2.0。
+    model5_color : str
+        Model5 的颜色，默认深红色。
+    default_linewidth : float
+        其他模型的默认线条粗细，默认1.7。
     """
     from scipy.ndimage import gaussian_filter1d
 
-    # 1) 统一的 bin 边界（显式范围或由数据自动推断）
-    bin_edges = np.linspace(bin_range[0], bin_range[1], bins + 1)
-
-    # 2) 统计各模型在相同 bin_edges 下的计数
+    # -------- 1. 计算各模型直方图计数 -------- #
+    bin_edges = None
     model_curves = {}
     for model_name, preds in predictions_dict.items():
         errors = preds - y_actual_real
-        counts, _ = np.histogram(errors, bins=bin_edges)
-        model_curves[model_name] = counts
+        counts, edges = np.histogram(errors, bins=bins)
+        model_curves[model_name] = counts          # 每个 bin 的最高点即计数
+        if bin_edges is None:
+            bin_edges = edges                      # 记录一次 bin 边界
 
     bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
 
-    # 3) 绘制
+    # -------- 2. 绘制顺滑曲线 -------- #
     plt.figure(figsize=(10, 5))
     colors = mpl.cm.tab10.colors
-    line_styles = ['-', '--', '-.', ':', (0, (3, 1, 1, 1))]
+    line_styles = ['-', '--', '-.', ':',(0, (3, 1, 1, 1))]
     marker_styles = ['^', 's', 'o', 'h', 'p']
-
+    
     for i, (model_name, counts) in enumerate(model_curves.items()):
         curve = (gaussian_filter1d(counts.astype(float), sigma=smooth_sigma)
                  if smooth_sigma > 0 else counts)
-
+        
+        # 检查是否为 Model5，应用特殊设置
         if model_name == 'Model5':
-            plt.plot(bin_centers, curve,
+            plt.plot(bin_centers,
+                     curve,
                      label=model_name,
-                     color=MODEL_COLORS.get('Model5', model5_color),
-                     linewidth=model5_linewidth,
+                     color=model5_color,              # 使用 Model5 的特殊颜色
+                     linewidth=model5_linewidth,      # 使用 Model5 的特殊线条粗细
                      marker=marker_styles[i % len(marker_styles)],
-                     linestyle='-',
+                     linestyle='-',                   # 固定为实线
                      markersize=10,
-                     alpha=model5_alpha,
-                     zorder=10)
+                     alpha=model5_alpha,              # 使用 Model5 的特殊透明度
+                     zorder=10)                       # 确保 Model5 在最上层
         else:
-            plt.plot(bin_centers, curve,
+            plt.plot(bin_centers,
+                     curve,
                      label=model_name,
-                     color=MODEL_COLORS.get(model_name, colors[i % len(colors)]),
-                     linewidth=default_linewidth,
+                     color=colors[i % len(colors)],
+                     linewidth=default_linewidth,     # 使用默认线条粗细
                      marker=marker_styles[i % len(marker_styles)],
                      linestyle=line_styles[i % len(line_styles)],
                      markersize=10,
-                     alpha=alpha)
+                     alpha=alpha)                     # 使用默认透明度
 
-    if bin_range is not None:
-        plt.xlim(bin_range[0], bin_range[1])
+    # -------- 3. 图形美化 -------- #
+    #plt.title('Smoothed Histogram Curves of Prediction Errors')
+    plt.xlim(-20000, 20000)
     plt.xlabel('Prediction Error of Model and Actual Value(kW·h)')
     plt.ylabel('Frequency')
     plt.legend()
@@ -2079,6 +1753,62 @@ def plot_error_max_curve(y_actual_real,
     plt.tight_layout()
     plt.show()
 
+def plot_stacked_error_histogram(y_actual_real,
+                                 predictions_dict,
+                                 bins: int = 30,
+                                 xlim = (-20000, 20000),
+                                 normalize: bool = False,
+                                 model_colors=None,
+                                 others_alpha: float = 0.6,
+                                 model5_alpha: float = 0.9):
+
+    if model_colors is None:
+        model_colors = {
+            'Model1': '#1f77b4',
+            'Model2': '#ff7f0e',
+            'Model3': '#2ca02c',
+            'Model4': '#d62728',
+            'Model5': '#9467bd',
+        }
+
+    bin_edges = np.linspace(xlim[0], xlim[1], bins + 1)
+    widths = np.diff(bin_edges)
+    lefts = bin_edges[:-1]
+
+    # 计算各模型在各 bin 的计数
+    model_counts = {}
+    for name, preds in predictions_dict.items():
+        errors = preds - y_actual_real
+        counts, _ = np.histogram(errors, bins=bin_edges)
+        if normalize:
+            total = counts.sum()
+            counts = counts / total if total > 0 else counts
+        model_counts[name] = counts
+
+    # 堆叠绘制
+    plt.figure(figsize=(10, 5))
+    bottom = np.zeros_like(lefts, dtype=float)
+    for i, (name, counts) in enumerate(model_counts.items()):
+        color = model_colors.get(name, plt.cm.tab10(i % 10))
+        alpha_val = model5_alpha if name == 'Model5' else others_alpha
+        plt.bar(lefts,
+                counts,
+                width=widths,
+                bottom=bottom,
+                align='edge',
+                color=color,
+                edgecolor='black',
+                alpha=alpha_val,
+                label=name)
+        bottom = bottom + counts
+
+    plt.xlim(xlim[0], xlim[1])
+    plt.xlabel('Prediction Error of Model and Actual Value(kW·h)')
+    plt.ylabel('Proportion' if normalize else 'Frequency')
+    plt.grid(True, axis='y', alpha=0.3)
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
 
 # 8. Main Function
 def main(use_log_transform = True, min_egrid_threshold = 1.0):
@@ -2103,7 +1833,7 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
 
     # Feature engineering (without standardization to avoid data leakage)
     data_df, feature_cols, target_col = feature_engineering(data_df)
-
+    
     # ------------- 计算特征重要性 -------------
     pearson_importance = calculate_feature_importance(
         data_df, feature_cols, target_col)
@@ -2193,28 +1923,6 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     val_loader   = DataLoader(val_dataset,   batch_size = batch_size, shuffle = False, num_workers = num_workers)
     test_loader  = DataLoader(test_dataset,  batch_size = batch_size, shuffle = False, num_workers = num_workers)
 
-    # 为新增三种模型（PatchTST / LightGBM / SARIMA & s-naive）准备：FeatureGating + 序列展开
-    X_train_seq_g = apply_feature_gating_to_sequences(X_train_seq, feature_importance)
-    X_val_seq_g   = apply_feature_gating_to_sequences(X_val_seq,   feature_importance)
-    X_test_seq_g  = apply_feature_gating_to_sequences(X_test_seq,  feature_importance)
-    # Safety: replace any NaN/Inf introduced by preprocessing
-    X_train_seq_g = np.nan_to_num(X_train_seq_g, nan=0.0, posinf=0.0, neginf=0.0)
-    X_val_seq_g   = np.nan_to_num(X_val_seq_g,   nan=0.0, posinf=0.0, neginf=0.0)
-    X_test_seq_g  = np.nan_to_num(X_test_seq_g,  nan=0.0, posinf=0.0, neginf=0.0)
-
-    # Safety: labels for PatchTST loaders
-    y_train_seq_safe = np.nan_to_num(y_train_seq, nan=0.0, posinf=0.0, neginf=0.0)
-    y_val_seq_safe   = np.nan_to_num(y_val_seq,   nan=0.0, posinf=0.0, neginf=0.0)
-
-    # LightGBM: 将序列展开为滞后表（含历法特征已在特征工程中加入）
-    X_train_tab = flatten_sequences_for_tabular(X_train_seq_g)
-    X_val_tab   = flatten_sequences_for_tabular(X_val_seq_g)
-    X_test_tab  = flatten_sequences_for_tabular(X_test_seq_g)
-    # Safety: LightGBM 不接受 NaN/Inf
-    X_train_tab = np.nan_to_num(X_train_tab, nan=0.0, posinf=0.0, neginf=0.0)
-    X_val_tab   = np.nan_to_num(X_val_tab,   nan=0.0, posinf=0.0, neginf=0.0)
-    X_test_tab  = np.nan_to_num(X_test_tab,  nan=0.0, posinf=0.0, neginf=0.0)
-
     # Build models
     feature_dim = X_train_seq.shape[-1]
     model1 = EModel_FeatureWeight1(
@@ -2254,29 +1962,6 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
         lstm_num_layers   = 2,
         lstm_dropout      = 0.2
     ).to(device)
-
-    # Transformer 代表：PatchTST
-    patch_model = PatchTST(
-        feature_dim=feature_dim,
-        window_size=window_size,
-        patch_len=8,          # 增大补丁长度
-        patch_stride=4,       # 使用重叠补丁以平滑输出
-        d_model=256,          # 降低维度防止过拟合激增
-        n_heads=8,
-        num_layers=3,
-        dropout=0.2
-    ).to(device)
-
-    print("\n========== Training Model: PatchTST ==========")
-    hist_patch = train_model_robust(   # 使用稳健损失的训练函数
-        model         = patch_model,
-        train_loader  = DataLoader(TensorDataset(torch.from_numpy(X_train_seq_g), torch.from_numpy(y_train_seq_safe)), batch_size = batch_size, shuffle = True,  num_workers = num_workers),
-        val_loader    = DataLoader(TensorDataset(torch.from_numpy(X_val_seq_g),   torch.from_numpy(y_val_seq_safe)),   batch_size = batch_size, shuffle = False, num_workers = num_workers),
-        model_name    = 'PatchTST',
-        learning_rate = learning_rate,
-        weight_decay  = weight_decay,
-        num_epochs    = num_epochs
-    ) 
 
     # Train Model: EModel_FeatureWeight1
     print("\n========== Training Model: 1 ==========")
@@ -2371,6 +2056,26 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     ).to(device)
     best_model5.load_state_dict(torch.load('best_EModel_FeatureWeight5.pth', map_location=device, weights_only=True), strict=False)
 
+    # ======== Latency and Memory Benchmarking ========
+    print("\n========== [Performance Benchmarking] ==========")
+    models_for_eval = {
+        "Model1": best_model1,
+        "Model2": best_model2,
+        "Model3": best_model3,
+        "Model4": best_model4,
+        "Model5": best_model5
+    }
+    
+    # Run benchmarking
+    df_inf, df_trn = export_latency_memory_tables(
+        models_for_eval,
+        window_size = window_size,
+        feature_dim = feature_dim,
+        train_loader = train_loader,
+        out_csv = "latency_and_memory.csv"
+    )
+    print("========== [Benchmarking Complete] ==========\n")
+
     # Evaluate on test set (standardized domain)
     criterion_test = nn.SmoothL1Loss(beta = 1.0)
     (_, test_rmse1_std, test_mape1_std, test_r21_std, test_mse1_std, test_mae1_std, preds1_std, labels1_std) = evaluate(best_model1, test_loader, criterion_test)
@@ -2386,72 +2091,6 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     print(f"[EModel_FeatureWeight4]  RMSE: {test_rmse4_std:.4f}, MAPE: {test_mape4_std:.2f}%, R²: {test_r24_std:.4f}, mse: {test_mse4_std:.2f}%, MAE: {test_mae4_std:.4f}")
     print(f"[EModel_FeatureWeight5]  RMSE: {test_rmse5_std:.4f}, MAPE: {test_mape5_std:.2f}%, R²: {test_r25_std:.4f}, mse: {test_mse5_std:.2f}%, MAE: {test_mae5_std:.4f}")
 
-    # ----标准化域上的预测 ----
-    # 1) PatchTST
-    best_patch = PatchTST(
-        feature_dim=feature_dim, 
-        window_size=window_size, 
-        patch_len=8, 
-        patch_stride=4,
-        d_model=256, 
-        n_heads=8, 
-        num_layers=3,
-        dropout=0.2
-    ).to(device)
-    
-    best_patch.load_state_dict(torch.load('best_PatchTST.pth', map_location=device, weights_only=True), strict=False)
-    (_, rmse_p_std, mape_p_std, r2_p_std, mse_p_std, mae_p_std, preds_patch_std, labels_patch_std) = evaluate(best_patch, test_loader, nn.SmoothL1Loss(beta=1.0))
-
-    # 2) LightGBM（与训练/验证域一致：标准化后的 y_seq）
-    # Safety: y 序列也需要无 NaN/Inf
-    y_train_seq_safe = np.nan_to_num(y_train_seq, nan=0.0, posinf=0.0, neginf=0.0)
-    y_val_seq_safe   = np.nan_to_num(y_val_seq,   nan=0.0, posinf=0.0, neginf=0.0)
-    booster = train_lightgbm(X_train_tab, y_train_seq_safe, X_val_tab, y_val_seq_safe, patience_rounds=50, seed=42)
-    if booster is not None:
-        best_iter = getattr(booster, 'best_iteration', None)
-        if best_iter is None or best_iter <= 0:
-            preds_lgb_std = booster.predict(X_test_tab)
-        else:
-            preds_lgb_std = booster.predict(X_test_tab, num_iteration=best_iter)
-    else:
-        preds_lgb_std = np.zeros_like(y_test_seq)
-
-    # 3) SARIMA（用训练+验证的标准化 y，预测 test_seq 步）
-    y_train_val_std = np.concatenate([y_train, y_val])
-    y_train_val_std = np.nan_to_num(y_train_val_std, nan=0.0, posinf=0.0, neginf=0.0)
-    n_test_seq = len(y_test_seq)
-    print("[SARIMA] Fitting start...")
-    preds_sarima_std = fit_predict_sarima(y_train_val_std, n_test=n_test_seq, m=seasonal_period, search_small=False, seed=42)
-    print("[SARIMA] Fitting done.")
-    if preds_sarima_std is None:
-        preds_sarima_std = np.zeros_like(y_test_seq)
-
-    # 4) s-naive：y[t] = y[t-m]（标准化域）
-    y_all_std = np.concatenate([y_train, y_val, y_test])
-    y_all_std = np.nan_to_num(y_all_std, nan=0.0, posinf=0.0, neginf=0.0)
-    start_idx = train_size + val_size + window_size
-    preds_snaive_std = predict_snaive_std(y_all_std, start_index=start_idx, n_test=n_test_seq, m=seasonal_period)
-
-    # ---- 反标准化并（可选）反log，与现有五模保持一致 ----
-    preds_patch_real_std   = scaler_y.inverse_transform(preds_patch_std.reshape(-1, 1)).ravel()
-    preds_lgb_real_std     = scaler_y.inverse_transform(preds_lgb_std.reshape(-1, 1)).ravel()
-    preds_sarima_real_std  = scaler_y.inverse_transform(preds_sarima_std.reshape(-1, 1)).ravel()
-    preds_snaive_real_std  = scaler_y.inverse_transform(preds_snaive_std.reshape(-1, 1)).ravel()
-    labels_new_real_std    = scaler_y.inverse_transform(y_test_seq.reshape(-1, 1)).ravel()
-
-    if use_log_transform:
-        preds_patch_real  = np.expm1(preds_patch_real_std)
-        preds_lgb_real    = np.expm1(preds_lgb_real_std)
-        preds_sarima_real = np.expm1(preds_sarima_real_std)
-        preds_snaive_real = np.expm1(preds_snaive_real_std)
-        labels_new_real   = np.expm1(labels_new_real_std)
-    else:
-        preds_patch_real  = preds_patch_real_std
-        preds_lgb_real    = preds_lgb_real_std
-        preds_sarima_real = preds_sarima_real_std
-        preds_snaive_real = preds_snaive_real_std
-        labels_new_real   = labels_new_real_std
-    
     # Inverse standardization and (optionally) inverse logarithmic transformation
     preds1_real_std = scaler_y.inverse_transform(preds1_std.reshape(-1, 1)).ravel()
     preds2_real_std = scaler_y.inverse_transform(preds2_std.reshape(-1, 1)).ravel()
@@ -2494,28 +2133,17 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     test_rmse4_real = np.sqrt(mean_squared_error(labels4_real, preds4_real))
     test_rmse5_real = np.sqrt(mean_squared_error(labels5_real, preds5_real))
 
-    pair_ext = [
-        ('PatchTST', preds_patch_real),
-        ('LightGBM', preds_lgb_real),
-        ('SARIMA', preds_sarima_real),
-        ('s-naive', preds_snaive_real)
-    ]
-    for m_name, m_preds in pair_ext:
+    # 使用 Model4 与其他模型对比，生成全长与缩放窗口图，以及分布直方图
+    for m_name, m_preds in [('Model1', preds1_real),
+                           ('Model2', preds2_real),
+                           ('Model3', preds3_real),
+                           ('Model4', preds4_real)]:
+        pair_preds = {'Model5': preds5_real, m_name: m_preds}
+        
         plot_value_and_error_histograms(
-            y_actual_real = labels_new_real,
-            predictions_dict = {'Model5': preds5_real, m_name: m_preds}
-        )
-
-    # === Baselines vs Model4（新增）===
-    for m_name, m_preds in pair_ext:
-        plot_value_and_error_histograms(
-            y_actual_real = labels4_real,
-            predictions_dict = {'Model4': preds4_real, m_name: m_preds}
-        )
-        plot_predictions_comparison(
-            y_actual_real = labels4_real,
-            predictions_dict = {'Model4': preds4_real, m_name: m_preds},
-            timestamps = test_timestamps
+            y_actual_real = labels5_real,
+            predictions_dict = pair_preds,
+            bins = 30
         )
 
     all_model_preds = {
@@ -2529,29 +2157,6 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
     # 使用 Model4 与其他模型对比，生成全长与缩放窗口图，以及分布直方图
     primary_preds = {'Model4': preds4_real, 'Model5': preds5_real}
 
-    # 合并原5模 + 新3模
-    all_model_preds_ext = dict(all_model_preds)
-    all_model_preds_ext.update({
-        'PatchTST': preds_patch_real,
-        'LightGBM': preds_lgb_real,
-        'SARIMA':   preds_sarima_real,
-        's-naive':  preds_snaive_real
-    })
-
-    # 可视化（全模型）
-    plot_predictions_date_range(
-        y_actual_real = labels_new_real,
-        predictions_dict = all_model_preds_ext,
-        timestamps = test_timestamps,
-        start_date = '2024-11-25',
-        end_date   = '2024-12-13'
-    )
-    plot_value_and_error_histograms(
-        y_actual_real = labels_new_real,
-        predictions_dict = all_model_preds_ext,
-        bins = 30
-    )
-    
     # 绘制两个时间段的图表
     plot_predictions_date_range(
         y_actual_real = labels5_real,
@@ -2593,6 +2198,13 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
         smooth_sigma = 1.0
     )
     print("[Info] Processing complete!")
+
+    # all_model_preds 示例：{'Model1': preds1_real, ..., 'Model5': preds5_real}
+    plot_stacked_error_histogram(y_actual_real=labels5_real,
+                             predictions_dict=all_model_preds,
+                             bins=30,
+                             xlim=(-20000, 20000),
+                             normalize=False)
 
     print("\n========== [Test Set Evaluation (Original Domain)] ==========")
     print(f"[EModel_FeatureWeight1] => RMSE (original): {test_rmse1_real:.2f}")
@@ -2639,80 +2251,6 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
             timestamps = test_timestamps
         )
 
-    # 标准化域（与已有5模一致口径）
-    print(f"[PatchTST]   RMSE: {rmse_p_std:.4f}, MAPE: {mape_p_std:.2f}%, R²: {r2_p_std:.4f}, mse: {mse_p_std:.2f}%, MAE: {mae_p_std:.4f}")
-    # LightGBM / SARIMA / s-naive 在标准化域的指标（与 evaluate 口径一致）：
-    def _calc_std_metrics(y_true_std, y_pred_std):
-        rmse = np.sqrt(mean_squared_error(y_true_std, y_pred_std))
-        nonzero = (y_true_std != 0)
-        mape = (np.mean(np.abs((y_true_std[nonzero] - y_pred_std[nonzero]) / y_true_std[nonzero])) * 100.0) if np.sum(nonzero) else 0.0
-        ss_res = np.sum((y_true_std - y_pred_std) ** 2)
-        ss_tot = np.sum((y_true_std - np.mean(y_true_std)) ** 2)
-        r2 = 1 - (ss_res / ss_tot) if ss_tot != 0 else 0.0
-        mse = np.mean((y_true_std - y_pred_std) ** 2)
-        mae = np.mean(np.abs(y_true_std - y_pred_std))
-        return rmse, mape, r2, mse, mae
-
-    rmse_lgb, mape_lgb, r2_lgb, mse_lgb, mae_lgb = _calc_std_metrics(y_test_seq, preds_lgb_std)
-    rmse_sar, mape_sar, r2_sar, mse_sar, mae_sar = _calc_std_metrics(y_test_seq, preds_sarima_std)
-    rmse_snv, mape_snv, r2_snv, mse_snv, mae_snv = _calc_std_metrics(y_test_seq, preds_snaive_std)
-
-    print(f"[LightGBM]   RMSE: {rmse_lgb:.4f}, MAPE: {mape_lgb:.2f}%, R²: {r2_lgb:.4f}, mse: {mse_lgb:.2f}%, MAE: {mae_lgb:.4f}")
-    print(f"[SARIMA]     RMSE: {rmse_sar:.4f}, MAPE: {mape_sar:.2f}%, R²: {r2_sar:.4f}, mse: {mse_sar:.2f}%, MAE: {mae_sar:.4f}")
-    print(f"[s-naive]    RMSE: {rmse_snv:.4f}, MAPE: {mape_snv:.2f}%, R²: {r2_snv:.4f}, mse: {mse_snv:.2f}%, MAE: {mae_snv:.4f}")
-
-    # 原始域 RMSE（与已有5模一致口径）
-    rmse_patch_real  = np.sqrt(mean_squared_error(labels_new_real, preds_patch_real))
-    rmse_lgb_real    = np.sqrt(mean_squared_error(labels_new_real, preds_lgb_real))
-    rmse_sarima_real = np.sqrt(mean_squared_error(labels_new_real, preds_sarima_real))
-    rmse_snaive_real = np.sqrt(mean_squared_error(labels_new_real, preds_snaive_real))
-    print(f"[PatchTST] => RMSE (original): {rmse_patch_real:.2f}")
-    print(f"[LightGBM] => RMSE (original): {rmse_lgb_real:.2f}")
-    print(f"[SARIMA]   => RMSE (original): {rmse_sarima_real:.2f}")
-    print(f"[s-naive]  => RMSE (original): {rmse_snaive_real:.2f}")
-    
-     # === 统一形成标准化域指标字典（RMSE / MAPE / MAE / R^2）===
-    std_metrics = {
-        'Model1':   {'RMSE': test_rmse1_std, 'MAPE': test_mape1_std, 'MAE': test_mae1_std, 'R2': test_r21_std, 'MSE': test_mse1_std},
-        'Model2':   {'RMSE': test_rmse2_std, 'MAPE': test_mape2_std, 'MAE': test_mae2_std, 'R2': test_r22_std, 'MSE': test_mse2_std},
-        'Model3':   {'RMSE': test_rmse3_std, 'MAPE': test_mape3_std, 'MAE': test_mae3_std, 'R2': test_r23_std, 'MSE': test_mse3_std},
-        'Model4':   {'RMSE': test_rmse4_std, 'MAPE': test_mape4_std, 'MAE': test_mae4_std, 'R2': test_r24_std, 'MSE': test_mse4_std},
-        'Model5':   {'RMSE': test_rmse5_std, 'MAPE': test_mape5_std, 'MAE': test_mae5_std, 'R2': test_r25_std, 'MSE': test_mse5_std},
-        'PatchTST': {'RMSE': rmse_p_std,     'MAPE': mape_p_std,     'MAE': mae_p_std,     'R2': r2_p_std,     'MSE': mse_p_std},
-        'LightGBM': {'RMSE': rmse_lgb,       'MAPE': mape_lgb,       'MAE': mae_lgb,       'R2': r2_lgb,       'MSE': mse_lgb},
-        'SARIMA':   {'RMSE': rmse_sar,       'MAPE': mape_sar,       'MAE': mae_sar,       'R2': r2_sar,       'MSE': mse_sar},
-        's-naive':  {'RMSE': rmse_snv,       'MAPE': mape_snv,       'MAE': mae_snv,       'R2': r2_snv,       'MSE': mse_snv},
-    }
-
-    def _print_std_delta_table(metrics, baseline_name):
-        b = metrics[baseline_name]
-        print(f"\n=== Standardized metrics: Δ vs {baseline_name} (error类越负越好，R²越正越好) ===")
-        for name, m in metrics.items():
-            print(f"{name:>10}  RMSE:{m['RMSE']:.4f} (Δ{m['RMSE']-b['RMSE']:+.4f})"
-                  f"  MAPE:{m['MAPE']:.2f}% (Δ{m['MAPE']-b['MAPE']:+.2f})"
-                  f"  MAE:{m['MAE']:.4f} (Δ{m['MAE']-b['MAE']:+.4f})"
-                  f"  R²:{m['R2']:.4f} (Δ{m['R2']-b['R2']:+.4f})")
-
-    _print_std_delta_table(std_metrics, 'Model4')  # 说明系列模型相对 M4 的有益性
-    _print_std_delta_table(std_metrics, 'Model5')  # 说明 M5 在系列中的优异性
-
-    # === 原始域 RMSE：相对 Model4/Model5 的改进量 ===
-    rmse_orig = {
-        'Model1': test_rmse1_real, 'Model2': test_rmse2_real, 'Model3': test_rmse3_real,
-        'Model4': test_rmse4_real, 'Model5': test_rmse5_real,
-        'PatchTST': rmse_patch_real, 'LightGBM': rmse_lgb_real,
-        'SARIMA': rmse_sarima_real, 's-naive': rmse_snaive_real
-    }
-
-    def _print_rmse_delta(rmse_dict, baseline_name):
-        b = rmse_dict[baseline_name]
-        print(f"\n=== Original-scale RMSE: Δ vs {baseline_name} (越负越好) ===")
-        for k, v in rmse_dict.items():
-            print(f"{k:>10}  RMSE:{v:.2f} (Δ{v-b:+.2f})")
-
-    _print_rmse_delta(rmse_orig, 'Model4')  # 相对 M4 的改进：系列有益性
-    _print_rmse_delta(rmse_orig, 'Model5')  # 相对 M5 的改进：M5 的优异性
-
     # ----------------- 3) 训练曲线 -----------------
     plot_training_curves_allmetrics(hist1, model_name = 'EModel_FeatureWeight1')
     plot_training_curves_allmetrics(hist2, model_name = 'EModel_FeatureWeight2')
@@ -2722,29 +2260,7 @@ def main(use_log_transform = True, min_egrid_threshold = 1.0):
 
     print("[Info] Processing complete!")
 
-    # === 在训练和评估都完成之后，加以下几行 ===
-    feature_dim = X_train_seq.shape[-1]
-
-    # A) 生成效率表（训练/推理延迟、参数、峰值显存/内存）
-    models_for_eff = {
-        'Model1': best_model1, 'Model2': best_model2, 'Model3': best_model3,
-        'Model4': best_model4, 'Model5': best_model5, 'PatchTST': best_patch
-    }
-    eff_df = export_efficiency_table(models_for_eff, feature_dim = feature_dim, window_size = window_size, batch_sizes = [1, 128], device = device)
-
-    # B) 退化曲线（无需重训）：对核心模型（例如 Model4）做 INT8 动态量化 + 轻量剪枝
-    deg_df = make_degradation_curve('Model4', best_model4, test_loader, y_test_seq, feature_dim, window_size, device, sparsities = [0.3, 0.5, 0.7])
-
-    # C) Fig.14 升级版本（任选其一或两个都生成）
-    # (i) 分面图：每模型单独一幅，且在每个误差 bin 标注占比
-    plot_error_histograms_faceted(y_actual_real = labels_new_real,
-                              predictions_dict = all_model_preds_ext,
-                              bins = 30, bin_range = (-20000, 20000))
-    # (ii) 堆叠归一化直方图：所有模型在同图堆叠，每个 bin 顶部标总占比
-    plot_error_histograms_stacked(y_actual_real = labels_new_real,
-                              predictions_dict = all_model_preds_ext,
-                              bins = 30, bin_range = (-20000, 20000))
-
+    
 
 if __name__ == "__main__":
     main(use_log_transform = True, min_egrid_threshold = 1.0)

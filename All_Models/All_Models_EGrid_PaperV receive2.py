@@ -1230,7 +1230,7 @@ def plot_training_curves_allmetrics(hist_dict, model_name = 'Model'):
     plt.tight_layout()
     plt.show()
 
-def plot_dataset_distribution(timestamps, title):
+def plot_dataset_distribution(timestamps):
     """
     [Visualization Module - Dataset Time Distribution]
     - Plot the time distribution of the dataset based on timestamps.
@@ -1579,7 +1579,7 @@ def export_latency_memory_tables(models: dict,
                                              warmup_steps=train_warmup, 
                                              timed_steps=train_iters)
             rows_trn.append({
-                "Model": name, "Device": "GPU",
+                "Model": name, "Device": "CUDA",
                 "Batch(train_loader)": train_loader.batch_size,
                 "p50_ms": round(tp50, 3), "p95_ms": round(tp95, 3)
             })
@@ -1607,7 +1607,7 @@ def export_latency_memory_tables(models: dict,
     df_inf = pd.DataFrame(rows_inf)
     df_trn = pd.DataFrame(rows_trn)
 
-    # 保存合并 CSV（便于投稿材料归档）
+    # 保存合并 CSV
     df_inf.assign(Phase = "Inference").to_csv(out_csv.replace(".csv", "_inference.csv"), index = False)
     df_trn.assign(Phase = "TrainingStep").to_csv(out_csv.replace(".csv", "_trainstep.csv"), index = False)
     print(f"[Saved] {out_csv.replace('.csv', '_inference.csv')}")

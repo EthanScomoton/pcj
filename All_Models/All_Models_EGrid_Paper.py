@@ -1449,11 +1449,11 @@ def plot_stacked_proportion_histogram(y_actual_real,
     
     # 设置颜色映射 - 使用更鲜艳的颜色
     model_colors = {
-        'Model1': '#FF6B6B',  # 红色
-        'Model2': '#FFA500',  # 橙色  
-        'Model3': '#4ECDC4',  # 青色
-        'Model4': '#45B7D1',  # 蓝色
-        'Model5': '#9B59B6',  # 紫色
+        'Model1': '#B0C4DE',  # 红色
+        'Model2': '#87CEEB',  # 橙色  
+        'Model3': '#ADD8E6',  # 青色
+        'Model4': '#00008B',  # 蓝色
+        'Model5': '#DC143C',  # 紫色
     }
     
     # 如果没有指定xlim，自动计算
@@ -1520,22 +1520,13 @@ def plot_stacked_proportion_histogram(y_actual_real,
     ax.set_axisbelow(True)
     
     # 设置标签
-    ax.set_xlabel('Prediction Error (kW·h)', fontsize=12)
-    ax.set_ylabel('Proportion', fontsize=12)
-    
-    if title:
-        ax.set_title(title, fontsize=14, fontweight='bold')
+    ax.set_xlabel('Prediction Error (kW·h)', fontsize=17)
+    ax.set_ylabel('Proportion', fontsize=17)
     
     # 设置y轴刻度为百分比格式
     y_ticks = np.arange(0, 1.1, 0.2)
     ax.set_yticks(y_ticks)
     ax.set_yticklabels([f'{int(y*100)}%' for y in y_ticks])
-    
-    # 创建图例
-    ax.legend(title='Model', 
-             loc='upper right',
-             framealpha=0.95,
-             edgecolor='gray')
     
     plt.tight_layout()
     plt.show()

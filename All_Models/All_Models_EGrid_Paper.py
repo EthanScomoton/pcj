@@ -1503,7 +1503,7 @@ def plot_stacked_proportion_histogram(y_actual_real,
                      color=color,
                      edgecolor='white',
                      linewidth=0.5,
-                     alpha=0.9,
+                     alpha=0.7,
                      label=name)
         bars.append(bar)
         labels.append(name)
@@ -1604,7 +1604,7 @@ def plot_model_preference_distribution(y_actual_real,
                color=colors[j % len(colors)],
                label=f'{model}',
                edgecolor='white',
-               alpha=0.9,
+               alpha=0.7,
                linewidth=0.5)
         bottom += preference_matrix[:, j]
     

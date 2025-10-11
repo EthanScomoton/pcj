@@ -1442,12 +1442,10 @@ def plot_stacked_proportion_histogram(y_actual_real,
         x轴范围，如 (-20000, 20000)
     figsize : tuple
         图形大小
-    title : str
-        图表标题
     """
     import matplotlib.patches as mpatches
     
-    # 设置颜色映射 - 使用更鲜艳的颜色
+    # 设置颜色映射 
     model_colors = {
         'Model1': '#1f77b4',
         'Model2': '#ff7f0e',
@@ -1610,10 +1608,8 @@ def plot_model_preference_distribution(y_actual_real,
         bottom += preference_matrix[:, j]
     
     # 美化图表
-    ax.set_xlabel('Data Segment', fontsize=12)
-    ax.set_ylabel('Model Preference Score', fontsize=12)
-    ax.set_title('Model Performance Preference Distribution Across Data Segments', 
-                 fontsize=14, fontweight='bold')
+    ax.set_xlabel('Data Segment', fontsize=19)
+    ax.set_ylabel('Model Preference Score', fontsize=19)
     ax.set_xticks(x)
     ax.set_xticklabels([str(i+1) for i in x])
     ax.set_ylim(0, 1)

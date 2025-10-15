@@ -6,7 +6,14 @@ import os
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-def optimize_storage_size(demand_data, price_data = None, min_capacity = 10000, max_capacity = 40000, step = 150,min_power = 5000, max_power = 20000, power_step = 100):
+def optimize_storage_size(demand_data, 
+                        price_data = None, 
+                        min_capacity = 10000, 
+                        max_capacity = 40000, 
+                        step = 150,
+                        min_power = 5000, 
+                        max_power = 20000, 
+                        power_step = 100):
     """
     基于经济性指标寻找最优储能规模
     
@@ -39,7 +46,7 @@ def optimize_storage_size(demand_data, price_data = None, min_capacity = 10000, 
     
     # 加载训练好的模型权重
     try:
-        model_path = 'best_EModel_FeatureWeight4.pth'
+        model_path = 'best_EModel_FeatureWeight5.pth'
         if os.path.exists(model_path):
             # 检查模型特征维度是否匹配
             pretrained_dict = torch.load(model_path, map_location=device)

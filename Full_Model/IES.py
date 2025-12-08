@@ -8,6 +8,10 @@ import numpy as np
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')  
 class IntegratedEnergySystem:
+    # 全局提示控制，避免多个实例重复打印
+    _global_feature_dim_printed = False
+    _global_seq_warn_shown = False
+    _global_local_seq_warn_shown = False
     def __init__(self, capacity_kwh, bess_power_kw, prediction_model=None, verbose=True):
         """
         港口综合能源系统
@@ -25,11 +29,14 @@ class IntegratedEnergySystem:
         self.energy_optimizer = EnergyOptimizer(self.bess)
         self.renewable_optimizer = RenewableEnergyOptimizer()
         self.prediction_model = prediction_model
+        self.window_size = getattr(prediction_model, 'window_size', 20) if prediction_model is not None else 20
         
         # 检查模型的特征维度
-        if prediction_model is not None and verbose:
+        if prediction_model is not None:
             self.expected_feature_dim = prediction_model.feature_dim
-            print(f"模型期望的特征维度: {self.expected_feature_dim}")
+            if verbose and not IntegratedEnergySystem._global_feature_dim_printed:
+                print(f"模型期望的特征维度: {self.expected_feature_dim}")
+                IntegratedEnergySystem._global_feature_dim_printed = True
         else:
             self.expected_feature_dim = None
         
@@ -90,6 +97,17 @@ class IntegratedEnergySystem:
         # 不应该到达这里
         return features
 
+    def _build_window_sequence(self, df, end_index):
+        """
+        构造长度为 window_size 的滑窗特征序列，缺口用首行重复填充
+        """
+        seq = []
+        start = end_index - self.window_size + 1
+        for idx in range(start, end_index + 1):
+            safe_idx = max(0, min(idx, len(df) - 1))
+            seq.append(extract_features(df, safe_idx))
+        return np.array(seq, dtype=np.float32)
+
     def predict_demand(self, features):
         """使用预测模型预测能源需求"""
         if self.prediction_model is None:
@@ -117,10 +135,10 @@ class IntegratedEnergySystem:
             if len(features.shape) == 1:
                 # 将一维特征转换为 [1, 1, feature_dim]
                 features = features.reshape(1, 1, -1)
-            # 如果是二维特征矩阵但缺少seq维度
+            # 如果是二维特征矩阵（seq_len, feature_dim），转为 [1, seq_len, feature_dim]
             elif len(features.shape) == 2:
-                # 将二维特征转换为 [batch_size, 1, feature_dim]
-                features = features.reshape(features.shape[0], 1, -1)
+                seq_len, feat_dim = features.shape
+                features = features.reshape(1, seq_len, feat_dim)
             
             # 获取序列长度
             seq_len = features.shape[1]
@@ -138,9 +156,9 @@ class IntegratedEnergySystem:
                     features       = repeated[:, :window_size, :]
 
                 # 仅首次打印提示，避免终端刷屏
-                if not hasattr(self, '_seq_warn_shown'):
+                if not IntegratedEnergySystem._global_seq_warn_shown:
                     print(f"序列长度调整: 从 {seq_len} 扩展到 {window_size}（仅首次提示）")
-                    self._seq_warn_shown = True
+                    IntegratedEnergySystem._global_seq_warn_shown = True
 
                 seq_len = window_size  # 更新序列长度
         
@@ -158,10 +176,10 @@ class IntegratedEnergySystem:
                     features    = np.concatenate([features, padding], axis=1)
 
                     # 同样只提示一次
-                    if not hasattr(self, '_local_seq_warn_shown'):
+                    if not IntegratedEnergySystem._global_local_seq_warn_shown:
                         print(f"Local attention 序列长度调整: 从 {seq_len} "
                               f"填充到 {features.shape[1]}（仅首次提示）")
-                        self._local_seq_warn_shown = True
+                        IntegratedEnergySystem._global_local_seq_warn_shown = True
                 
             inputs = torch.tensor(features, dtype=torch.float32).to(device)
             outputs = self.prediction_model(inputs)
@@ -187,14 +205,14 @@ class IntegratedEnergySystem:
         time_step_hours = 1.0  # 假设每小时数据
         
         for t in range(time_steps):
-            # 提取当前时间步的特征
-            current_features = extract_features(historic_data, t)
+            # 构造当前时间步窗口特征
+            current_seq = self._build_window_sequence(historic_data, t)
             
-            # 预测未来24小时需求
+            # 预测未来24小时需求（基于各自窗口）
             predicted_demand = []
             for h in range(24):
-                future_features = extract_features(historic_data, t + h)
-                pred = self.predict_demand(future_features)
+                future_seq = self._build_window_sequence(historic_data, t + h)
+                pred = self.predict_demand(future_seq)
                 predicted_demand.append(pred)
                 
             # 2️⃣ 保证是一维向量，避免形状 (24,1) 触发 cvxpy 维度冲突

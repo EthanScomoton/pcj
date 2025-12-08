@@ -46,7 +46,7 @@ def optimize_storage_size(demand_data,
     
     # 加载训练好的模型权重
     try:
-        model_path = 'best_EModel_FeatureWeight5.pth'
+        model_path = 'best_EModel_FeatureWeight4.pth'
         if os.path.exists(model_path):
             # 检查模型特征维度是否匹配
             pretrained_dict = torch.load(model_path, map_location=device)

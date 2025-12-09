@@ -3,6 +3,7 @@ from EF  import calculate_economic_metrics
 from All_Models_EGrid_Paper import (EModel_FeatureWeight4)
 import torch
 import os
+import numpy as np
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -19,7 +20,6 @@ def optimize_storage_size(demand_data,
     
     参数:
         demand_data: 包含需求数据的DataFrame
-        renewable_data: 包含可再生发电数据的DataFrame
         price_data: 包含电价数据的DataFrame(可选)
         min_capacity: 考虑的最小储能容量(kWh)
         max_capacity: 考虑的最大储能容量(kWh)
@@ -49,7 +49,7 @@ def optimize_storage_size(demand_data,
         model_path = os.path.join(os.path.dirname(__file__), 'best_EModel_FeatureWeight4.pth')
         if os.path.exists(model_path):
             # 检查模型特征维度是否匹配
-            pretrained_dict = torch.load(model_path, map_location=device)
+            pretrained_dict = torch.load(model_path, map_location=device, weights_only=True)
             model_feature_dim = pretrained_dict['feature_importance'].size(0)
              
             if model_feature_dim == feature_dim:
@@ -58,15 +58,18 @@ def optimize_storage_size(demand_data,
                 print(f"成功加载预训练模型，特征维度: {model_feature_dim}")
             else:
                 # 特征维度不匹配，尝试转换模型
-                from convert_model import convert_model_weights
                 print(f"特征维度不匹配 (模型: {model_feature_dim}, 当前: {feature_dim})，尝试转换模型...")
+                from convert_model import convert_model_weights
                  
                 # 转换模型权重
                 try:
                     converted_model = convert_model_weights(
                         pretrained_path=model_path,
                         new_feature_dim=feature_dim,
-                        output_path="current_EModel_FeatureWeight4.pth"
+                        output_path="current_EModel_FeatureWeight4.pth",
+                        feature_cols=feature_cols,
+                        data_df=demand_data,
+                        target_col='E_grid'
                     )
                      
                     # 使用转换后的模型，确保模型在同一设备上
@@ -94,11 +97,12 @@ def optimize_storage_size(demand_data,
                 prediction_model=prediction_model  # 使用模型实例
             )
             
-            # 使用储能系统的基准场景
+            # 使用储能系统的基准场景 (无储能)
+            # 修改点：将基准系统的容量和功率设为0，代表没有电池
             baseline_system = IntegratedEnergySystem(
-                capacity_kwh=10000,  # 储能适用
-                bess_power_kw=10000,      # 储能
-                prediction_model=prediction_model  # 使用同一个模型实例
+                capacity_kwh=0,       # 修改为0，确保基准是没有电池的
+                bess_power_kw=0,      # 修改为0
+                prediction_model=prediction_model
             )
             
             # 运行模拟
@@ -146,6 +150,8 @@ def optimize_storage_size(demand_data,
                 
             except Exception as e:
                 print(f"配置评估失败: 容量={capacity}kWh, 功率={power}kW, 错误: {e}")
+                import traceback
+                traceback.print_exc()
                 # 添加默认的失败结果，以便优化可以继续
                 results.append({
                     'capacity': capacity,
@@ -191,7 +197,20 @@ def visualize_optimization_results(results):
     """
     import matplotlib.pyplot as plt
     import pandas as pd
+    import platform
+    import numpy as np
     
+    # --- 字体设置修正 ---
+    system_name = platform.system()
+    if system_name == 'Windows':
+        plt.rcParams['font.sans-serif'] = ['SimHei']
+    elif system_name == 'Darwin':
+        plt.rcParams['font.sans-serif'] = ['Arial Unicode MS']
+    else:
+        plt.rcParams['font.sans-serif'] = ['WenQuanYi Micro Hei']
+    plt.rcParams['axes.unicode_minus'] = False
+    # --------------------
+
     # 转换为DataFrame
     df = pd.DataFrame(results['all_results'])
     
@@ -199,11 +218,16 @@ def visualize_optimization_results(results):
     npv_pivot = df.pivot(index = 'capacity', columns = 'power', values = 'npv')
     payback_pivot = df.pivot(index = 'capacity', columns = 'power', values = 'payback_period')
     
+    # --- 处理 inf 值以便绘图 ---
+    # 将 inf 替换为 NaN，这样 matplotlib 会将其留白或显示特定颜色，而不是报错或显示空白
+    payback_pivot = payback_pivot.replace([np.inf, -np.inf], np.nan)
+    # -------------------------
+
     # 创建图表
     fig, axes = plt.subplots(1, 2, figsize = (18, 8))
     
     # NPV热图
-    im1 = axes[0].imshow(npv_pivot, cmap='viridis')
+    im1 = axes[0].imshow(npv_pivot, cmap='viridis', aspect='auto', origin='lower')
     axes[0].set_title('净现值(NPV)')
     axes[0].set_xlabel('功率(kW)')
     axes[0].set_ylabel('容量(kWh)')
@@ -216,12 +240,19 @@ def visualize_optimization_results(results):
     # 标记最佳NPV
     best_capacity = results['best_config']['capacity']
     best_power = results['best_config']['power']
-    best_idx = (list(npv_pivot.index).index(best_capacity), list(npv_pivot.columns).index(best_power))
-    axes[0].plot(best_idx[1], best_idx[0], 'r*', markersize=15)
+    
+    # 只有当最佳配置存在于 pivot 表中时才标记 (防止索引错误)
+    if best_capacity in npv_pivot.index and best_power in npv_pivot.columns:
+        best_idx = (list(npv_pivot.index).index(best_capacity), list(npv_pivot.columns).index(best_power))
+        axes[0].plot(best_idx[1], best_idx[0], 'r*', markersize=15)
     
     # 回收期热图
-    im2 = axes[1].imshow(payback_pivot, cmap='cool')
-    axes[1].set_title('回收期')
+    # 使用 'cool' 颜色映射，并将 NaN 设为灰色
+    current_cmap = plt.cm.cool
+    current_cmap.set_bad(color='lightgray')
+    
+    im2 = axes[1].imshow(payback_pivot, cmap=current_cmap, aspect='auto', origin='lower')
+    axes[1].set_title('回收期 (灰色表示无法回收)')
     axes[1].set_xlabel('功率(kW)')
     axes[1].set_ylabel('容量(kWh)')
     axes[1].set_xticks(range(len(payback_pivot.columns)))
@@ -238,9 +269,14 @@ def visualize_optimization_results(results):
     print(f"容量: {best_capacity} kWh")
     print(f"功率: {best_power} kW")
     print(f"净现值(NPV): {results['best_config']['npv']:.2f} 元")
-    print(f"内部收益率(IRR): {results['best_config']['irr'] * 100:.2f}%")
+    
+    irr_val = results['best_config']['irr']
+    if irr_val is not None:
+        print(f"内部收益率(IRR): {irr_val * 100:.2f}%")
+    else:
+        print(f"内部收益率(IRR): 无解")
+        
     print(f"回收期: {results['best_config']['payback_period']:.2f} 年")
-    print(f"内部收益率(IRR): {results['best_config']['irr']*100:.2f}%")
     print(f"年节省: {results['best_config']['annual_savings']:.2f} 元")
     print(f"峰值削减: {results['best_config']['peak_reduction']:.2f}%")
     print(f"电网用电减少: {results['best_config']['grid_energy_reduction']:.2f}%")

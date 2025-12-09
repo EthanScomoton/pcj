@@ -20,8 +20,12 @@ class BatteryEnergyStorage:
         self.max_soc = max_soc
         
         # 初始状态
-        self.soc = initial_soc
-        self.energy_stored = initial_soc * capacity_kwh
+        if capacity_kwh > 0:
+            self.soc = initial_soc
+            self.energy_stored = initial_soc * capacity_kwh
+        else:
+            self.soc = 0.0
+            self.energy_stored = 0.0
         
         # 记录历史数据
         self.soc_history = []
@@ -29,6 +33,12 @@ class BatteryEnergyStorage:
         
     def charge(self, power_kw, time_hours=1.0):
         """以给定功率充电指定时间"""
+        # 特殊处理：如果容量为0，直接返回0
+        if self.capacity <= 0:
+            self.soc_history.append(0.0)
+            self.power_history.append(0.0)
+            return 0.0
+
         # 限制功率不超过最大值
         power_kw = min(power_kw, self.max_power)
         
@@ -40,7 +50,11 @@ class BatteryEnergyStorage:
         actual_energy_added = new_energy - self.energy_stored
         
         # 计算实际使用的功率
-        actual_power = actual_energy_added / (time_hours * self.charging_efficiency)
+        # 防除以零：如果时间或效率极小，避免错误
+        if time_hours > 0 and self.charging_efficiency > 0:
+            actual_power = actual_energy_added / (time_hours * self.charging_efficiency)
+        else:
+            actual_power = 0.0
         
         # 更新状态
         self.energy_stored = new_energy
@@ -54,6 +68,12 @@ class BatteryEnergyStorage:
     
     def discharge(self, power_kw, time_hours=1.0):
         """以给定功率放电指定时间"""
+        # 特殊处理：如果容量为0，直接返回0
+        if self.capacity <= 0:
+            self.soc_history.append(0.0)
+            self.power_history.append(0.0)
+            return 0.0
+
         # 限制功率不超过最大值
         power_kw = min(power_kw, self.max_power)
         
@@ -62,10 +82,16 @@ class BatteryEnergyStorage:
         
         # 检查是否低于容量下限
         energy_available = self.energy_stored - (self.capacity * self.min_soc)
+        # 确保energy_available不小于0
+        energy_available = max(0.0, energy_available)
+        
         actual_energy_removed = min(energy_to_remove, energy_available)
         
         # 计算实际提供的功率
-        actual_power = actual_energy_removed * self.discharging_efficiency / time_hours
+        if time_hours > 0:
+            actual_power = actual_energy_removed * self.discharging_efficiency / time_hours
+        else:
+            actual_power = 0.0
         
         # 更新状态
         self.energy_stored -= actual_energy_removed

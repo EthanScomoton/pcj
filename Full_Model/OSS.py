@@ -66,7 +66,7 @@ def optimize_storage_size(demand_data,
                     converted_model = convert_model_weights(
                         pretrained_path=model_path,
                         new_feature_dim=feature_dim,
-                        output_path="current_EModel_FeatureWeight4.pth"
+                        output_path="current_EMo del_FeatureWeight4.pth"
                     )
                      
                     # 使用转换后的模型，确保模型在同一设备上

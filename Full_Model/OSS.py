@@ -8,11 +8,11 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 def optimize_storage_size(demand_data, 
                         price_data = None, 
-                        min_capacity = 10000, 
-                        max_capacity = 40000, 
-                        step = 150,
-                        min_power = 5000, 
-                        max_power = 20000, 
+                        min_capacity = 1000, 
+                        max_capacity = 5000, 
+                        step = 500,
+                        min_power = 200, 
+                        max_power = 1000, 
                         power_step = 100):
     """
     基于经济性指标寻找最优储能规模
@@ -96,24 +96,23 @@ def optimize_storage_size(demand_data,
             
             # 使用储能系统的基准场景
             baseline_system = IntegratedEnergySystem(
-                capacity_kwh=200000,  # 储能
-                bess_power_kw=200000,      # 储能
+                capacity_kwh=10000,  # 储能适用
+                bess_power_kw=10000,      # 储能
                 prediction_model=prediction_model  # 使用同一个模型实例
             )
             
             # 运行模拟
-            try:
-                # 减少模拟时间步数以加快优化过程
+            try:        
                 sim_time_steps = min(72, len(demand_data))  # 使用较短的时间段进行优化
                 
                 baseline_results = baseline_system.simulate_operation(
-                    historic_data=demand_data,
-                    time_steps=sim_time_steps,
-                    price_data=price_data
+                    historic_data = demand_data,
+                    time_steps = sim_time_steps,
+                    price_data = price_data
                 )
                 
                 system_results = system.simulate_operation(
-                    historic_data=demand_data,
+                    historic_data=demand_data, 
                     time_steps=sim_time_steps,
                     price_data=price_data
                 )

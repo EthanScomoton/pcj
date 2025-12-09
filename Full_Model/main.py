@@ -9,6 +9,19 @@ if __name__ == "__main__":
     import torch
     import pandas as pd
     import os
+    import matplotlib.pyplot as plt
+    import platform
+
+    # 根据操作系统自动选择中文字体
+    system_name = platform.system()
+    if system_name == 'Windows':
+        plt.rcParams['font.sans-serif'] = ['SimHei']  # Windows使用黑体
+    elif system_name == 'Darwin':  # Mac OS
+        plt.rcParams['font.sans-serif'] = ['Arial Unicode MS']  # Mac使用Arial Unicode MS
+    else:
+        plt.rcParams['font.sans-serif'] = ['WenQuanYi Micro Hei']  # Linux可能需要的字体
+
+    plt.rcParams['axes.unicode_minus'] = False  # 解决负号显示为方块的问题
     
     print("开始执行港口综合能源系统优化...")
     
@@ -163,7 +176,7 @@ if __name__ == "__main__":
     
     print(f"\n使用最优配置 ({optimal_capacity} kWh, {optimal_power} kW) 进行系统模拟...")
     optimal_system = IntegratedEnergySystem(
-        bess_capacity_kwh=optimal_capacity,
+        capacity_kwh=optimal_capacity,
         bess_power_kw=optimal_power,
         prediction_model=best_model
     )
@@ -179,7 +192,7 @@ if __name__ == "__main__":
     # 与基准系统比较
     print("模拟基准系统运行...")
     baseline_system = IntegratedEnergySystem(
-        bess_capacity_kwh=0,  # 无储能
+        capacity_kwh=0,  # 无储能
         bess_power_kw=0,      # 无储能
         prediction_model=best_model
     )

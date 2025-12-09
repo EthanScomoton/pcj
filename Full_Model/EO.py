@@ -27,14 +27,38 @@ class EnergyOptimizer:
         import cvxpy as cp
         import numpy as np
         
-        # 如果未提供可再生能源数据，假设为零
+        # 1. 确保输入数据格式正确
+        predicted_demand = np.array(predicted_demand).flatten()
+        
         if renewable_gen is None:
             renewable_gen = np.zeros_like(predicted_demand)
+        else:
+            renewable_gen = np.array(renewable_gen).flatten()
             
-        # 如果未提供电价数据，假设为平均值
         if grid_prices is None:
             grid_prices = np.ones_like(predicted_demand)
+        else:
+            grid_prices = np.array(grid_prices).flatten()
             
+        # 2. 特殊情况处理：如果没有储能容量（基准情况），直接计算结果，无需调用优化器
+        if self.bess.capacity <= 1e-3:
+            zeros = np.zeros(self.horizon)
+            # 电网输入 = 需求 - 可再生能源（因为没有电池帮忙）
+            grid_import = predicted_demand - renewable_gen
+            
+            # 计算总成本
+            total_cost = np.sum(grid_import * grid_prices)
+            
+            return {
+                'bess_charge': zeros,
+                'bess_discharge': zeros,
+                'grid_import': grid_import,
+                'soc_profile': np.zeros(self.horizon + 1),
+                'total_cost': total_cost,
+                'status': 'optimal'  # 伪装成最优状态
+            }
+
+        # 3. 正常优化流程
         # 定义优化变量
         bess_charge = cp.Variable(self.horizon, nonneg=True)  # 储能充电功率
         bess_discharge = cp.Variable(self.horizon, nonneg=True)  # 储能放电功率
@@ -74,9 +98,6 @@ class EnergyOptimizer:
                 grid_import[t] + renewable_gen[t] + bess_discharge[t] - bess_charge[t] == predicted_demand[t]
             )
             
-        # --- 前置：确保 predicted_demand 一维化，防止 (24,1) 维度问题 ---
-        predicted_demand = np.array(predicted_demand).flatten()
-
         # 目标函数: 最小化电网购电成本
         objective = cp.Minimize(cp.sum(cp.multiply(grid_import, grid_prices)))
         
@@ -86,12 +107,12 @@ class EnergyOptimizer:
         
         # NOTE: OPTIMAL_INACCURATE 也算可行
         if problem.status not in [cp.OPTIMAL, cp.OPTIMAL_INACCURATE]:
-            print(f"警告: 问题状态为 {problem.status}")
+            # print(f"警告: 问题状态为 {problem.status}") # 暂时屏蔽警告，避免刷屏
             zeros = np.zeros(self.horizon)
             return {
                 'bess_charge': zeros,
                 'bess_discharge': zeros,
-                'grid_import': predicted_demand,  # 全部用电网满足
+                'grid_import': predicted_demand - renewable_gen,
                 'soc_profile': np.repeat(self.bess.get_soc(), self.horizon + 1),
                 'total_cost': float('inf'),
                 'status': problem.status

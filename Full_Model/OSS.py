@@ -46,7 +46,7 @@ def optimize_storage_size(demand_data,
     
     # 加载训练好的模型权重
     try:
-        model_path = 'best_EModel_FeatureWeight4.pth'
+        model_path = os.path.join(os.path.dirname(__file__), 'best_EModel_FeatureWeight4.pth')
         if os.path.exists(model_path):
             # 检查模型特征维度是否匹配
             pretrained_dict = torch.load(model_path, map_location=device)
@@ -66,7 +66,7 @@ def optimize_storage_size(demand_data,
                     converted_model = convert_model_weights(
                         pretrained_path=model_path,
                         new_feature_dim=feature_dim,
-                        output_path="current_EMo del_FeatureWeight4.pth"
+                        output_path="current_EModel_FeatureWeight4.pth"
                     )
                      
                     # 使用转换后的模型，确保模型在同一设备上

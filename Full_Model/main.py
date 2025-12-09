@@ -45,7 +45,7 @@ if __name__ == "__main__":
     print(f"\n使用设备: {device}")
 
     # 检查预训练模型可用性
-    model_path = 'best_EModel_FeatureWeight4.pth'
+    model_path = os.path.join(os.path.dirname(__file__), 'best_EModel_FeatureWeight4.pth')
     
     # 创建预测模型
     print("创建预测模型...")
@@ -62,7 +62,7 @@ if __name__ == "__main__":
     print(f"\n创建模型使用特征维度: {feature_dim_to_use}")
     
     # 如果预训练模型存在，尝试加载权重
-    if os.path.exists(model_path):
+    if os.path.exists(model_path)==True:
         try:
             pretrained_model_dict = torch.load(model_path, map_location=device, weights_only=True)
             # 从预训练模型参数中获取特征维度

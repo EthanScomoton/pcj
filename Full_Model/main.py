@@ -159,10 +159,10 @@ if __name__ == "__main__":
         demand_data=data_df,
         price_data=price_df,
         min_capacity=500,
-        max_capacity=5000,
+        max_capacity=1000,
         step=100,
         min_power=200,
-        max_power=1000,
+        max_power=500,
         power_step=100
     )
     

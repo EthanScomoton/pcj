@@ -125,9 +125,13 @@ def calculate_economic_metrics(costs, investment_cost, discount_rate=0.05, lifet
     """
     import numpy as np
     # 计算年度成本节省
-    baseline_cost = costs[0]          # 基准方案总成本
-    system_cost = np.mean(costs[1:])  # 储能方案总成本（取平均值代表典型年）
-    annual_savings = baseline_cost - system_cost
+    baseline_cost = costs[0]
+    system_cost = np.mean(costs[1:])
+    
+    # 假设输入的是一个月(30天)的数据，需要乘以12得到年节省
+    # 更严谨的做法是根据模拟时长动态计算，这里为了简单直接修正逻辑
+    simulation_savings = baseline_cost - system_cost
+    annual_savings = simulation_savings * 12  # <--- 乘以12，修正为年化收益
     # 构建现金流列表：第0年为-投资，其后每年为annual_savings
     cash_flows = [-investment_cost] + [annual_savings] * lifetime
     # 计算净现值 NPV

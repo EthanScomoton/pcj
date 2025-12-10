@@ -93,8 +93,6 @@ class IntegratedEnergySystem:
                 padded[:, :, :current_dim] = features
                 
             return padded
-            
-        # 不应该到达这里
         return features
 
     def _build_window_sequence(self, df, end_index):
@@ -297,7 +295,15 @@ class IntegratedEnergySystem:
         import matplotlib.dates as mdates
         
         # --- 字体设置 ---
-        plt.rcParams['font.family'] = 'Times New Roman'
+        import platform
+        system_name = platform.system()
+        if system_name == 'Windows':
+            plt.rcParams['font.sans-serif'] = ['SimHei']
+        elif system_name == 'Darwin':  # Mac OS
+            plt.rcParams['font.sans-serif'] = ['Arial Unicode MS']
+        else:
+            plt.rcParams['font.sans-serif'] = ['WenQuanYi Micro Hei']
+        
         plt.rcParams['axes.unicode_minus'] = False
         # --------------------
         

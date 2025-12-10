@@ -125,8 +125,8 @@ def optimize_storage_size(demand_data,
                 kpis = system.calculate_kpis(system_results, baseline_results)
                 
                 # 计算经济指标
-                # 假设储能成本为2000元/kWh和800元/kW
-                investment_cost = capacity * 2000 + power * 800
+                # 容量 1000元/kWh, 功率 500元/kW
+                investment_cost = capacity * 1000 + power * 500
                 
                 economic_metrics = calculate_economic_metrics(
                     costs=[baseline_results['cost'].sum(), system_results['cost'].sum()],

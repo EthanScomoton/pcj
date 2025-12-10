@@ -288,23 +288,16 @@ class IntegratedEnergySystem:
 
     def visualize_results(self, results_df):
         """
-        可视化模拟结果
+        可视化模拟结果 (English version with Times New Roman)
         
         参数:
             results_df: 包含模拟结果的DataFrame
         """
         import matplotlib.pyplot as plt
         import matplotlib.dates as mdates
-        import platform
         
-        # --- 字体设置修正 ---
-        system_name = platform.system()
-        if system_name == 'Windows':
-            plt.rcParams['font.sans-serif'] = ['SimHei']
-        elif system_name == 'Darwin':
-            plt.rcParams['font.sans-serif'] = ['Arial Unicode MS']
-        else:
-            plt.rcParams['font.sans-serif'] = ['WenQuanYi Micro Hei']
+        # --- 字体设置 ---
+        plt.rcParams['font.family'] = 'Times New Roman'
         plt.rcParams['axes.unicode_minus'] = False
         # --------------------
         
@@ -316,33 +309,33 @@ class IntegratedEnergySystem:
             results_df['timestamp'] = pd.to_datetime(results_df['timestamp'])
         
         # 图1: 需求、可再生能源和电网输入
-        axes[0].plot(results_df['timestamp'], results_df['actual_demand'], 'b-', label='实际需求')
-        axes[0].plot(results_df['timestamp'], results_df['predicted_demand'], 'b--', label='预测需求')
-        axes[0].plot(results_df['timestamp'], results_df['renewable_generation'], 'g-', label='可再生能源发电')
-        axes[0].plot(results_df['timestamp'], results_df['grid_import'], 'r-', label='电网输入')
-        axes[0].set_ylabel('功率 (kW)')
-        axes[0].set_title('能源平衡')
+        axes[0].plot(results_df['timestamp'], results_df['actual_demand'], 'b-', label='Actual Demand')
+        axes[0].plot(results_df['timestamp'], results_df['predicted_demand'], 'b--', label='Predicted Demand')
+        axes[0].plot(results_df['timestamp'], results_df['renewable_generation'], 'g-', label='Renewable Generation')
+        axes[0].plot(results_df['timestamp'], results_df['grid_import'], 'r-', label='Grid Import')
+        axes[0].set_ylabel('Power (kW)')
+        axes[0].set_title('Energy Balance')
         axes[0].legend()
         axes[0].grid(True)
         
         # 图2: 储能充放电功率
         axes[1].plot(results_df['timestamp'], results_df['bess_power'], 'k-')
         axes[1].axhline(y=0, color='gray', linestyle='-', alpha=0.3)
-        axes[1].set_ylabel('功率 (kW)')
-        axes[1].set_title('储能功率 (+ 充电, - 放电)')
+        axes[1].set_ylabel('Power (kW)')
+        axes[1].set_title('BESS Power (+ Charge, - Discharge)')
         axes[1].grid(True)
         
         # 图3: 储能荷电状态
         axes[2].plot(results_df['timestamp'], results_df['bess_soc'] * 100, 'b-')
-        axes[2].set_ylabel('荷电状态 (%)')
-        axes[2].set_title('储能荷电状态')
+        axes[2].set_ylabel('SOC (%)')
+        axes[2].set_title('Battery State of Charge')
         axes[2].set_ylim(0, 100)
         axes[2].grid(True)
         
         # 图4: 成本
         axes[3].plot(results_df['timestamp'], results_df['cost'], 'r-')
-        axes[3].set_ylabel('成本')
-        axes[3].set_title('能源成本')
+        axes[3].set_ylabel('Cost (CNY)')
+        axes[3].set_title('Energy Cost')
         axes[3].grid(True)
         
         # 格式化x轴
@@ -350,7 +343,7 @@ class IntegratedEnergySystem:
             ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d %H'))
             ax.xaxis.set_major_locator(mdates.DayLocator(interval=1))
         
-        plt.xlabel('时间')
+        plt.xlabel('Time')
         plt.xticks(rotation=45)
         plt.tight_layout()
         plt.show()

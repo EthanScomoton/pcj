@@ -125,28 +125,36 @@ def optimize_storage_size(demand_data,
                 kpis = system.calculate_kpis(system_results, baseline_results)
                 
                 # 计算经济指标
-                # 容量 1000元/kWh, 功率 500元/kW
+                # 容量 600元/kWh, 功率 200元/kW
                 investment_cost = capacity * 600 + power * 200
                 
                 economic_metrics = calculate_economic_metrics(
                     costs=[baseline_results['cost'].sum(), system_results['cost'].sum()],
-                    investment_cost=investment_cost
+                    investment_cost=investment_cost,
+                    simulation_hours=sim_time_steps  # 用实际模拟小时数年化收益
                 )
+                
+                annual_savings = economic_metrics['annual_savings']
+                adjusted_npv   = economic_metrics['NPV']
+                
+                # 若年化节省为非正数，则将该配置标记为无效，避免被选为“最优”
+                if annual_savings <= 0:
+                    adjusted_npv = float('-inf')
                 
                 # 存储结果
                 results.append({
                     'capacity': capacity,
                     'power': power,
-                    'npv': economic_metrics['NPV'],
+                    'npv': adjusted_npv,
                     'payback_period': economic_metrics['payback_period'],
                     'irr': economic_metrics['IRR'],
-                    'annual_savings': economic_metrics['annual_savings'],
+                    'annual_savings': annual_savings,
                     'peak_reduction': kpis.get('peak_reduction', 0),
                     'grid_energy_reduction': kpis.get('grid_energy_reduction', 0),
                     'self_consumption_rate': kpis.get('self_consumption_rate', 0)
                 })
                 
-                print(f"完成配置评估: 容量={capacity}kWh, 功率={power}kW, NPV={economic_metrics['NPV']:.2f}")
+                print(f"完成配置评估: 容量={capacity}kWh, 功率={power}kW, NPV={economic_metrics['NPV']:.2f}, 年节省={annual_savings:.2f}")
                 
             except Exception as e:
                 print(f"配置评估失败: 容量={capacity}kWh, 功率={power}kW, 错误: {e}")

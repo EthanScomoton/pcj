@@ -119,19 +119,32 @@ def get_renewable_forecast(df, start_index, n_steps):
         'wind': wind_data
     }
 
-def calculate_economic_metrics(costs, investment_cost, discount_rate=0.05, lifetime=10):
+def calculate_economic_metrics(costs, investment_cost, discount_rate=0.05, lifetime=10,
+                               simulation_hours=None, hours_per_year=8760):
     """
     计算储能系统的经济指标，包括净现值(NPV)、回收期、内部收益率(IRR)等。
+    
+    参数:
+        costs: [baseline_cost, system_cost] 或包含多种方案的列表
+        investment_cost: 初始投资成本
+        discount_rate: 折现率
+        lifetime: 项目寿命(年)
+        simulation_hours: 本次模拟覆盖的小时数，用于年化收益；缺省保持原有12倍逻辑
+        hours_per_year: 一年小时数，默认8760
     """
     import numpy as np
     # 计算年度成本节省
     baseline_cost = costs[0]
     system_cost = np.mean(costs[1:])
     
-    # 假设输入的是一个月(30天)的数据，需要乘以12得到年节省
-    # 更严谨的做法是根据模拟时长动态计算，这里为了简单直接修正逻辑
+    # 将模拟期节省转换为年节省：
+    # - 若提供 simulation_hours，则按小时比例年化
+    # - 否则保持原有 12 倍月度年化逻辑，避免破坏现有调用
     simulation_savings = baseline_cost - system_cost
-    annual_savings = simulation_savings * 12  # <--- 乘以12，修正为年化收益
+    if simulation_hours is not None and simulation_hours > 0:
+        annual_savings = simulation_savings * (hours_per_year / simulation_hours)
+    else:
+        annual_savings = simulation_savings * 12  # 保持原有默认假设
     # 构建现金流列表：第0年为-投资，其后每年为annual_savings
     cash_flows = [-investment_cost] + [annual_savings] * lifetime
     # 计算净现值 NPV

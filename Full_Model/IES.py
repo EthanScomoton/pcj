@@ -295,6 +295,18 @@ class IntegratedEnergySystem:
         """
         import matplotlib.pyplot as plt
         import matplotlib.dates as mdates
+        import platform
+        
+        # --- 字体设置修正 ---
+        system_name = platform.system()
+        if system_name == 'Windows':
+            plt.rcParams['font.sans-serif'] = ['SimHei']
+        elif system_name == 'Darwin':
+            plt.rcParams['font.sans-serif'] = ['Arial Unicode MS']
+        else:
+            plt.rcParams['font.sans-serif'] = ['WenQuanYi Micro Hei']
+        plt.rcParams['axes.unicode_minus'] = False
+        # --------------------
         
         # 创建包含子图的图表
         fig, axes = plt.subplots(4, 1, figsize=(14, 16), sharex=True)

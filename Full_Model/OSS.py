@@ -9,10 +9,10 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 def optimize_storage_size(demand_data, 
                         price_data = None, 
-                        min_capacity = 500, 
+                        min_capacity = 100, 
                         max_capacity = 1000, 
                         step = 100,
-                        min_power = 200, 
+                        min_power = 100, 
                         max_power = 500, 
                         power_step = 100):
     """

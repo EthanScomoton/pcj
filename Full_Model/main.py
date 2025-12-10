@@ -158,10 +158,10 @@ if __name__ == "__main__":
     optimization_results = optimize_storage_size(
         demand_data=data_df,
         price_data=price_df,
-        min_capacity=500,
+        min_capacity=0,  # 允许从0开始搜索
         max_capacity=1000,
         step=100,
-        min_power=200,
+        min_power=0,     # 允许从0开始搜索
         max_power=500,
         power_step=100
     )

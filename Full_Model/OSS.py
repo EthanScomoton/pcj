@@ -107,7 +107,7 @@ def optimize_storage_size(demand_data,
             
             # 运行模拟
             try:        
-                sim_time_steps = min(72, len(demand_data))  # 使用较短的时间段进行优化
+                sim_time_steps = min(720, len(demand_data))  # 使用较短的时间段进行优化
                 
                 baseline_results = baseline_system.simulate_operation(
                     historic_data = demand_data,
@@ -126,7 +126,7 @@ def optimize_storage_size(demand_data,
                 
                 # 计算经济指标
                 # 容量 1000元/kWh, 功率 500元/kW
-                investment_cost = capacity * 1000 + power * 500
+                investment_cost = capacity * 600 + power * 200
                 
                 economic_metrics = calculate_economic_metrics(
                     costs=[baseline_results['cost'].sum(), system_results['cost'].sum()],

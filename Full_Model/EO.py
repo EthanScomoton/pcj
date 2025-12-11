@@ -103,11 +103,24 @@ class EnergyOptimizer:
         
         # 求解问题
         problem = cp.Problem(objective, constraints)
-        problem.solve()
         
-        # NOTE: OPTIMAL_INACCURATE 也算可行
+        # 1. 尝试使用 OSQP 求解器 (通常更稳健)
+        try:
+            problem.solve(solver=cp.OSQP, verbose=False)
+        except Exception:
+            pass
+
+        # 2. 如果 OSQP 失败或结果不可用，尝试使用默认求解器
         if problem.status not in [cp.OPTIMAL, cp.OPTIMAL_INACCURATE]:
-            # print(f"警告: 问题状态为 {problem.status}") # 暂时屏蔽警告，避免刷屏
+            # print(f"⚠️ 优化器警告: OSQP求解状态为 {problem.status}，尝试默认求解器...")
+            try:
+                problem.solve(verbose=False)
+            except Exception as e:
+                print(f"❌ 默认求解器异常: {e}")
+
+        # 3. 最终检查：如果还是失败，启动“保底机制”返回 0
+        if problem.status not in [cp.OPTIMAL, cp.OPTIMAL_INACCURATE]:
+            # print(f"❌ 严重错误: 优化彻底失败 (状态: {problem.status})，电池将停止工作。")
             zeros = np.zeros(self.horizon)
             return {
                 'bess_charge': zeros,
@@ -118,7 +131,7 @@ class EnergyOptimizer:
                 'status': problem.status
             }
         
-        # 返回优化结果
+        # 4. 成功返回结果
         return {
             'bess_charge': bess_charge.value,
             'bess_discharge': bess_discharge.value,

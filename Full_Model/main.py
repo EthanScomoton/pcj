@@ -33,6 +33,8 @@ if __name__ == "__main__":
     
     actual_feature_names = feature_cols
     print(f"数据加载完成: {len(data_df)}行, {len(actual_feature_names)}个特征列")
+    print(f"平均负荷: {data_df['E_grid'].mean():.2f} kW")
+    print(f"最大负荷: {data_df['E_grid'].max():.2f} kW")
 
     # 确保feature_cols与实际特征名称一致
     if len(feature_cols) != len(actual_feature_names) or set(feature_cols) != set(actual_feature_names):
@@ -158,12 +160,12 @@ if __name__ == "__main__":
     optimization_results = optimize_storage_size(
         demand_data=data_df,
         price_data=price_df,
-        min_capacity=100,  # 允许从0开始搜索
-        max_capacity=1000,
-        step=100,
-        min_power=100,     # 允许从0开始搜索
-        max_power=500,
-        power_step=100
+        min_capacity=10000,  # 允许从0开始搜索
+        max_capacity=40000,
+        step=10000,
+        min_power=8000,     # 允许从0开始搜索
+        max_power=38000,
+        power_step=6000
     )
     
     # 可视化优化结果

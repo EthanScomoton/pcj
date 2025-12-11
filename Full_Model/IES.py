@@ -242,7 +242,7 @@ class IntegratedEnergySystem:
             )
             
             # 若求解失败返回 None，则使用 0 功率回退策略
-            if energy_opt['status'] != 'optimal' or energy_opt['bess_charge'] is None:
+            if energy_opt['status'] not in ['optimal', 'optimal_inaccurate'] or energy_opt['bess_charge'] is None:
                 bess_charge    = 0.0
                 bess_discharge = 0.0
             else:

@@ -16,16 +16,10 @@ if __name__ == "__main__":
     import matplotlib.pyplot as plt
     import platform
 
-    # 根据操作系统自动选择中文字体
-    system_name = platform.system()
-    if system_name == 'Windows':
-        plt.rcParams['font.sans-serif'] = ['SimHei']  # Windows使用黑体
-    elif system_name == 'Darwin':  # Mac OS
-        plt.rcParams['font.sans-serif'] = ['Arial Unicode MS']  # Mac使用Arial Unicode MS
-    else:
-        plt.rcParams['font.sans-serif'] = ['WenQuanYi Micro Hei']  # Linux可能需要的字体
-
-    plt.rcParams['axes.unicode_minus'] = False  # 解决负号显示为方块的问题
+    # Set English font globally to avoid display issues
+    plt.rcParams['font.family'] = 'sans-serif'
+    plt.rcParams['font.sans-serif'] = ['Arial', 'DejaVu Sans', 'Liberation Sans', 'Bitstream Vera Sans', 'sans-serif']
+    plt.rcParams['axes.unicode_minus'] = False  # Solve minus sign display issue
     
     print("开始执行港口综合能源系统优化...")
     
@@ -189,9 +183,12 @@ if __name__ == "__main__":
     
     # 运行模拟
     print("模拟最优系统运行...")
+    # 使用所有可用数据进行模拟，或者至少3个月的数据
+    sim_horizon = min(24*90, len(data_df))
+    
     simulation_results = optimal_system.simulate_operation(
         historic_data=data_df,
-        time_steps=min(24*30, len(data_df)),  # 1个月或全部数据
+        time_steps=sim_horizon,
         price_data=price_df
     )
     
@@ -205,7 +202,7 @@ if __name__ == "__main__":
     
     baseline_results = baseline_system.simulate_operation(
         historic_data=data_df,
-        time_steps=min(24*30, len(data_df)),
+        time_steps=sim_horizon,
         price_data=price_df
     )
     
@@ -223,5 +220,12 @@ if __name__ == "__main__":
     # 可视化模拟结果
     print("\n正在生成结果可视化...")
     optimal_system.visualize_results(simulation_results)
+
+    # 打印前24小时的详细运行数据进行调试
+    print("\n=== 前24小时运行详情调试 ===")
+    debug_df = simulation_results.head(24)[['timestamp', 'actual_demand', 'bess_power', 'bess_soc', 'cost']]
+    # 添加电价列以便对照
+    debug_df['price'] = price_df.head(24)['price'].values
+    print(debug_df.to_string())
     
     print("港口综合能源系统优化分析完成!")

@@ -208,66 +208,59 @@ def visualize_optimization_results(results):
     import platform
     import numpy as np
     
-    # --- 字体设置修正 ---
-    system_name = platform.system()
-    if system_name == 'Windows':
-        plt.rcParams['font.sans-serif'] = ['SimHei']
-    elif system_name == 'Darwin':
-        plt.rcParams['font.sans-serif'] = ['Arial Unicode MS']
-    else:
-        plt.rcParams['font.sans-serif'] = ['WenQuanYi Micro Hei']
+    # Set English font
+    plt.rcParams['font.family'] = 'sans-serif'
+    plt.rcParams['font.sans-serif'] = ['Arial', 'DejaVu Sans', 'Liberation Sans', 'sans-serif']
     plt.rcParams['axes.unicode_minus'] = False
-    # --------------------
 
-    # 转换为DataFrame
+    # Convert to DataFrame
     df = pd.DataFrame(results['all_results'])
     
-    # 创建数据透视表用于热图
+    # Create pivot tables for heatmaps
     npv_pivot = df.pivot(index = 'capacity', columns = 'power', values = 'npv')
     payback_pivot = df.pivot(index = 'capacity', columns = 'power', values = 'payback_period')
     
-    # --- 处理 inf 值以便绘图 ---
-    # 将 inf 替换为 NaN，这样 matplotlib 会将其留白或显示特定颜色，而不是报错或显示空白
+    # --- Handle inf values for plotting ---
     payback_pivot = payback_pivot.replace([np.inf, -np.inf], np.nan)
     # -------------------------
 
-    # 创建图表
+    # Create figure
     fig, axes = plt.subplots(1, 2, figsize = (18, 8))
     
-    # NPV热图
+    # NPV Heatmap
     im1 = axes[0].imshow(npv_pivot, cmap='viridis', aspect='auto', origin='lower')
-    axes[0].set_title('净现值(NPV)')
-    axes[0].set_xlabel('功率(kW)')
-    axes[0].set_ylabel('容量(kWh)')
+    axes[0].set_title('Net Present Value (NPV)')
+    axes[0].set_xlabel('Power (kW)')
+    axes[0].set_ylabel('Capacity (kWh)')
     axes[0].set_xticks(range(len(npv_pivot.columns)))
     axes[0].set_yticks(range(len(npv_pivot.index)))
     axes[0].set_xticklabels(npv_pivot.columns)
     axes[0].set_yticklabels(npv_pivot.index)
-    plt.colorbar(im1, ax=axes[0], label='NPV (元)')
+    plt.colorbar(im1, ax=axes[0], label='NPV (CNY)')
     
-    # 标记最佳NPV
+    # Mark best NPV
     best_capacity = results['best_config']['capacity']
     best_power = results['best_config']['power']
     
-    # 只有当最佳配置存在于 pivot 表中时才标记 (防止索引错误)
+    # Only mark if best config exists in pivot table
     if best_capacity in npv_pivot.index and best_power in npv_pivot.columns:
         best_idx = (list(npv_pivot.index).index(best_capacity), list(npv_pivot.columns).index(best_power))
-        axes[0].plot(best_idx[1], best_idx[0], 'r*', markersize=15)
+        axes[0].plot(best_idx[1], best_idx[0], 'r*', markersize=15, label='Optimal')
+        axes[0].legend()
     
-    # 回收期热图
-    # 使用 'cool' 颜色映射，并将 NaN 设为灰色
+    # Payback Period Heatmap
     current_cmap = plt.cm.cool
     current_cmap.set_bad(color='lightgray')
     
     im2 = axes[1].imshow(payback_pivot, cmap=current_cmap, aspect='auto', origin='lower')
-    axes[1].set_title('回收期 (灰色表示无法回收)')
-    axes[1].set_xlabel('功率(kW)')
-    axes[1].set_ylabel('容量(kWh)')
+    axes[1].set_title('Payback Period (Gray: Infinite)')
+    axes[1].set_xlabel('Power (kW)')
+    axes[1].set_ylabel('Capacity (kWh)')
     axes[1].set_xticks(range(len(payback_pivot.columns)))
     axes[1].set_yticks(range(len(payback_pivot.index)))
     axes[1].set_xticklabels(payback_pivot.columns)
     axes[1].set_yticklabels(payback_pivot.index)
-    plt.colorbar(im2, ax=axes[1], label='年')
+    plt.colorbar(im2, ax=axes[1], label='Years')
     
     plt.tight_layout()
     plt.show()

@@ -99,7 +99,16 @@ class EnergyOptimizer:
             )
             
         # 目标函数: 最小化电网购电成本
-        objective = cp.Minimize(cp.sum(cp.multiply(grid_import, grid_prices)))
+        # 增加极小的惩罚项以平滑结果，避免不必要的震荡
+        cost_term = cp.sum(cp.multiply(grid_import, grid_prices))
+        regularization = 0.0001 * cp.sum(bess_charge + bess_discharge)
+        
+        # 增加终端SOC约束惩罚：如果结束时SOC太低，给予惩罚
+        # 这会鼓励系统在低价时充电，以便在周期结束时保持电量
+        target_final_soc = self.bess.get_soc() # 尝试保持周期平衡
+        soc_penalty = 1000 * cp.abs(soc[self.horizon] - target_final_soc)
+        
+        objective = cp.Minimize(cost_term + regularization + soc_penalty)
         
         # 求解问题
         problem = cp.Problem(objective, constraints)

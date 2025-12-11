@@ -294,16 +294,9 @@ class IntegratedEnergySystem:
         import matplotlib.pyplot as plt
         import matplotlib.dates as mdates
         
-        # --- 字体设置 ---
-        import platform
-        system_name = platform.system()
-        if system_name == 'Windows':
-            plt.rcParams['font.sans-serif'] = ['SimHei']
-        elif system_name == 'Darwin':  # Mac OS
-            plt.rcParams['font.sans-serif'] = ['Arial Unicode MS']
-        else:
-            plt.rcParams['font.sans-serif'] = ['WenQuanYi Micro Hei']
-        
+        # --- Font Settings ---
+        plt.rcParams['font.family'] = 'sans-serif'
+        plt.rcParams['font.sans-serif'] = ['Arial', 'DejaVu Sans', 'Liberation Sans', 'sans-serif']
         plt.rcParams['axes.unicode_minus'] = False
         # --------------------
         

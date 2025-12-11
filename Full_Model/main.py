@@ -5,7 +5,11 @@ from EF import print_feature_info
 from convert_model import convert_model_weights
 # 主函数 
 if __name__ == "__main__":
-
+    
+    import warnings
+    # 忽略 cvxpy 的精度警告，这是正常的数值计算波动
+    warnings.filterwarnings("ignore", category=UserWarning, module='cvxpy')
+    
     import torch
     import pandas as pd
     import os

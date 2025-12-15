@@ -26,7 +26,42 @@ if __name__ == "__main__":
     # 加载您的数据
     print("正在加载数据...")
     data_df = load_data()
-    data_df = data_df[data_df['E_grid'] > 0].copy()
+
+    # --- 数据预处理：重采样为1小时固定间隔 ---
+    print("正在对数据进行重采样和规整化（1小时间隔）以匹配物理模拟...")
+    # 1. 确保时间戳格式正确
+    data_df['timestamp'] = pd.to_datetime(data_df['timestamp'])
+    
+    # 2. 去除重复时间戳
+    data_df = data_df.drop_duplicates(subset=['timestamp'])
+    
+    # 3. 设置索引并重采样
+    data_df = data_df.set_index('timestamp')
+    
+    # 分离数值列和非数值列分别处理
+    numeric_cols = data_df.select_dtypes(include=['number']).columns
+    
+    # 数值列：线性插值
+    df_numeric = data_df[numeric_cols].resample('1H').mean().interpolate(method='linear')
+    
+    # 非数值列（如天气类别）：前向填充
+    other_cols = [c for c in data_df.columns if c not in numeric_cols]
+    if other_cols:
+        df_other = data_df[other_cols].resample('1H').ffill()
+        data_df = pd.concat([df_numeric, df_other], axis=1)
+    else:
+        data_df = df_numeric
+        
+    # 重置索引
+    data_df = data_df.reset_index()
+    
+    # 4. 处理可能产生的 NaN (尤其是 E_grid)
+    if 'E_grid' in data_df.columns:
+        data_df['E_grid'] = data_df['E_grid'].fillna(method='ffill').fillna(0)
+    
+    print(f"数据重采样完成: {len(data_df)}行 (1小时间隔)")
+    # ---------------------------------------
+
     data_df, feature_cols, target_col = feature_engineering(data_df)
     
     actual_feature_names = feature_cols

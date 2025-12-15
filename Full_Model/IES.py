@@ -208,7 +208,8 @@ class IntegratedEnergySystem:
             
             # 预测未来24小时需求（基于各自窗口）
             predicted_demand = []
-            for h in range(24):
+            steps_per_day = int(24 / time_step_hours) # 如果是15分钟数据，这里是96
+            for h in range(steps_per_day):
                 future_seq = self._build_window_sequence(historic_data, t + h)
                 pred = self.predict_demand(future_seq)
                 predicted_demand.append(pred)

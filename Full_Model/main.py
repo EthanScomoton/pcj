@@ -12,9 +12,11 @@ if __name__ == "__main__":
     
     import torch
     import pandas as pd
+    import numpy as np
     import os
     import matplotlib.pyplot as plt
     import platform
+    from sklearn.preprocessing import StandardScaler
 
     # Set English font globally to avoid display issues
     plt.rcParams['font.family'] = 'sans-serif'
@@ -75,6 +77,29 @@ if __name__ == "__main__":
         feature_cols = actual_feature_names
     
     print(f"数据加载完成，特征列数: {len(feature_cols)}")
+    
+    # --- 准备归一化器 (Scalers) ---
+    print("\n准备特征和目标变量归一化器...")
+    # 按照训练时的逻辑准备 Scalers
+    # 1. 提取特征矩阵和目标向量
+    # 注意：这里需要确保使用与训练时相同的逻辑。如果训练时过滤了数据，这里也应该尽量匹配。
+    # 假设 main.py 中的 data_df 是全量数据
+    X_all = data_df[feature_cols].values
+    y_all = data_df[target_col].values
+    
+    # 2. 划分训练集 (前80%) 用于拟合 Scaler
+    train_size = int(0.8 * len(data_df))
+    X_train = X_all[:train_size]
+    y_train = y_all[:train_size]
+    
+    # 3. 对目标变量进行 log1p 变换 (与训练代码一致)
+    y_train_log = np.log1p(y_train)
+    
+    # 4. 拟合 Scalers
+    scaler_X = StandardScaler().fit(X_train)
+    scaler_y = StandardScaler().fit(y_train_log.reshape(-1, 1))
+    print("归一化器准备完成")
+    # ---------------------------
     
     # 计算特征重要性
     print("\n计算特征重要性...")
@@ -198,7 +223,10 @@ if __name__ == "__main__":
         step=10000,
         min_power=8000,     # 允许从0开始搜索
         max_power=38000,
-        power_step=6000
+        power_step=6000,
+        feature_cols=feature_cols,
+        scaler_X=scaler_X,
+        scaler_y=scaler_y
     )
     
     # 可视化优化结果
@@ -213,7 +241,10 @@ if __name__ == "__main__":
     optimal_system = IntegratedEnergySystem(
         capacity_kwh=optimal_capacity,
         bess_power_kw=optimal_power,
-        prediction_model=best_model
+        prediction_model=best_model,
+        feature_cols=feature_cols,
+        scaler_X=scaler_X,
+        scaler_y=scaler_y
     )
     
     # 运行模拟
@@ -232,7 +263,10 @@ if __name__ == "__main__":
     baseline_system = IntegratedEnergySystem(
         capacity_kwh=0,  # 无储能
         bess_power_kw=0,      # 无储能
-        prediction_model=best_model
+        prediction_model=best_model,
+        feature_cols=feature_cols,
+        scaler_X=scaler_X,
+        scaler_y=scaler_y
     )
     
     baseline_results = baseline_system.simulate_operation(

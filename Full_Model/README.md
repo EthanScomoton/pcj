@@ -18,77 +18,70 @@
 
 - `All_Models/` - 各种能源预测模型
 
-## 安装依赖
+# Port Integrated Energy System Optimization Project
 
+This project implements an optimization analysis tool for a Port Integrated Energy System (PIES), including renewable energy management, grid scheduling, and energy storage system (BESS) optimization.
+
+## Project Goal
+The goal is to optimize the energy management of a port by leveraging renewable energy sources (PV, Wind) and a Battery Energy Storage System (BESS) to reduce grid dependency, peak loads, and operational costs. The system uses deep learning models to predict energy demand and mathematical optimization (Convex Optimization) to schedule battery operations.
+
+## Key Features
+- **Load Prediction**: Uses LSTM/GRU/Transformer-based models to predict future port energy demand.
+- **Storage Sizing Optimization**: Determines the optimal capacity (kWh) and power (kW) for the BESS based on economic indicators (NPV, IRR, Payback Period).
+- **Operational Scheduling**: Real-time optimization of battery charging/discharging strategies to minimize electricity costs (Arbitrage) and peak demand.
+- **Renewable Integration**: Maximizes the utilization of local solar and wind energy.
+- **Simulation & Analysis**: Simulates system operation over time and calculates Key Performance Indicators (KPIs).
+
+## Project Structure
+- `Full_Model/`: Core system implementation.
+  - `main.py`: Main entry point for running the simulation and optimization.
+  - `IES.py`: `IntegratedEnergySystem` class, managing the simulation loop and prediction integration.
+  - `BES.py`: `BatteryEnergyStorage` class, modeling battery physics (SOC, efficiency).
+  - `EO.py`: `EnergyOptimizer`, implementing the scheduling algorithm.
+  - `OSS.py`: Storage size optimization logic.
+  - `EF.py`: Feature extraction and utility functions.
+  - `All_Models_EGrid_Paper.py`: Definition of deep learning prediction models.
+- `All_Models/`: Contains various experimental prediction models.
+
+## Usage
+
+### Prerequisites
+Ensure you have the following Python packages installed:
 ```bash
-pip install torch pandas numpy matplotlib scikit-learn
+pip install torch pandas numpy matplotlib scikit-learn cvxpy
 ```
 
-## 使用方法
-
-### 运行完整分析
+### Running the Optimization
+To run the complete analysis, including storage sizing and operational simulation:
 
 ```bash
 cd Full_Model
 python main.py
 ```
 
-### 解决模型特征维度不匹配问题
+This will:
+1. Load and preprocess the data.
+2. Initialize and load the pre-trained demand prediction model.
+3. **Crucial Step**: Fit data scalers to ensure model inputs/outputs are correctly normalized (fixing previous issues with data scaling).
+4. Run an optimization loop to find the best BESS size (Capacity & Power).
+5. Simulate the optimal system operation over a period.
+6. Compare with a baseline (no storage) system.
+7. Display KPIs and visualizations.
 
-项目中的预训练模型与当前数据集的特征维度可能不匹配，提供了两种解决方案：
+### Troubleshooting "Predicted Data Not Participating"
+If you encounter issues where the optimization seems to ignore predictions (e.g., flat 0 results):
+- This has been addressed by ensuring `feature_cols` are explicitly passed to all modules to prevent feature scrambling.
+- Data scalers (`StandardScaler`) are now properly fitted in `main.py` and passed to the simulation engine to handle the transformation between raw values (kW) and model inputs (normalized).
 
-#### 方案1: 使用模型转换脚本
+## Methodology
+1. **Prediction**: The system predicts the next 24h load.
+2. **Optimization**:
+   - Objective: Minimize Grid Cost + Penalties.
+   - Constraints: Power balance, Battery SOC limits, Charge/Discharge limits.
+   - Solver: CVXPY (using OSQP or default solver).
 
-这个方法将已有的预训练模型调整为匹配当前数据集特征维度的新模型。
+## Recent Updates
+- Fixed feature alignment issue where model inputs were scrambled.
+- Implemented correct data scaling/descaling flow for the prediction model.
+- Enhanced `IES` and `OSS` modules to support explicit feature column definitions.
 
-```bash
-cd Full_Model
-python convert_model.py
-```
-
-运行后将生成一个名为`current_EModel_FeatureWeight4.pth`的兼容模型。
-
-#### 方案2: 使用当前数据重新训练模型
-
-这个方法使用当前数据集直接训练一个新模型。
-
-```bash
-cd Full_Model
-python train_model.py
-```
-
-训练完成后将生成一个名为`best_EModel_FeatureWeight4.pth`的新模型。
-
-#### 方案3: 使用特征适配
-
-已在`IES.py`中实现了特征适配函数，可以在运行时自动调整特征维度以匹配模型要求。
-
-## 主要功能
-
-- **电网负荷预测**：使用深度学习模型预测未来电网负荷
-- **储能规模优化**：基于经济性和技术性指标选择最优储能规模
-- **能源调度**：实时优化储能系统充放电策略
-- **可再生能源管理**：优化太阳能和风能的使用
-- **系统性能评估**：计算关键绩效指标并可视化结果
-
-## 错误排查
-
-### 模型维度不匹配错误
-
-如果遇到类似以下错误：
-
-```
-size mismatch for feature_importance: copying a param with shape torch.Size([22]) from checkpoint, the shape in current model is torch.Size([26]).
-```
-
-这表示预训练模型的特征维度（22）与当前模型使用的特征维度（26）不匹配。可以使用上述提供的任何解决方案修复此问题。
-
-## 系统架构
-
-港口综合能源系统由以下组件组成：
-
-1. **预测模块**：预测未来能源需求和可再生能源生成
-2. **能源优化模块**：优化系统整体能源流
-3. **储能管理模块**：控制储能系统的充放电
-4. **可再生能源管理**：优化可再生能源的使用
-5. **分析与可视化**：评估系统性能并可视化结果

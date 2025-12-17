@@ -1,12 +1,13 @@
 import numpy as np
 
-def extract_features(df, index):
+def extract_features(df, index, feature_cols=None):
     """
     从DataFrame中提取特征
     
     参数:
         df: 包含数据的DataFrame
         index: 要提取特征的行索引
+        feature_cols: 特征列名称列表(可选)。如果提供，将严格按照列表顺序提取特征。
     
     返回:
         特征向量
@@ -15,12 +16,15 @@ def extract_features(df, index):
     if index >= len(df):
         index = len(df) - 1
         
-    # 提取所有特征列(除了timestamp和目标变量)
-
-    feature_cols = [col for col in df.columns if col not in ['timestamp', 'E_grid', 'dayofweek', 'hour', 'month']]
+    # 如果未提供特征列，使用默认排除逻辑
+    if feature_cols is None:
+        feature_cols = [col for col in df.columns if col not in ['timestamp', 'E_grid', 'dayofweek', 'hour', 'month']]
     
     # 提取该行的特征
-    features = df.iloc[index][feature_cols].values
+    # 确保只选择存在的列，避免KeyError
+    valid_cols = [c for c in feature_cols if c in df.columns]
+    
+    features = df.iloc[index][valid_cols].values
     
     return features
 

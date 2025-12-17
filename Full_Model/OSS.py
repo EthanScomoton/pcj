@@ -14,7 +14,10 @@ def optimize_storage_size(demand_data,
                         step = 10000,
                         min_power = 8000, 
                         max_power = 38000, 
-                        power_step = 6000):
+                        power_step = 6000,
+                        feature_cols = None,
+                        scaler_X = None,
+                        scaler_y = None):
     """
     基于经济性指标寻找最优储能规模
     
@@ -27,6 +30,9 @@ def optimize_storage_size(demand_data,
         min_power: 考虑的最小功率(kW)
         max_power: 考虑的最大功率(kW)
         power_step: 功率步长(kW)
+        feature_cols: 特征列名称列表(可选)
+        scaler_X: 特征归一化器
+        scaler_y: 目标变量归一化器
         
     返回:
         包含优化结果的字典
@@ -34,7 +40,9 @@ def optimize_storage_size(demand_data,
     results = []
     
     # 创建一个共享的预测模型实例
-    feature_cols = [c for c in demand_data.columns if c not in ['timestamp', 'E_grid', 'dayofweek', 'hour', 'month']]
+    if feature_cols is None:
+        feature_cols = [c for c in demand_data.columns if c not in ['timestamp', 'E_grid', 'dayofweek', 'hour', 'month']]
+    
     feature_dim = len(feature_cols)
     print(f"使用特征维度: {feature_dim}")
     
@@ -94,7 +102,10 @@ def optimize_storage_size(demand_data,
             system = IntegratedEnergySystem(
                 capacity_kwh=capacity,
                 bess_power_kw=power,
-                prediction_model=prediction_model  # 使用模型实例
+                prediction_model=prediction_model,  # 使用模型实例
+                feature_cols=feature_cols,
+                scaler_X=scaler_X,
+                scaler_y=scaler_y
             )
             
             # 使用储能系统的基准场景 (无储能)
@@ -102,7 +113,10 @@ def optimize_storage_size(demand_data,
             baseline_system = IntegratedEnergySystem(
                 capacity_kwh=0,       # 修改为0，确保基准是没有电池的
                 bess_power_kw=0,      # 修改为0
-                prediction_model=prediction_model
+                prediction_model=prediction_model,
+                feature_cols=feature_cols,
+                scaler_X=scaler_X,
+                scaler_y=scaler_y
             )
             
             # 运行模拟

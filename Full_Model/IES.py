@@ -12,7 +12,7 @@ class IntegratedEnergySystem:
     _global_feature_dim_printed = False
     _global_seq_warn_shown = False
     _global_local_seq_warn_shown = False
-    def __init__(self, capacity_kwh, bess_power_kw, prediction_model=None, verbose=True):
+    def __init__(self, capacity_kwh, bess_power_kw, prediction_model=None, feature_cols=None, scaler_X=None, scaler_y=None, use_log_y=True, verbose=True):
         """
         港口综合能源系统
         
@@ -20,6 +20,10 @@ class IntegratedEnergySystem:
             bess_capacity_kwh: 储能系统容量(kWh)
             bess_power_kw: 储能系统功率(kW)
             prediction_model: 预训练的需求预测模型(可选)
+            feature_cols: 特征列名称列表(可选)，用于确保特征提取顺序正确
+            scaler_X: 特征归一化器 (sklearn StandardScaler)
+            scaler_y: 目标变量归一化器 (sklearn StandardScaler)
+            use_log_y: 是否对目标变量进行对数逆变换 (默认True)
         """
         # 初始化组件
         self.bess = BatteryEnergyStorage(
@@ -29,6 +33,10 @@ class IntegratedEnergySystem:
         self.energy_optimizer = EnergyOptimizer(self.bess)
         self.renewable_optimizer = RenewableEnergyOptimizer()
         self.prediction_model = prediction_model
+        self.feature_cols = feature_cols
+        self.scaler_X = scaler_X
+        self.scaler_y = scaler_y
+        self.use_log_y = use_log_y
         self.window_size = getattr(prediction_model, 'window_size', 20) if prediction_model is not None else 20
         
         # 检查模型的特征维度
@@ -103,7 +111,8 @@ class IntegratedEnergySystem:
         start = end_index - self.window_size + 1
         for idx in range(start, end_index + 1):
             safe_idx = max(0, min(idx, len(df) - 1))
-            seq.append(extract_features(df, safe_idx))
+            # 传递 feature_cols 以确保特征顺序一致
+            seq.append(extract_features(df, safe_idx, self.feature_cols))
         return np.array(seq, dtype=np.float32)
 
     def predict_demand(self, features):
@@ -126,6 +135,20 @@ class IntegratedEnergySystem:
     
         # 调整特征维度
         features = self.adapt_features(features)
+        
+        # --- 特征归一化 ---
+        if self.scaler_X is not None:
+            # scaler_X 期望输入形状 (n_samples, n_features)
+            # features 可能是 (seq_len, feature_dim)
+            if len(features.shape) == 2:
+                seq_len, feat_dim = features.shape
+                # 展平进行转换，然后恢复形状
+                features_scaled = self.scaler_X.transform(features)
+                features = features_scaled.astype(np.float32)
+            elif len(features.shape) == 1:
+                features_scaled = self.scaler_X.transform(features.reshape(1, -1))
+                features = features_scaled.flatten().astype(np.float32)
+        # ----------------
     
         with torch.no_grad():
             # 确保输入是三维张量: [batch_size, seq_len, feature_dim]
@@ -182,7 +205,26 @@ class IntegratedEnergySystem:
             inputs = torch.tensor(features, dtype=torch.float32).to(device)
             outputs = self.prediction_model(inputs)
     
-        return outputs.cpu().numpy()
+        pred_val = outputs.cpu().numpy()
+        
+        # --- 目标变量反归一化 ---
+        if self.scaler_y is not None:
+            # scaler_y 期望输入形状 (n_samples, 1)
+            pred_val = self.scaler_y.inverse_transform(pred_val.reshape(-1, 1)).flatten()
+            
+            # 如果训练时使用了 log1p 变换，这里需要 expm1
+            # 注意：这里假设外部传入的 scaler_y 已经处理了标准化，但 log 变换通常在标准化之前
+            # 如果 main.py 中是先 log 后 scale，那么这里反过来是先 inverse_scale 后 expm1
+            # 我们需要在 __init__ 中增加一个 use_log_transform 参数，或者让用户保证传入的 scaler_y 
+            # 仅仅是 StandardScaler，并在 main.py 中处理 log 逆变换
+            # 鉴于 main.py 逻辑，这里我们先假设只做反标准化。
+            # 如果需要反 log，应该在 predict_demand 外部或者在这里增加参数控制。
+            # 为了简单，我们在 __init__ 加一个 use_log_y 参数
+            if hasattr(self, 'use_log_y') and self.use_log_y:
+                pred_val = np.expm1(pred_val)
+        # ----------------------
+        
+        return pred_val
     
     def simulate_operation(self, historic_data, time_steps, price_data=None):
         """

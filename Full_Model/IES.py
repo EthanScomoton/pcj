@@ -211,15 +211,6 @@ class IntegratedEnergySystem:
         if self.scaler_y is not None:
             # scaler_y 期望输入形状 (n_samples, 1)
             pred_val = self.scaler_y.inverse_transform(pred_val.reshape(-1, 1)).flatten()
-            
-            # 如果训练时使用了 log1p 变换，这里需要 expm1
-            # 注意：这里假设外部传入的 scaler_y 已经处理了标准化，但 log 变换通常在标准化之前
-            # 如果 main.py 中是先 log 后 scale，那么这里反过来是先 inverse_scale 后 expm1
-            # 我们需要在 __init__ 中增加一个 use_log_transform 参数，或者让用户保证传入的 scaler_y 
-            # 仅仅是 StandardScaler，并在 main.py 中处理 log 逆变换
-            # 鉴于 main.py 逻辑，这里我们先假设只做反标准化。
-            # 如果需要反 log，应该在 predict_demand 外部或者在这里增加参数控制。
-            # 为了简单，我们在 __init__ 加一个 use_log_y 参数
             if hasattr(self, 'use_log_y') and self.use_log_y:
                 pred_val = np.expm1(pred_val)
         # ----------------------
@@ -256,7 +247,7 @@ class IntegratedEnergySystem:
                 pred = self.predict_demand(future_seq)
                 predicted_demand.append(pred)
                 
-            # 2️⃣ 保证是一维向量，避免形状 (24,1) 触发 cvxpy 维度冲突
+            # 保证是一维向量，避免形状 (24,1) 触发 cvxpy 维度冲突
             predicted_demand = np.array(predicted_demand).flatten()
             
             # 获取可再生能源预测

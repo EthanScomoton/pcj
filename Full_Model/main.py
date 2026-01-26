@@ -15,7 +15,6 @@ if __name__ == "__main__":
     import numpy as np
     import os
     import matplotlib.pyplot as plt
-    import platform
     from sklearn.preprocessing import StandardScaler
 
     # Set English font globally to avoid display issues
@@ -48,7 +47,7 @@ if __name__ == "__main__":
     
     # 非数值列（如天气类别）：前向填充
     other_cols = [c for c in data_df.columns if c not in numeric_cols]
-    if other_cols:
+    if other_cols: 
         df_other = data_df[other_cols].resample('1H').ffill()
         data_df = pd.concat([df_numeric, df_other], axis=1)
     else:

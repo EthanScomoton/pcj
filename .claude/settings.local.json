@@ -15,7 +15,8 @@
       "Bash(ls /Users/ethanzhu/Desktop/Research/pcj/Full_Model/*.ipynb)",
       "Bash(/opt/anaconda3/bin/python -c \"import torch; print\\(torch.__version__\\)\")",
       "Bash(conda env:*)",
-      "Bash(ls -la *.py *.pth)"
+      "Bash(ls -la *.py *.pth)",
+      "Bash(awk '{printf \"%-45s %10s\\\\n\", $NF, $5}')"
     ]
   }
 }

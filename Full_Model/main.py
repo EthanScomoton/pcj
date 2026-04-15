@@ -49,7 +49,7 @@ from carbon_module       import (
 from analysis           import (
     compute_economic_kpis, compute_environmental_kpis, compute_technical_kpis,
     build_comparison_table, score_strategies,
-    plot_strategy_kpis, plot_time_series, plot_pareto_cost_vs_co2,
+    generate_all_plots,
     format_final_report,
 )
 
@@ -356,14 +356,13 @@ def main():
         safe = name.replace(' ', '_').replace('(', '').replace(')', '').replace('/', '_')
         d['timeseries'].to_csv(os.path.join(cfg.OUTPUT_DIR, f'ts_{safe}.csv'), index=False)
 
-    # 可视化
-    plot_strategy_kpis(strategy_results,
-                       save_path=os.path.join(cfg.OUTPUT_DIR, 'kpi_bars.png'))
-    plot_time_series(strategy_results,
-                     save_path=os.path.join(cfg.OUTPUT_DIR, 'timeseries.png'),
-                     max_hours=min(24*7, sim_hours))
-    plot_pareto_cost_vs_co2(strategy_results,
-                            save_path=os.path.join(cfg.OUTPUT_DIR, 'pareto.png'))
+    # 可视化 —— 9 张图，涵盖成本/碳排/峰值/雷达/热力/负荷历时/日周期/SOC 分布/时序
+    generate_all_plots(
+        strategy_results=strategy_results,
+        comparison_df=comp_df,
+        output_dir=cfg.OUTPUT_DIR,
+        max_ts_hours=min(24*7, sim_hours),
+    )
 
     # 最终文本报告
     report = format_final_report(

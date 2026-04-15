@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pdftotext -v)",
+      "Bash(brew install:*)",
+      "Bash(python3 -c \"import pdfplumber; print\\('ok'\\)\")",
+      "Bash(python3 -c \"import PyPDF2; print\\('ok'\\)\")",
+      "Bash(python3 -c \"import pypdf; print\\('ok'\\)\")",
+      "Bash(python3 -c \"import fitz; print\\('ok'\\)\")",
+      "Bash(python3 -c ':*)",
+      "Read(//opt/homebrew/Cellar/poppler/26.04.0/bin/**)",
+      "Bash(brew list:*)",
+      "Read(//opt/homebrew/Caskroom/**)",
+      "Bash(python3 -c \"import sys; print\\(sys.executable\\)\")",
+      "Bash(ls /Users/ethanzhu/Desktop/Research/pcj/Full_Model/*.ipynb)",
+      "Bash(/opt/anaconda3/bin/python -c \"import torch; print\\(torch.__version__\\)\")",
+      "Bash(conda env:*)",
+      "Bash(ls -la *.py *.pth)"
+    ]
+  }
+}

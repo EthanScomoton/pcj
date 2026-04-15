@@ -1,3 +1,4 @@
+import os
 import math
 import numpy as np
 import pandas as pd
@@ -76,8 +77,9 @@ def load_data():
     - Load renewable energy and load data from CSV files.
     - Merge and sort by timestamp, then reset the index.
     """
-    renewable_df = pd.read_csv(r'D:\zhu-yanjiuketi\dalian data\renewable_data10.csv')
-    load_df      = pd.read_csv(r'D:\zhu-yanjiuketi\dalian data\load_data10.csv')
+    _dir = os.path.dirname(__file__)
+    renewable_df = pd.read_csv(os.path.join(_dir, 'renewable_data10.csv'))
+    load_df      = pd.read_csv(os.path.join(_dir, 'load_data10.csv'))
 
     renewable_df['timestamp'] = pd.to_datetime(renewable_df['timestamp'])  # Convert timestamp to datetime
     load_df['timestamp']      = pd.to_datetime(load_df['timestamp'])       # Convert timestamp to datetime

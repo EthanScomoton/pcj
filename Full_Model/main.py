@@ -44,7 +44,7 @@ from strategies         import (
 from conformal_predictor import ConformalPredictor
 from carbon_module       import (
     CarbonTracker, make_dynamic_carbon_intensity,
-    GRID_EMISSION_FACTORS, DEFAULT_CARBON_PRICE_CNY_PER_TON,
+    GRID_EMISSION_FACTORS,
 )
 from analysis           import (
     compute_economic_kpis, compute_environmental_kpis, compute_technical_kpis,
@@ -68,9 +68,13 @@ class PlatformConfig:
     BESS_INVEST_CNY_PER_KWH = 600
     BESS_INVEST_CNY_PER_KW  = 200
 
+    # 电价
+    DEMAND_CHARGE_CNY_PER_KW_MONTH = 38.0   # 需量电费 (工业用户典型值 30-42 元/kW/月)
+
     # 碳
     GRID_REGION    = 'east'       # 华东
-    CARBON_PRICE   = DEFAULT_CARBON_PRICE_CNY_PER_TON  # 100 元/tCO2
+    CARBON_PRICE   = 120.0        # 元/tCO2 (CEA 趋势上行，2024 已突破 100)
+    CARBON_SENSITIVITY = 3.0      # 碳成本在 MPC 目标函数中的放大系数
 
     # 保形预测
     CONFORMAL_ALPHA = 0.10         # 90% 覆盖率
@@ -205,32 +209,36 @@ def main():
     # 5) 电价 + 动态碳强度
     # ==================================================================
     print("\n[5/8] 电价与动态碳强度构造 ...")
+    # ---- 分时电价（工商业大工业电价，含尖峰时段）----
     prices = []
     for ts in data_df['timestamp']:
         h, wd = ts.hour, ts.weekday()
-        if 8 <= h < 12 or 14 <= h < 18:
-            p = 1.2
-        elif 12 <= h < 14 or 18 <= h < 21:
-            p = 0.8
-        else:
-            p = 0.4
+        if 10 <= h < 12 or 14 <= h < 17:       # 尖峰（午高峰 + 下午高峰）
+            p = 1.50
+        elif 8 <= h < 10 or 12 <= h < 14 or 17 <= h < 19:   # 峰
+            p = 1.10
+        elif 19 <= h < 22 or 6 <= h < 8:       # 平
+            p = 0.70
+        else:                                    # 谷 (22-6)
+            p = 0.30
         if wd >= 5:
-            p *= 0.9
+            p *= 0.90
         prices.append(p)
     price_df = pd.DataFrame({'timestamp': data_df['timestamp'], 'price': prices})
 
     base_ef = GRID_EMISSION_FACTORS[cfg.GRID_REGION]
     carbon_intensity_hourly = make_dynamic_carbon_intensity(
         data_df['timestamp'], base_ef=base_ef,
-        peak_multiplier=1.25, valley_multiplier=0.75,
+        peak_multiplier=1.40, valley_multiplier=0.60,     # 拉大峰/谷碳强度差
     )
     carbon_tracker = CarbonTracker(
         grid_emission_factor=base_ef,
         carbon_price=cfg.CARBON_PRICE,
     )
-    print(f"   电价: 峰 1.2 / 平 0.8 / 谷 0.4 元, 周末 0.9 折")
+    print(f"   电价: 尖峰 1.50 / 峰 1.10 / 平 0.70 / 谷 0.30 元, 周末 0.9 折")
+    print(f"   需量电费: {cfg.DEMAND_CHARGE_CNY_PER_KW_MONTH:.0f} 元/kW/月")
     print(f"   基准排放因子: {base_ef:.4f} tCO₂/MWh ({cfg.GRID_REGION}电网)")
-    print(f"   碳价: {cfg.CARBON_PRICE:.1f} 元/tCO₂")
+    print(f"   碳价: {cfg.CARBON_PRICE:.1f} 元/tCO₂  (目标函数灵敏度 ×{cfg.CARBON_SENSITIVITY})")
 
     # ==================================================================
     # 6) 预计算负荷预测 (跨策略共享)
@@ -254,15 +262,20 @@ def main():
     # 7) 策略评估
     # ==================================================================
     print("\n[7/8] 多策略对比评估 ...")
+    pcw = cfg.DEMAND_CHARGE_CNY_PER_KW_MONTH / 30.0   # 日化需量电费 → MPC 削峰权重
     strategies_to_run = [
         BaselineStrategy(),                                                     # 无储能
         PeakShavingRuleStrategy(horizon=cfg.MPC_HORIZON),                       # 规则型
-        EconomicMPCStrategy(horizon=cfg.MPC_HORIZON),                           # 经济 MPC
+        EconomicMPCStrategy(horizon=cfg.MPC_HORIZON,
+                            peak_charge_weight=pcw),                            # 经济 MPC
         CarbonAwareMPCStrategy(horizon=cfg.MPC_HORIZON,
-                               carbon_price_cny_per_ton=cfg.CARBON_PRICE),      # 碳感知 MPC
+                               carbon_price_cny_per_ton=cfg.CARBON_PRICE,
+                               peak_charge_weight=pcw,
+                               carbon_sensitivity=cfg.CARBON_SENSITIVITY),      # 碳感知 MPC
         RobustMPCStrategy(horizon=cfg.MPC_HORIZON,
                           conformal_predictor=conformal,
-                          safety_factor=1.0),                                   # 鲁棒 MPC
+                          safety_factor=1.0,
+                          peak_charge_weight=pcw),                              # 鲁棒 MPC
     ]
 
     strategy_results = {}
@@ -304,6 +317,8 @@ def main():
             ts,
             investment_cost=0 if cap == 0 else invest_cost,
             baseline_total_cost=baseline_total_cost,
+            demand_charge_rate=cfg.DEMAND_CHARGE_CNY_PER_KW_MONTH,
+            bess_capacity_kwh=cap,
         )
         env = compute_environmental_kpis(ts, carbon_price_cny_per_ton=cfg.CARBON_PRICE)
         tech = compute_technical_kpis(ts)
@@ -318,12 +333,13 @@ def main():
         if isinstance(strat, BaselineStrategy):
             baseline_total_cost = eco['total_cost_CNY']
 
-        print(f"     总成本={eco['total_cost_CNY']:.1f} 元 | "
+        print(f"     总成本={eco['total_cost_CNY']:.1f} 元 "
+              f"(电量={eco['energy_cost_CNY']:.0f}+需量={eco['demand_charge_CNY']:.0f}) | "
               f"CO₂={env['total_CO2_tons']:.2f} t | "
               f"峰值={tech['peak_demand_kW']:.1f} kW | "
               f"循环≈{tech['estimated_cycles']:.1f}")
 
-    # 补充计算非 baseline 的 NPV/IRR
+    # 补充计算非 baseline 的 NPV/IRR（含需量电费节省 + O&M + 衰减）
     for name, d in strategy_results.items():
         if name == "Baseline (No Storage)":
             continue
@@ -331,6 +347,8 @@ def main():
             d['timeseries'],
             investment_cost=invest_cost,
             baseline_total_cost=baseline_total_cost,
+            demand_charge_rate=cfg.DEMAND_CHARGE_CNY_PER_KW_MONTH,
+            bess_capacity_kwh=cfg.BESS_CAPACITY_KWH,
         )
 
     # ==================================================================
@@ -369,6 +387,7 @@ def main():
         strategy_results, scored_df,
         bess_config={'capacity_kwh': cfg.BESS_CAPACITY_KWH, 'power_kw': cfg.BESS_POWER_KW},
         sim_hours=sim_hours, carbon_price=cfg.CARBON_PRICE,
+        demand_charge_rate=cfg.DEMAND_CHARGE_CNY_PER_KW_MONTH,
     )
     print("\n" + report)
     report_path = os.path.join(cfg.OUTPUT_DIR, 'final_report.txt')

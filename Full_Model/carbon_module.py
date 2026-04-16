@@ -24,8 +24,8 @@ GRID_EMISSION_FACTORS = {
     'national_avg': 0.5810,  # 全国平均
 }
 
-# 参考：报告 §四.4.5  CEA 2024-04 突破 100元/tCO2, 2030 预计 200 元
-DEFAULT_CARBON_PRICE_CNY_PER_TON = 100.0
+# 参考：报告 §四.4.5  CEA 2024 已突破 100 元/tCO2, 2025 约 100-120 元
+DEFAULT_CARBON_PRICE_CNY_PER_TON = 120.0
 
 
 class CarbonTracker:

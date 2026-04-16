@@ -16,7 +16,8 @@
       "Bash(/opt/anaconda3/bin/python -c \"import torch; print\\(torch.__version__\\)\")",
       "Bash(conda env:*)",
       "Bash(ls -la *.py *.pth)",
-      "Bash(awk '{printf \"%-45s %10s\\\\n\", $NF, $5}')"
+      "Bash(awk '{printf \"%-45s %10s\\\\n\", $NF, $5}')",
+      "Bash(python3 -c \"import ast; ast.parse\\(open\\('analysis.py'\\).read\\(\\)\\); print\\('✅ analysis.py syntax OK'\\)\")"
     ]
   }
 }

@@ -58,10 +58,17 @@ class BaselineStrategy(BaseStrategy):
 #   （调研报告 §四、4.2 关键实现技巧）
 # ========================================================================
 class _ParametrizedMPC:
+    """
+    参数化 MPC 核心。相比初版的改进：
+      · 加入需量电费项 (peak_charge_weight * max_grid_import) → 激励削峰
+      · 提高循环正则权重 5e-3 以抑制无意义微循环
+      · 降低终端 SOC 惩罚至 500，让电池更灵活地参与套利
+    """
 
     def __init__(self, bess, horizon: int = 24, time_step: float = 1.0,
                  include_carbon: bool = False,
-                 include_peak_charge: bool = False):
+                 include_peak_charge: bool = True,
+                 peak_charge_weight: float = 1.5):
         self.bess = bess
         self.horizon = horizon
         self.dt = time_step
@@ -107,18 +114,18 @@ class _ParametrizedMPC:
             )
 
         # ---- 目标函数 ----
-        obj_cost = cp.sum(cp.multiply(self.Pg, self.price_p))
-        obj_reg  = 1e-4 * cp.sum(self.Pc + self.Pd)          # 轻正则 -> 平滑调度
-        obj_soc  = 1e3 * cp.abs(self.soc[horizon] - self.soc_init)   # 终端 SOC 回补
-        obj_curt = 1e-3 * cp.sum(self.pv_p - self.Pre_use)   # 轻度鼓励消纳可再生
+        obj_cost = cp.sum(cp.multiply(self.Pg, self.price_p))     # 电量电费
+        obj_reg  = 5e-3 * cp.sum(self.Pc + self.Pd)              # 抑制微循环（↑ 从 1e-4）
+        obj_soc  = 500 * cp.abs(self.soc[horizon] - self.soc_init)  # 终端 SOC（↓ 从 1e3）
+        obj_curt = 1e-3 * cp.sum(self.pv_p - self.Pre_use)       # 轻度鼓励消纳可再生
 
         objective = obj_cost + obj_reg + obj_soc + obj_curt
         if include_carbon:
-            # carbon_weight = price_CNY_per_tCO2 / 1000   ( 元/(tCO2·kWh/MWh) )
             objective += self.carbon_weight * cp.sum(cp.multiply(self.Pg, self.carbon_p))
         if include_peak_charge:
             cons.append(self.Pg <= self.peak)
-            objective += 0.5 * self.peak                    # 可在 solve() 时调系数
+            # peak_charge_weight ≈ 需量电价/30 (日化)，典型 1.0~2.0 元/kW
+            objective += peak_charge_weight * self.peak
 
         self.problem = cp.Problem(cp.Minimize(objective), cons)
 
@@ -171,10 +178,11 @@ class _ParametrizedMPC:
 # ========================================================================
 class EconomicMPCStrategy(BaseStrategy):
     name = "Economic MPC"
-    description = "参数化滚动时域 MPC，目标：电费最小化"
+    description = "参数化 MPC：电费 + 需量电费 联合最小化，含削峰"
 
-    def __init__(self, horizon: int = 24):
+    def __init__(self, horizon: int = 24, peak_charge_weight: float = 1.5):
         self.horizon = horizon
+        self.peak_charge_weight = peak_charge_weight
         self._mpc = None
 
     def optimize(self, bess, pred_demand, renewable_gen, grid_prices,
@@ -182,7 +190,10 @@ class EconomicMPCStrategy(BaseStrategy):
         if bess.capacity <= 1e-3:
             return BaselineStrategy().optimize(bess, pred_demand, renewable_gen, grid_prices)
         if self._mpc is None or self._mpc.bess is not bess:
-            self._mpc = _ParametrizedMPC(bess, self.horizon, include_carbon=False)
+            self._mpc = _ParametrizedMPC(bess, self.horizon,
+                                          include_carbon=False,
+                                          include_peak_charge=True,
+                                          peak_charge_weight=self.peak_charge_weight)
         return self._mpc.solve(bess.get_soc(), pred_demand, renewable_gen, grid_prices)
 
 
@@ -191,11 +202,14 @@ class EconomicMPCStrategy(BaseStrategy):
 # ========================================================================
 class CarbonAwareMPCStrategy(BaseStrategy):
     name = "Carbon-Aware MPC"
-    description = "成本 + 动态碳排 多目标 MPC (对应报告 §四.4.5 碳交易)"
+    description = "成本 + 动态碳排 多目标 MPC + 削峰 (报告 §四.4.5)"
 
-    def __init__(self, horizon: int = 24, carbon_price_cny_per_ton: float = 100.0):
+    def __init__(self, horizon: int = 24, carbon_price_cny_per_ton: float = 100.0,
+                 peak_charge_weight: float = 1.5, carbon_sensitivity: float = 3.0):
         self.horizon = horizon
         self.carbon_price = float(carbon_price_cny_per_ton)
+        self.peak_charge_weight = peak_charge_weight
+        self.carbon_sensitivity = float(carbon_sensitivity)
         self._mpc = None
 
     def optimize(self, bess, pred_demand, renewable_gen, grid_prices,
@@ -203,15 +217,18 @@ class CarbonAwareMPCStrategy(BaseStrategy):
         if bess.capacity <= 1e-3:
             return BaselineStrategy().optimize(bess, pred_demand, renewable_gen, grid_prices)
         if carbon_intensity is None:
-            # 无碳数据时退化为经济 MPC
-            return EconomicMPCStrategy(self.horizon).optimize(
+            return EconomicMPCStrategy(self.horizon,
+                                       peak_charge_weight=self.peak_charge_weight).optimize(
                 bess, pred_demand, renewable_gen, grid_prices)
 
         if self._mpc is None or self._mpc.bess is not bess:
-            self._mpc = _ParametrizedMPC(bess, self.horizon, include_carbon=True)
+            self._mpc = _ParametrizedMPC(bess, self.horizon,
+                                          include_carbon=True,
+                                          include_peak_charge=True,
+                                          peak_charge_weight=self.peak_charge_weight)
 
-        # cost = price/1000 * sum(Pg * intensity)  -> 单位: CNY
-        cw = self.carbon_price / 1000.0
+        # carbon_sensitivity 放大碳成本在目标函数中的权重，提升减排力度
+        cw = self.carbon_price / 1000.0 * self.carbon_sensitivity
         return self._mpc.solve(bess.get_soc(), pred_demand, renewable_gen, grid_prices,
                                carbon=carbon_intensity, carbon_weight=cw)
 
@@ -221,13 +238,14 @@ class CarbonAwareMPCStrategy(BaseStrategy):
 # ========================================================================
 class RobustMPCStrategy(BaseStrategy):
     name = "Robust MPC (Conformal)"
-    description = "用保形预测上界代替点预测，应对极端负荷不确定性"
+    description = "保形预测上界 + 削峰，应对极端负荷不确定性"
 
     def __init__(self, horizon: int = 24, conformal_predictor=None,
-                 safety_factor: float = 1.0):
+                 safety_factor: float = 1.0, peak_charge_weight: float = 1.5):
         self.horizon = horizon
         self.conformal = conformal_predictor
         self.safety_factor = float(safety_factor)
+        self.peak_charge_weight = peak_charge_weight
         self._mpc = None
 
     def optimize(self, bess, pred_demand, renewable_gen, grid_prices,
@@ -245,7 +263,10 @@ class RobustMPCStrategy(BaseStrategy):
         robust_demand = pd_arr + self.safety_factor * (np.asarray(pred_upper) - pd_arr)
 
         if self._mpc is None or self._mpc.bess is not bess:
-            self._mpc = _ParametrizedMPC(bess, self.horizon, include_carbon=False)
+            self._mpc = _ParametrizedMPC(bess, self.horizon,
+                                          include_carbon=False,
+                                          include_peak_charge=True,
+                                          peak_charge_weight=self.peak_charge_weight)
         return self._mpc.solve(bess.get_soc(), robust_demand, renewable_gen, grid_prices)
 
 
@@ -310,17 +331,23 @@ class PeakShavingRuleStrategy(BaseStrategy):
 # ========================================================================
 def build_default_strategy_suite(conformal_predictor=None,
                                  horizon: int = 24,
-                                 carbon_price_cny_per_ton: float = 100.0):
+                                 carbon_price_cny_per_ton: float = 100.0,
+                                 peak_charge_weight: float = 1.5,
+                                 carbon_sensitivity: float = 3.0):
     """
     返回可直接使用的默认策略集合 —— 对应报告 §六 提炼的创新组合
     """
     return [
         BaselineStrategy(),
         PeakShavingRuleStrategy(horizon=horizon),
-        EconomicMPCStrategy(horizon=horizon),
+        EconomicMPCStrategy(horizon=horizon,
+                            peak_charge_weight=peak_charge_weight),
         CarbonAwareMPCStrategy(horizon=horizon,
-                               carbon_price_cny_per_ton=carbon_price_cny_per_ton),
+                               carbon_price_cny_per_ton=carbon_price_cny_per_ton,
+                               peak_charge_weight=peak_charge_weight,
+                               carbon_sensitivity=carbon_sensitivity),
         RobustMPCStrategy(horizon=horizon,
                           conformal_predictor=conformal_predictor,
-                          safety_factor=1.0),
+                          safety_factor=1.0,
+                          peak_charge_weight=peak_charge_weight),
     ]

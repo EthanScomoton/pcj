@@ -17,9 +17,6 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
-from EF import calculate_economic_metrics
-
-
 # =======================================================================
 # 全局样式 —— 修复 CO₂ 显示 / 统一字号
 # =======================================================================
@@ -82,28 +79,86 @@ def _annotate_bars(ax, bars, values, fmt='{:.0f}', offset_frac=0.01):
 # =======================================================================
 def compute_economic_kpis(results_df, investment_cost=0.0,
                           lifetime=10, discount_rate=0.05,
-                          baseline_total_cost=None):
-    total_cost = float(results_df['cost'].sum())
+                          baseline_total_cost=None,
+                          demand_charge_rate=0.0,
+                          bess_capacity_kwh=0.0,
+                          om_cost_per_kwh_year=10.0,
+                          annual_degradation_pct=2.0):
+    """
+    经济性 KPI。改进点（对应问题 ① ③）：
+      · 加入 **需量电费** (demand_charge_rate * peak_grid_kW)
+      · NPV/IRR 考虑 **O&M 成本** 和 **容量衰减**
+    """
+    total_energy_cost = float(results_df['cost'].sum())
+    peak_grid_kw = float(results_df['grid_import'].max())
+    demand_charge = peak_grid_kw * demand_charge_rate      # 需量电费
+    total_cost = total_energy_cost + demand_charge
+
     sim_hours = int(len(results_df))
     kpi = {
         'total_cost_CNY':       total_cost,
+        'energy_cost_CNY':      total_energy_cost,
+        'demand_charge_CNY':    demand_charge,
+        'peak_grid_kW':         peak_grid_kw,
         'simulation_hours':     sim_hours,
         'avg_hourly_cost_CNY':  total_cost / max(1, sim_hours),
         'total_grid_kwh':       float(results_df['grid_import'].sum()),
     }
     if baseline_total_cost is not None and investment_cost > 0:
-        econ = calculate_economic_metrics(
-            costs=[baseline_total_cost, total_cost],
-            investment_cost=investment_cost,
-            discount_rate=discount_rate,
-            lifetime=lifetime,
-            simulation_hours=sim_hours,
-        )
+        # ---- 年化节省（含需量电费差） ----
+        raw_annual_savings = ((baseline_total_cost - total_cost)
+                              * (8760.0 / max(1, sim_hours)))
+        annual_om = bess_capacity_kwh * om_cost_per_kwh_year
+
+        # ---- 带衰减 + O&M 的现金流 ----
+        cash_flows = [-investment_cost]
+        for yr in range(1, lifetime + 1):
+            deg = max(0.0, 1.0 - annual_degradation_pct / 100.0 * (yr - 1))
+            cash_flows.append(raw_annual_savings * deg - annual_om)
+
+        # NPV
+        npv = sum(cf / (1 + discount_rate) ** t
+                  for t, cf in enumerate(cash_flows))
+        # 简单回收期
+        first_year_net = raw_annual_savings - annual_om
+        payback = (investment_cost / first_year_net
+                   if first_year_net > 0 else float('inf'))
+
+        # IRR（二分查找）
+        def _npv_at(r, flows):
+            return sum(cf / (1 + r) ** t for t, cf in enumerate(flows))
+
+        irr = None
+        total_cf = sum(cash_flows[1:])
+        if total_cf > investment_cost:
+            lo, hi = 0.0, 1.0
+            for _ in range(120):
+                mid = (lo + hi) / 2
+                if _npv_at(mid, cash_flows) > 0:
+                    lo = mid
+                else:
+                    hi = mid
+            irr = lo
+        elif abs(total_cf - investment_cost) < 1e-6:
+            irr = 0.0
+        elif first_year_net > 0:
+            lo, hi = -0.99, 0.0
+            for _ in range(120):
+                mid = (lo + hi) / 2
+                if _npv_at(mid, cash_flows) > 0:
+                    lo = mid
+                else:
+                    hi = mid
+            irr = hi
+        else:
+            irr = -1.0
+
         kpi.update({
-            'NPV_CNY':             econ['NPV'],
-            'payback_period':      econ['payback_period'],
-            'IRR':                 econ['IRR'],
-            'annual_savings_CNY':  econ['annual_savings'],
+            'NPV_CNY':             npv,
+            'payback_period':      payback,
+            'IRR':                 irr,
+            'annual_savings_CNY':  first_year_net,
+            'annual_om_CNY':       annual_om,
             'investment_cost_CNY': investment_cost,
         })
     return kpi
@@ -114,14 +169,25 @@ def compute_environmental_kpis(results_df, carbon_price_cny_per_ton=100.0):
     total_re_kwh = float(results_df['renewable_generation'].sum())
     total_demand = float(results_df['actual_demand'].sum())
     total_grid   = float(results_df['grid_import'].sum())
+
+    # ---- 修正 grid_independence_rate（问题 ④）----
+    # 旧公式: (demand - grid) / demand → 因往返损耗导致储能反而降低独立率
+    # 新公式: 每小时 min(demand, renewable + discharge) / demand → 统计本地资源实际覆盖率
+    re_arr = results_df['renewable_generation'].values
+    bp_arr = results_df['bess_power'].values
+    dm_arr = results_df['actual_demand'].values
+    local_supply = re_arr + np.maximum(bp_arr, 0.0)      # 可再生 + 储能放电
+    local_served = np.minimum(dm_arr, local_supply)       # 实际本地满足量
+    grid_indep = (float(local_served.sum()) / total_demand * 100.0
+                  if total_demand > 0 else 0.0)
+
     return {
         'total_CO2_kg':                    total_co2_kg,
         'total_CO2_tons':                  total_co2_kg / 1000.0,
         'total_renewable_kwh':             total_re_kwh,
         'renewable_self_consumption_rate': (total_re_kwh / total_demand * 100.0)
                                             if total_demand > 0 else 0.0,
-        'grid_independence_rate':          ((total_demand - total_grid) / total_demand * 100.0)
-                                            if total_demand > 0 else 0.0,
+        'grid_independence_rate':          grid_indep,
         'carbon_cost_CNY':                 (total_co2_kg / 1000.0) * carbon_price_cny_per_ton,
         'equivalent_trees_year':           (total_co2_kg / 1000.0) * 45.0,
         'equivalent_cars_year':            (total_co2_kg / 1000.0) / 4.6,
@@ -161,6 +227,8 @@ def build_comparison_table(strategy_results, baseline_name="Baseline (No Storage
         row = {
             'Strategy':              name,
             'Total Cost (CNY)':      round(eco['total_cost_CNY'], 2),
+            'Energy Cost (CNY)':     round(eco.get('energy_cost_CNY', eco['total_cost_CNY']), 2),
+            'Demand Charge (CNY)':   round(eco.get('demand_charge_CNY', 0), 2),
             'CO2 (tons)':            round(env['total_CO2_tons'], 3),
             'Carbon Cost (CNY)':     round(env['carbon_cost_CNY'], 2),
             'Peak Grid (kW)':        round(tech['peak_demand_kW'], 2),
@@ -471,17 +539,24 @@ def plot_cost_breakdown(strategy_results, save_path=None):
     _apply_style()
     names = list(strategy_results.keys())
     short = [_short(n) for n in names]
-    energy = [d['economic']['total_cost_CNY']        for d in strategy_results.values()]
-    carbon = [d['environmental']['carbon_cost_CNY']  for d in strategy_results.values()]
+    energy   = [d['economic'].get('energy_cost_CNY', d['economic']['total_cost_CNY'])
+                for d in strategy_results.values()]
+    demand   = [d['economic'].get('demand_charge_CNY', 0)
+                for d in strategy_results.values()]
+    carbon   = [d['environmental']['carbon_cost_CNY']
+                for d in strategy_results.values()]
 
     fig, ax = plt.subplots(figsize=(11, 6), constrained_layout=True)
 
-    b1 = ax.bar(short, energy, color='#4C78A8', label='Electricity Cost',
+    b1 = ax.bar(short, energy, color='#4C78A8', label='Energy Cost',
                 edgecolor='black', linewidth=0.6)
-    b2 = ax.bar(short, carbon, bottom=energy, color='#E45756', label='Carbon Cost',
-                edgecolor='black', linewidth=0.6)
+    b2 = ax.bar(short, demand, bottom=energy, color='#F58518',
+                label='Demand Charge', edgecolor='black', linewidth=0.6)
+    bot3 = [e + d for e, d in zip(energy, demand)]
+    b3 = ax.bar(short, carbon, bottom=bot3, color='#E45756',
+                label=f'{CO2_LABEL} Cost', edgecolor='black', linewidth=0.6)
 
-    total = [e + c for e, c in zip(energy, carbon)]
+    total = [e + d + c for e, d, c in zip(energy, demand, carbon)]
     ymax = max(total) * 1.15
     ax.set_ylim(0, ymax)
     for i, t in enumerate(total):
@@ -489,7 +564,7 @@ def plot_cost_breakdown(strategy_results, save_path=None):
                 ha='center', va='bottom', fontsize=9, fontweight='medium')
 
     ax.set_ylabel('Cost (CNY)')
-    ax.set_title(f'Total Cost Breakdown (Electricity + {CO2_LABEL} Price)',
+    ax.set_title(f'Total Cost Breakdown (Energy + Demand Charge + {CO2_LABEL})',
                  fontweight='bold')
     ax.tick_params(axis='x', rotation=15)
     for lbl in ax.get_xticklabels():
@@ -643,7 +718,8 @@ def generate_all_plots(strategy_results, comparison_df, output_dir,
 # 文本报告
 # =======================================================================
 def format_final_report(strategy_results, scored_df, bess_config,
-                        sim_hours, carbon_price):
+                        sim_hours, carbon_price,
+                        demand_charge_rate=0.0):
     lines = []
     lines.append("=" * 80)
     lines.append("     港口综合能源系统 — 策略选择平台  最终分析报告")
@@ -652,6 +728,7 @@ def format_final_report(strategy_results, scored_df, bess_config,
     lines.append(f"  储能配置     : {bess_config['capacity_kwh']} kWh / "
                  f"{bess_config['power_kw']} kW")
     lines.append(f"  碳价         : {carbon_price:.1f} 元/tCO2")
+    lines.append(f"  需量电费     : {demand_charge_rate:.1f} 元/kW/月")
     lines.append("-" * 80)
 
     lines.append("\n【经济+环保+技术 综合排名】")

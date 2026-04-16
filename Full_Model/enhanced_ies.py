@@ -119,7 +119,12 @@ class StrategyAwareIES(IntegratedEnergySystem):
                 bess_signed  =  actual_power   # 放电记为正
 
             # ---- 实际潮流 ----
-            actual_demand    = float(historic_data.iloc[t]['E_grid'])
+            # E_total = 港口真实总需求 (E_grid + PV + Wind + 原有储能)
+            # 若 E_total 列不存在则回退到 E_grid
+            if 'E_total' in historic_data.columns:
+                actual_demand = float(historic_data.iloc[t]['E_total'])
+            else:
+                actual_demand = float(historic_data.iloc[t]['E_grid'])
             actual_renewable = float(renewable_gen[0])
             actual_grid = actual_demand - actual_renewable - bess_signed
 

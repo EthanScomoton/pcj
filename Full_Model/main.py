@@ -118,10 +118,28 @@ def main():
     if 'E_grid' in data_df.columns:
         data_df['E_grid'] = data_df['E_grid'].ffill().fillna(0)
 
+    # ---- 保存原始能量值 (feature_engineering 会对 E_PV/E_wind 做 LabelEncode) ----
+    for _ecol in ['E_PV', 'E_wind', 'E_storage_discharge']:
+        if _ecol in data_df.columns:
+            data_df[f'{_ecol}_kWh'] = pd.to_numeric(data_df[_ecol], errors='coerce').fillna(0.0)
+        else:
+            data_df[f'{_ecol}_kWh'] = 0.0
+
     data_df, feature_cols, target_col = feature_engineering(data_df)
-    print(f"   行数={len(data_df)}, 特征维度={len(feature_cols)}, "
-          f"平均负荷={data_df['E_grid'].mean():.1f} kW, "
-          f"峰值={data_df['E_grid'].max():.1f} kW")
+
+    # ---- 构建港口真实总需求: E_total = E_grid + PV + Wind + 原有储能放电 ----
+    data_df['E_total'] = (data_df['E_grid']
+                          + data_df['E_PV_kWh']
+                          + data_df['E_wind_kWh']
+                          + data_df['E_storage_discharge_kWh'])
+
+    print(f"   行数={len(data_df)}, 特征维度={len(feature_cols)}")
+    print(f"   港口总负荷: 平均={data_df['E_total'].mean():.1f} kW, "
+          f"峰值={data_df['E_total'].max():.1f} kW")
+    print(f"   其中电网购电: {data_df['E_grid'].mean():.1f} kW | "
+          f"风电: {data_df['E_wind_kWh'].mean():.1f} kW | "
+          f"光伏: {data_df['E_PV_kWh'].mean():.1f} kW | "
+          f"原有储能: {data_df['E_storage_discharge_kWh'].mean():.1f} kW")
 
     # ==================================================================
     # 2) Scaler 拟合
@@ -257,6 +275,24 @@ def main():
     predictions_by_index = cache_ies.precompute_predictions(
         data_df, sim_hours, horizon=cfg.MPC_HORIZON
     )
+
+    # ---- 恢复原始可再生数据 (供仿真阶段 get_renewable_forecast 使用) ----
+    # feature_engineering 已对 E_PV/E_wind 做了 LabelEncode, 需要还原为 kWh
+    data_df['E_PV']   = data_df['E_PV_kWh']
+    data_df['E_wind']  = data_df['E_wind_kWh']
+
+    # ---- 将模型预测从 E_grid → E_total ----
+    # 模型预测的是电网购电量，需加回可再生 + 原有储能才是港口总需求
+    print("   将预测值从 E_grid 校正为 E_total ...")
+    for idx in range(len(predictions_by_index)):
+        safe_idx = min(idx, len(data_df) - 1)
+        predictions_by_index[idx] += (
+            float(data_df.iloc[safe_idx]['E_PV_kWh'])
+            + float(data_df.iloc[safe_idx]['E_wind_kWh'])
+            + float(data_df.iloc[safe_idx]['E_storage_discharge_kWh'])
+        )
+    print(f"   校正后预测均值: {predictions_by_index[:sim_hours].mean():.1f} kW "
+          f"(实际 E_total 均值: {data_df['E_total'].iloc[:sim_hours].mean():.1f} kW)")
 
     # ==================================================================
     # 7) 策略评估

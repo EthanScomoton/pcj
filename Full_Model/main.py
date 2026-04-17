@@ -52,6 +52,7 @@ from analysis           import (
     generate_all_plots,
     format_final_report,
 )
+from experiments        import run_all_experiments
 
 
 # =======================================================================
@@ -101,7 +102,7 @@ def main():
     # ==================================================================
     # 1) 数据加载 & 预处理
     # ==================================================================
-    print("\n[1/8] 数据加载 & 特征工程 ...")
+    print("\n[1/9] 数据加载 & 特征工程 ...")
     data_df = load_data()
     data_df['timestamp'] = pd.to_datetime(data_df['timestamp'])
     data_df = data_df.drop_duplicates(subset=['timestamp']).set_index('timestamp')
@@ -144,7 +145,7 @@ def main():
     # ==================================================================
     # 2) Scaler 拟合
     # ==================================================================
-    print("\n[2/8] 归一化器拟合 (前 80% 作训练集) ...")
+    print("\n[2/9] 归一化器拟合 (前 80% 作训练集) ...")
     X_all = data_df[feature_cols].values.astype(float)
     y_all = data_df[target_col].values.astype(float)
     train_size = int(0.80 * len(data_df))
@@ -154,7 +155,7 @@ def main():
     # ==================================================================
     # 3) 模型加载
     # ==================================================================
-    print("\n[3/8] 创建并加载预测模型 (best_EModel_FeatureWeight4.pth) ...")
+    print("\n[3/9] 创建并加载预测模型 (best_EModel_FeatureWeight4.pth) ...")
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"   设备: {device}")
 
@@ -198,7 +199,7 @@ def main():
     # ==================================================================
     # 4) 保形预测校准 (§三.3.3)
     # ==================================================================
-    print("\n[4/8] 保形预测校准 ...")
+    print("\n[4/9] 保形预测校准 ...")
     conformal = ConformalPredictor(alpha=cfg.CONFORMAL_ALPHA)
     try:
         win = getattr(model, 'window_size', 20)
@@ -226,7 +227,7 @@ def main():
     # ==================================================================
     # 5) 电价 + 动态碳强度
     # ==================================================================
-    print("\n[5/8] 电价与动态碳强度构造 ...")
+    print("\n[5/9] 电价与动态碳强度构造 ...")
     # ---- 分时电价（工商业大工业电价，含尖峰时段）----
     prices = []
     for ts in data_df['timestamp']:
@@ -261,7 +262,7 @@ def main():
     # ==================================================================
     # 6) 预计算负荷预测 (跨策略共享)
     # ==================================================================
-    print(f"\n[6/8] 预计算 {cfg.SIM_HOURS} + {cfg.MPC_HORIZON} 小时的负荷预测 ...")
+    print(f"\n[6/9] 预计算 {cfg.SIM_HOURS} + {cfg.MPC_HORIZON} 小时的负荷预测 ...")
     sim_hours = min(cfg.SIM_HOURS, len(data_df) - cfg.MPC_HORIZON - 1)
     cache_ies = StrategyAwareIES(
         capacity_kwh=cfg.BESS_CAPACITY_KWH,
@@ -297,7 +298,7 @@ def main():
     # ==================================================================
     # 7) 策略评估
     # ==================================================================
-    print("\n[7/8] 多策略对比评估 ...")
+    print("\n[7/9] 多策略对比评估 ...")
     pcw = cfg.DEMAND_CHARGE_CNY_PER_KW_MONTH / 30.0   # 日化需量电费 → MPC 削峰权重
     strategies_to_run = [
         BaselineStrategy(),                                                     # 无储能
@@ -390,7 +391,7 @@ def main():
     # ==================================================================
     # 8) 综合分析 + 可视化 + 报告
     # ==================================================================
-    print("\n[8/8] 综合分析 / 可视化 / 生成报告 ...")
+    print("\n[8/9] 综合分析 / 可视化 / 生成报告 ...")
     comp_df   = build_comparison_table(strategy_results, baseline_name="Baseline (No Storage)")
     scored_df = score_strategies(comp_df, weights=cfg.SCORE_WEIGHTS)
 
@@ -429,7 +430,31 @@ def main():
     report_path = os.path.join(cfg.OUTPUT_DIR, 'final_report.txt')
     with open(report_path, 'w', encoding='utf-8') as f:
         f.write(report)
-    print(f"\n  ✅ 全部输出已保存至: {cfg.OUTPUT_DIR}")
+    print(f"\n  ✅ 基础分析已保存至: {cfg.OUTPUT_DIR}")
+
+    # ==================================================================
+    # 9) 高级分析实验 (8 项)
+    # ==================================================================
+    print("\n[9/9] 高级分析实验 (CP验证 / UQ对比 / 鲁棒性 / 碳敏感性 / 计时 / BESS优化 / TOU / 极端事件) ...")
+    run_all_experiments(
+        strategy_results=strategy_results,
+        data_df=data_df,
+        predictions_by_index=predictions_by_index,
+        conformal=conformal,
+        model=model,
+        cfg=cfg,
+        price_df=price_df,
+        carbon_intensity_hourly=carbon_intensity_hourly,
+        carbon_tracker=carbon_tracker,
+        scaler_X=scaler_X,
+        scaler_y=scaler_y,
+        feature_cols=feature_cols,
+        sim_hours=sim_hours,
+        baseline_total_cost=baseline_total_cost,
+        invest_cost=invest_cost,
+        output_dir=cfg.OUTPUT_DIR,
+    )
+    print(f"\n  ✅ 全部输出（含实验）已保存至: {cfg.OUTPUT_DIR}")
 
 
 # =======================================================================

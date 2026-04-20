@@ -26,7 +26,17 @@
       "Bash(python3 -c ' *)",
       "Bash(python -c ' *)",
       "Bash(python -c \"import torch; print\\('torch:', torch.__version__\\)\")",
-      "Bash(conda run *)"
+      "Bash(conda run *)",
+      "Bash(python -c \"import py_compile; py_compile.compile\\('conformal_predictor.py', doraise=True\\); print\\('conformal_predictor.py OK'\\)\")",
+      "Bash(python -c \"import py_compile; py_compile.compile\\('experiments.py', doraise=True\\); print\\('experiments.py OK'\\)\")",
+      "Bash(python -c \"import py_compile; py_compile.compile\\('main.py', doraise=True\\); print\\('main.py OK'\\)\")",
+      "Bash(python -c \"import py_compile; py_compile.compile\\('analysis.py', doraise=True\\); print\\('analysis.py OK'\\)\")",
+      "Bash(python3 -c \"import torch; print\\('torch OK'\\)\")",
+      "Bash(conda info *)",
+      "Bash(grep -v \"^$\")",
+      "Read(//opt/anaconda3/envs/**)",
+      "Bash(pip list *)",
+      "Bash(/opt/anaconda3/envs/yanjiu/bin/python -c ' *)"
     ]
   }
 }

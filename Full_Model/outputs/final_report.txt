@@ -9,11 +9,11 @@
 
 【经济+环保+技术 综合排名】
                Strategy  Cost Savings (%)  CO2 Reduction (%)  Peak Reduction (%)  Grid Indep. (%)    score
-           Economic MPC              3.11               0.94                8.38            30.40 0.911111
- Robust MPC (Conformal)              3.03               0.88                8.38            30.40 0.884155
-       Carbon-Aware MPC              2.71               1.26                4.59            30.33 0.835486
-Rule-Based Peak Shaving              0.59               0.19                0.00            28.35 0.128662
-  Baseline (No Storage)              0.00               0.00                0.00            27.74 0.000000
+           Economic MPC              3.16               0.95                8.68            30.40 0.911811
+       Carbon-Aware MPC              2.73               1.27                4.67            30.32 0.859222
+ Robust MPC (Conformal)              1.69               0.95               -2.93            30.97 0.475735
+Rule-Based Peak Shaving              0.28              -0.00                0.00            29.43 0.098535
+  Baseline (No Storage)              0.00               0.00                0.00            27.74 0.063092
 
 【指标定义说明】
   RE Penetration (%):  可再生总发电量 / 总需求。系统固有特征，不随调度策略变化。
@@ -23,38 +23,38 @@ Rule-Based Peak Shaving              0.59               0.19                0.00
   推荐策略: Economic MPC
 ================================================================================
  · 经济性指标
-     total_cost_CNY                : 23466183.237964645
-     energy_cost_CNY               : 20490942.027251802
-     demand_charge_CNY             : 2975241.2107128445
-     peak_grid_kW                  : 78295.82133454854
+     total_cost_CNY                : 23454033.040670894
+     energy_cost_CNY               : 20488477.150244836
+     demand_charge_CNY             : 2965555.890426057
+     peak_grid_kW                  : 78040.94448489623
      simulation_hours              : 720
-     avg_hourly_cost_CNY           : 32591.921163839786
-     total_grid_kwh                : 25966967.239226848
-     NPV_CNY                       : 48203514.3711836
-     payback_period                : 1.696016692918033
-     IRR                           : 0.56306382665455
-     annual_savings_CNY            : 8962175.940525724
+     avg_hourly_cost_CNY           : 32575.045889820685
+     total_grid_kwh                : 25966754.80272036
+     NPV_CNY                       : 49251417.57329907
+     payback_period                : 1.668495546176523
+     IRR                           : 0.5730564971374507
+     annual_savings_CNY            : 9110003.340933027
      annual_om_CNY                 : 200000.0
      investment_cost_CNY           : 15200000
  · 环保性指标
-     total_CO2_kg                  : 18599157.387899734
-     total_CO2_tons                : 18599.157387899733
+     total_CO2_kg                  : 18596732.588386822
+     total_CO2_tons                : 18596.73258838682
      total_renewable_kwh           : 9925604.361833334
      renewable_penetration         : 27.744519814532254
-     grid_independence_rate        : 30.400611217753674
-     carbon_cost_CNY               : 2231898.886547968
-     equivalent_trees_year         : 836962.082455488
-     equivalent_cars_year          : 4043.295084326029
+     grid_independence_rate        : 30.395568781158666
+     carbon_cost_CNY               : 2231607.9106064187
+     equivalent_trees_year         : 836852.966477407
+     equivalent_cars_year          : 4042.7679539971355
  · 技术性指标
-     peak_demand_kW                : 78295.82133454854
-     avg_demand_kW                 : 36065.23227670396
-     load_factor                   : 0.4606278044214084
-     avg_soc                       : 0.4814315398880037
+     peak_demand_kW                : 78040.94448489623
+     avg_demand_kW                 : 36064.937226000504
+     load_factor                   : 0.4621284053395892
+     avg_soc                       : 0.48192483918474444
      min_soc                       : 0.1
      max_soc                       : 0.9
      soc_range                     : 0.8
-     estimated_cycles              : 112.0
-     total_charge_kwh              : 1067779.886337182
-     total_discharge_kwh           : 965416.9290900409
+     estimated_cycles              : 106.0
+     total_charge_kwh              : 1065763.5177029725
+     total_discharge_kwh           : 963612.9969623177
 
 ================================================================================

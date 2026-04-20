@@ -106,15 +106,30 @@ def experiment_cp_coverage(conformal, data_df, predictions_by_index,
 
     actuals = data_df['E_total'].values[:sim_hours]
     preds   = predictions_by_index[:sim_hours].copy()
-    q90 = conformal.q_hat
-    # 计算 95% q_hat
+
+    # 使用 predict_interval 获取 90% 区间（兼容 normalized 模式）
+    lo_90, hi_90 = conformal.predict_interval(preds)
+    covered_90 = ((actuals >= lo_90) & (actuals <= hi_90))
+
+    # 计算 95% 区间: 临时修改 alpha
     res = conformal.calibration_residuals
     m = len(res)
     q95_level = min(np.ceil((m + 1) * 0.95) / m, 1.0)
-    q95 = float(np.quantile(res, q95_level))
+    q95_score = float(np.quantile(res, q95_level))
+    if conformal.mode == 'normalized':
+        scales = np.maximum(np.abs(preds), conformal.norm_eps)
+        lo_95 = np.maximum(0.0, preds - q95_score * scales)
+        hi_95 = preds + q95_score * scales
+    else:
+        lo_95 = np.maximum(0.0, preds - q95_score)
+        hi_95 = preds + q95_score
+    covered_95 = ((actuals >= lo_95) & (actuals <= hi_95))
+    emp_90 = covered_90.mean() * 100
+    emp_95 = covered_95.mean() * 100
 
-    covered_90 = ((actuals >= preds - q90) & (actuals <= preds + q90))
-    covered_95 = ((actuals >= preds - q95) & (actuals <= preds + q95))
+    # 用于展示的 q_hat 值（kW 等效）
+    q90 = conformal.q_hat
+    q95 = q95_score
     emp_90 = covered_90.mean() * 100
     emp_95 = covered_95.mean() * 100
 
@@ -135,8 +150,8 @@ def experiment_cp_coverage(conformal, data_df, predictions_by_index,
             if mask.sum() > 0:
                 cond[label][g] = covered_90[mask].mean() * 100
 
-    # 区间宽度分布
-    widths = 2 * q90 * np.ones(sim_hours)  # 固定宽度
+    # 区间宽度分布 (normalized 模式下宽度随预测量级变化)
+    widths = hi_90 - lo_90
 
     # ---- 图 1: 条件覆盖率 (按季节/时段/负荷水平) ----
     fig, axes = plt.subplots(1, 3, figsize=(15, 5), constrained_layout=True)
@@ -157,16 +172,23 @@ def experiment_cp_coverage(conformal, data_df, predictions_by_index,
                 dpi=150, bbox_inches='tight')
     plt.close(fig)
 
-    # ---- 图 2: 校准残差分布 + 分位阈值 ----
+    # ---- 图 2: 校准残差/分数分布 + 分位阈值 ----
     fig, ax = plt.subplots(figsize=(8, 5), constrained_layout=True)
     ax.hist(conformal.calibration_residuals, bins=50, color='#4C78A8',
             edgecolor='black', alpha=0.8)
-    ax.axvline(q90, color='red', ls='--', lw=1.5, label=f'q(90%)={q90:.0f}')
-    ax.axvline(q95, color='orange', ls='--', lw=1.5, label=f'q(95%)={q95:.0f}')
-    ax.set_xlabel('Absolute Residual (kW)')
+    if conformal.mode == 'normalized':
+        ax.axvline(q90, color='red', ls='--', lw=1.5, label=f'q(90%)={q90:.4f}')
+        ax.axvline(q95, color='orange', ls='--', lw=1.5, label=f'q(95%)={q95:.4f}')
+        ax.set_xlabel('Normalized Score  |r| / max(|ŷ|, ε)')
+        ax.set_title('Calibration Normalized Score Distribution',
+                     fontweight='bold')
+    else:
+        ax.axvline(q90, color='red', ls='--', lw=1.5, label=f'q(90%)={q90:.0f}')
+        ax.axvline(q95, color='orange', ls='--', lw=1.5, label=f'q(95%)={q95:.0f}')
+        ax.set_xlabel('Absolute Residual (kW)')
+        ax.set_title('Calibration Residual Distribution & Quantile Thresholds',
+                     fontweight='bold')
     ax.set_ylabel('Count')
-    ax.set_title('Calibration Residual Distribution & Quantile Thresholds',
-                 fontweight='bold')
     ax.legend()
     plt.savefig(os.path.join(output_dir, 'exp01_cp_residual_dist.png'),
                 dpi=150, bbox_inches='tight')
@@ -198,9 +220,9 @@ def experiment_cp_coverage(conformal, data_df, predictions_by_index,
     fig, ax = plt.subplots(figsize=(15, 5), constrained_layout=True)
     ax.plot(x_ax, actuals[:vis_len], 'k-', lw=1.3, label='Actual', zorder=3)
     ax.plot(x_ax, preds[:vis_len], '--', color='#2e86ab', lw=1.0, label='Predicted')
-    ax.fill_between(x_ax, preds[:vis_len] - q90, preds[:vis_len] + q90,
+    ax.fill_between(x_ax, lo_90[:vis_len], hi_90[:vis_len],
                     alpha=0.22, color='#2e86ab', label='CP 90% Band')
-    ax.fill_between(x_ax, preds[:vis_len] - q95, preds[:vis_len] + q95,
+    ax.fill_between(x_ax, lo_95[:vis_len], hi_95[:vis_len],
                     alpha=0.10, color='#F58518', label='CP 95% Band')
     # 标记未覆盖点
     miss_mask = ~covered_90[:vis_len]
@@ -318,13 +340,13 @@ def experiment_cp_vs_reparam(model, conformal, data_df,
     reparam_upper = mu_arr + 1.645 * sigma_arr
     cov_reparam = ((actuals_s >= reparam_lower) & (actuals_s <= reparam_upper)).mean() * 100
 
-    # CP 90% 区间
-    cp_lower = preds_s - q90
-    cp_upper = preds_s + q90
+    # CP 90% 区间 (兼容 normalized 模式)
+    cp_lower, cp_upper = conformal.predict_interval(preds_s)
     cov_cp = ((actuals_s >= cp_lower) & (actuals_s <= cp_upper)).mean() * 100
 
     width_reparam = (reparam_upper - reparam_lower).mean()
-    width_cp = 2 * q90
+    cp_widths_all = cp_upper - cp_lower
+    width_cp = cp_widths_all.mean()
 
     # ---- 图 1: 覆盖率 + 区间宽度联合对比 (双柱状图) ----
     fig, axes = plt.subplots(1, 2, figsize=(12, 5), constrained_layout=True)
@@ -356,7 +378,7 @@ def experiment_cp_vs_reparam(model, conformal, data_df,
 
     # ---- 图 2: 区间宽度分布箱线图 + 小提琴 ----
     reparam_widths = reparam_upper - reparam_lower
-    cp_widths_arr = np.full(len(sample_idx), 2 * q90)
+    cp_widths_arr = cp_widths_all  # normalized 模式下宽度随预测值变化
     fig, ax = plt.subplots(figsize=(7, 5), constrained_layout=True)
     vp = ax.violinplot([reparam_widths, cp_widths_arr], positions=[1, 2],
                        showmedians=True, showextrema=True)
@@ -381,10 +403,12 @@ def experiment_cp_vs_reparam(model, conformal, data_df,
     # 上图: CP
     axes[0].plot(x_axis, actuals[vis_idx], 'k-', lw=1.3, label='Actual', zorder=3)
     axes[0].plot(x_axis, preds[vis_idx], '--', color='#2e86ab', lw=0.9, alpha=0.7)
-    axes[0].fill_between(x_axis, preds[vis_idx] - q90, preds[vis_idx] + q90,
-                         alpha=0.3, color='#2e86ab', label=f'CP 90% (w={2*q90:.0f} kW)')
-    miss_cp = ~((actuals[vis_idx] >= preds[vis_idx] - q90) &
-                (actuals[vis_idx] <= preds[vis_idx] + q90))
+    cp_lo_vis, cp_hi_vis = conformal.predict_interval(preds[vis_idx])
+    cp_w_vis = (cp_hi_vis - cp_lo_vis).mean()
+    axes[0].fill_between(x_axis, cp_lo_vis, cp_hi_vis,
+                         alpha=0.3, color='#2e86ab', label=f'CP 90% (w_avg={cp_w_vis:.0f} kW)')
+    miss_cp = ~((actuals[vis_idx] >= cp_lo_vis) &
+                (actuals[vis_idx] <= cp_hi_vis))
     if miss_cp.any():
         axes[0].scatter(x_axis[miss_cp], actuals[vis_idx][miss_cp],
                         color='red', s=14, zorder=4, label='Miss')
@@ -414,8 +438,8 @@ def experiment_cp_vs_reparam(model, conformal, data_df,
     fig, ax = plt.subplots(figsize=(8, 6), constrained_layout=True)
     ax.scatter(actuals_s, reparam_widths, s=15, alpha=0.5,
                color='#E45756', label='Reparam (adaptive)')
-    ax.axhline(2 * q90, color='#2e86ab', ls='-', lw=2,
-               label=f'CP (fixed={2*q90:.0f} kW)')
+    ax.scatter(actuals_s, cp_widths_all, s=15, alpha=0.5,
+               color='#2e86ab', label=f'CP (avg={width_cp:.0f} kW)')
     ax.set_xlabel('Actual Demand (kW)')
     ax.set_ylabel('Interval Width (kW)')
     ax.set_title('Interval Width vs Demand Level — Adaptiveness',
@@ -432,7 +456,7 @@ def experiment_cp_vs_reparam(model, conformal, data_df,
         pen = np.where(actual < lower, 2 / alpha * (lower - actual),
                 np.where(actual > upper, 2 / alpha * (actual - upper), 0.0))
         return w + pen
-    ws_cp = winkler_score(preds_s - q90, preds_s + q90, actuals_s, alpha_val)
+    ws_cp = winkler_score(cp_lower, cp_upper, actuals_s, alpha_val)
     ws_rp = winkler_score(reparam_lower, reparam_upper, actuals_s, alpha_val)
     fig, ax = plt.subplots(figsize=(7, 5), constrained_layout=True)
     bp = ax.boxplot([ws_rp, ws_cp], labels=['Reparam', 'CP'], patch_artist=True,
@@ -567,24 +591,31 @@ def experiment_noise_robustness(
                 dpi=150, bbox_inches='tight')
     plt.close(fig)
 
-    # ---- 图 3: 鲁棒增益 (Robust vs Economic 差值) ----
+    # ---- 图 3: Robust vs Economic 成本差异 ----
     fig, ax = plt.subplots(figsize=(8, 5), constrained_layout=True)
+    gains = []
     for nl in nls:
         ec = df[(df['strategy'] == 'Economic MPC') & (df['noise'] == nl)]['total_cost'].values[0]
         rb = df[(df['strategy'] == 'Robust MPC') & (df['noise'] == nl)]['total_cost'].values[0]
         gain = (ec - rb) / ec * 100
+        gains.append(gain)
         color = '#2ca02c' if gain > 0 else '#E45756'
-        bar = ax.bar(f'{nl:.0%}', gain, color=color, edgecolor='black', linewidth=0.5)
-        ax.text(bar[0].get_x() + bar[0].get_width()/2,
-                gain + (0.1 if gain > 0 else -0.3),
-                f'{gain:.2f}%', ha='center', fontsize=9, fontweight='bold')
+        ax.bar(f'{nl:.0%}', gain, color=color, edgecolor='black', linewidth=0.5)
+    # 标注放在柱子内部或紧贴柱顶，防止甩出画布
+    y_range = max(abs(min(gains)), abs(max(gains)), 0.1)
+    ax.set_ylim(-y_range * 1.6, y_range * 1.6)
+    for i, (nl, g) in enumerate(zip(nls, gains)):
+        va = 'bottom' if g >= 0 else 'top'
+        offset = y_range * 0.08 if g >= 0 else -y_range * 0.08
+        ax.text(i, g + offset, f'{g:.3f}%', ha='center', va=va,
+                fontsize=9, fontweight='bold')
     ax.axhline(0, color='gray', ls='--', lw=0.8)
     ax.set_xlabel('Prediction Noise Level')
-    ax.set_ylabel('Robust MPC Cost Advantage (%)')
-    ax.set_title('Robust MPC Advantage over Economic MPC at Each Noise Level',
+    ax.set_ylabel('Cost Difference (%)\n(positive = Robust cheaper)')
+    ax.set_title('Robust vs Economic MPC Cost Difference by Noise Level',
                  fontweight='bold')
     plt.savefig(os.path.join(output_dir, 'exp03_noise_robust_advantage.png'),
-                dpi=150, bbox_inches='tight')
+                dpi=200, bbox_inches='tight')
     plt.close(fig)
 
     print(f"    完成, {len(records)} 条记录 -> 3 张图已保存")
@@ -850,28 +881,33 @@ def experiment_mpc_timing(
                 dpi=150, bbox_inches='tight')
     plt.close(fig)
 
-    # ---- 图 2: Solver fallback 堆叠柱 ----
-    fig, ax = plt.subplots(figsize=(7, 5), constrained_layout=True)
+    # ---- 图 2: Solver 统计汇总表 ----
+    fig, ax = plt.subplots(figsize=(8, 3.5), constrained_layout=True)
+    ax.axis('off')
     solver_names = ['OSQP', 'CLARABEL', 'default']
-    bottom = np.zeros(len(names))
-    colors_s = ['#4C78A8', '#F58518', '#E45756']
-    for si, sn in enumerate(solver_names):
-        vals = [all_records[n]['solver_counts'].get(sn, 0)
-                / max(1, sum(all_records[n]['solver_counts'].values())) * 100
-                for n in names]
-        bars = ax.bar(names, vals, bottom=bottom, color=colors_s[si], label=sn,
-                      edgecolor='black', linewidth=0.5)
-        for j, (b, v) in enumerate(zip(bars, vals)):
-            if v > 3:
-                ax.text(b.get_x() + b.get_width()/2, bottom[j] + v/2,
-                        f'{v:.0f}%', ha='center', fontsize=8, color='white',
-                        fontweight='bold')
-        bottom += np.array(vals)
-    ax.set_ylabel('Fraction (%)')
-    ax.set_title('Solver Usage Breakdown', fontweight='bold')
-    ax.legend()
-    plt.savefig(os.path.join(output_dir, 'exp05_solver_fallback.png'),
-                dpi=150, bbox_inches='tight')
+    col_labels = ['MPC Config', 'p50 (ms)', 'p95 (ms)', 'Mean (ms)',
+                  'Primary Solver', 'Steps']
+    table_data = []
+    for n in names:
+        r = all_records[n]
+        total = sum(r['solver_counts'].values())
+        primary = max(r['solver_counts'], key=r['solver_counts'].get)
+        pct = r['solver_counts'][primary] / max(1, total) * 100
+        table_data.append([
+            n, f'{r["p50_ms"]:.1f}', f'{r["p95_ms"]:.1f}',
+            f'{r["mean_ms"]:.1f}', f'{primary} ({pct:.0f}%)', str(total)])
+    tbl = ax.table(cellText=table_data, colLabels=col_labels,
+                   loc='center', cellLoc='center')
+    tbl.auto_set_font_size(False)
+    tbl.set_fontsize(9)
+    tbl.scale(1.0, 1.6)
+    # 表头颜色
+    for j in range(len(col_labels)):
+        tbl[0, j].set_facecolor('#4C78A8')
+        tbl[0, j].set_text_props(color='white', fontweight='bold')
+    ax.set_title('MPC Solver Performance Summary', fontweight='bold', pad=12)
+    plt.savefig(os.path.join(output_dir, 'exp05_solver_summary.png'),
+                dpi=200, bbox_inches='tight')
     plt.close(fig)
 
     # ---- 图 3: CDF 累积分布函数 ----
@@ -903,7 +939,7 @@ def experiment_mpc_timing(
     ax.set_title('Solve Time Trace — Warm Start Convergence', fontweight='bold')
     ax.legend()
     plt.savefig(os.path.join(output_dir, 'exp05_mpc_timing_trace.png'),
-                dpi=150, bbox_inches='tight')
+                dpi=200, bbox_inches='tight')
     plt.close(fig)
 
     for n in names:
@@ -928,7 +964,7 @@ def experiment_bess_capacity(
     _apply_style()
     if capacities is None:
         capacities = [0, 5000, 10000, 15000, 20000, 30000,
-                      40000, 50000, 60000, 75000, 100000]
+                      50000, 75000, 100000, 150000, 200000, 300000]
 
     c_rate = cfg.BESS_POWER_KW / max(cfg.BESS_CAPACITY_KWH, 1)
     pcw = getattr(cfg, 'DEMAND_CHARGE_CNY_PER_KW_MONTH', 38.0) / 30.0
@@ -1226,10 +1262,12 @@ def experiment_extreme_event(strategy_results, data_df,
     day_mask = np.array([d == worst_day for d in dates])
     hours_in_day = np.arange(day_mask.sum())
 
-    q90 = conformal.q_hat if conformal.q_hat is not None else 0
-
     actual_day = ts0['actual_demand'].values[day_mask]
     pred_day   = ts0['predicted_demand'].values[day_mask]
+
+    # CP 区间 (兼容 normalized 模式)
+    cp_lo_day, cp_hi_day = conformal.predict_interval(pred_day)
+    avg_half_w = ((cp_hi_day - cp_lo_day) / 2).mean()
 
     # ---- 图 1: 需求 vs 预测 + CP 带 + 误差阴影 ----
     fig, axes = plt.subplots(2, 1, figsize=(13, 8), constrained_layout=True,
@@ -1239,9 +1277,9 @@ def experiment_extreme_event(strategy_results, data_df,
     # 上: 需求曲线
     axes[0].plot(hours_in_day, actual_day, 'k-', lw=2, label='Actual Demand', zorder=3)
     axes[0].plot(hours_in_day, pred_day, '--', color='#2e86ab', lw=1.8, label='Predicted')
-    axes[0].fill_between(hours_in_day, pred_day - q90, pred_day + q90,
+    axes[0].fill_between(hours_in_day, cp_lo_day, cp_hi_day,
                          alpha=0.25, color='#2e86ab', label='CP 90% Band')
-    miss = ~((actual_day >= pred_day - q90) & (actual_day <= pred_day + q90))
+    miss = ~((actual_day >= cp_lo_day) & (actual_day <= cp_hi_day))
     if miss.any():
         axes[0].scatter(hours_in_day[miss], actual_day[miss],
                         color='red', s=40, zorder=4, label='CP Miss', marker='x')
@@ -1252,8 +1290,9 @@ def experiment_extreme_event(strategy_results, data_df,
     colors_err = ['#2ca02c' if e >= 0 else '#E45756' for e in err_day]
     axes[1].bar(hours_in_day, err_day, color=colors_err, edgecolor='black', linewidth=0.3)
     axes[1].axhline(0, color='gray', lw=0.8)
-    axes[1].axhline(q90, color='red', ls=':', lw=1, label=f'+q90={q90:.0f}')
-    axes[1].axhline(-q90, color='red', ls=':', lw=1, label=f'-q90')
+    half_w = (cp_hi_day - cp_lo_day) / 2
+    axes[1].plot(hours_in_day, half_w, color='red', ls=':', lw=1, label=f'+CP bound')
+    axes[1].plot(hours_in_day, -half_w, color='red', ls=':', lw=1, label=f'-CP bound')
     axes[1].set_xlabel('Hour of Day')
     axes[1].set_ylabel('Error (kW)')
     axes[1].legend(fontsize=8, ncol=2)
@@ -1277,7 +1316,7 @@ def experiment_extreme_event(strategy_results, data_df,
         axes[ai].legend(fontsize=8, ncol=2)
     axes[2].set_xlabel('Hour of Day')
     plt.savefig(os.path.join(output_dir, 'exp08_extreme_strategy_response.png'),
-                dpi=150, bbox_inches='tight')
+                dpi=200, bbox_inches='tight')
     plt.close(fig)
 
     # ---- 图 3: 累计成本 & CO2 ----
@@ -1348,7 +1387,7 @@ def experiment_extreme_event(strategy_results, data_df,
     plt.close(fig)
 
     cp_cov_day = float(
-        ((actual_day >= pred_day - q90) & (actual_day <= pred_day + q90)).mean() * 100
+        ((actual_day >= cp_lo_day) & (actual_day <= cp_hi_day)).mean() * 100
     )
     result = {
         'worst_day': str(worst_day),

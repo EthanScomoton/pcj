@@ -647,7 +647,7 @@ def plot_daily_profile(strategy_results, save_path=None):
         ax.legend(loc='upper left', bbox_to_anchor=(1.005, 1.0), frameon=True)
 
     if save_path:
-        plt.savefig(save_path, dpi=150, bbox_inches='tight')
+        plt.savefig(save_path, dpi=200, bbox_inches='tight')
         print(f"  [plot] 日典型曲线: {save_path}")
     plt.show()
     plt.close(fig)
@@ -692,7 +692,7 @@ def plot_soc_distribution(strategy_results, save_path=None):
     ax.legend(loc='lower right')
 
     if save_path:
-        plt.savefig(save_path, dpi=150, bbox_inches='tight')
+        plt.savefig(save_path, dpi=200, bbox_inches='tight')
         print(f"  [plot] SOC 分布图: {save_path}")
     plt.show()
     plt.close(fig)

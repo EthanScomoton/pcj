@@ -79,7 +79,7 @@ class PlatformConfig:
 
     # 保形预测
     CONFORMAL_ALPHA = 0.10         # 90% 覆盖率
-    CAL_FRACTION    = 0.10         # 训练后 10% 作为校准集
+    CAL_FRACTION    = 0.15         # 训练后 15% 作为校准集（增大以稳定分位数估计）
 
     # KPI 打分权重
     SCORE_WEIGHTS = {'cost': 0.40, 'co2': 0.35, 'peak': 0.25}
@@ -218,7 +218,9 @@ def main():
                 model, X_cal_arr, y_cal_arr, device,
                 scaler_y=scaler_y, use_log_y=True,
             )
-            print(f"   ✅ 保形校准完成: q̂={qhat:.2f} kW, 样本数={len(X_cal)}")
+            unit = '' if conformal.mode == 'normalized' else ' kW'
+            print(f"   ✅ 保形校准完成 ({conformal.mode}): q̂={qhat:.4f}{unit}, "
+                  f"样本数={len(X_cal)}")
         else:
             print("   ⚠ 校准样本不足，鲁棒 MPC 将使用默认 10% margin")
     except Exception as e:
@@ -297,6 +299,7 @@ def main():
 
     # ---- 在 E_total 空间重校准保形预测器 ----
     # 原 q_hat 基于 E_grid 残差 (step 4)，现在切换到 E_total 残差以保持一致
+    # 使用 normalized 模式: 残差按预测量级归一化，区间宽度自适应
     print("   在 E_total 空间重校准保形预测器 ...")
     cal_start = int(0.80 * len(data_df))
     cal_end   = min(len(data_df), cal_start + int(cfg.CAL_FRACTION * len(data_df)))
@@ -306,9 +309,16 @@ def main():
         cal_actuals = data_df['E_total'].values[cal_start:cal_end]
         cal_resid   = np.abs(cal_preds - cal_actuals)
         old_qhat = conformal.q_hat
-        conformal.calibrate_from_residuals(cal_resid)
-        print(f"   q_hat: {old_qhat:.0f} -> {conformal.q_hat:.0f} kW "
-              f"(校准样本={cal_end - cal_start})")
+        old_mode  = conformal.mode
+        conformal.calibrate_from_residuals(cal_resid, predictions=cal_preds)
+        print(f"   q_hat: {old_qhat:.0f} -> {conformal.q_hat:.4f} "
+              f"({'normalized' if conformal.mode == 'normalized' else 'kW'})"
+              f"  (校准样本={cal_end - cal_start})")
+        # 验证: 打印校准集上的实际覆盖率和典型区间宽度
+        lo, hi = conformal.predict_interval(cal_preds)
+        actual_cov = np.mean((cal_actuals >= lo) & (cal_actuals <= hi))
+        avg_width = np.mean(hi - lo)
+        print(f"   校准集覆盖率: {actual_cov:.1%}, 平均区间宽度: {avg_width:.0f} kW")
     else:
         print("   校准样本不足，保留原始 q_hat")
 

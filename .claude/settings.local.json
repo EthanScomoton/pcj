@@ -19,7 +19,8 @@
       "Bash(awk '{printf \"%-45s %10s\\\\n\", $NF, $5}')",
       "Bash(python3 -c \"import ast; ast.parse\\(open\\('analysis.py'\\).read\\(\\)\\); print\\('✅ analysis.py syntax OK'\\)\")",
       "Bash(python -c \"import ast; ast.parse\\(open\\('experiments.py'\\).read\\(\\)\\); print\\('experiments.py syntax OK'\\)\")",
-      "Bash(python -c \"import ast; ast.parse\\(open\\('main.py'\\).read\\(\\)\\); print\\('main.py syntax OK'\\)\")"
+      "Bash(python -c \"import ast; ast.parse\\(open\\('main.py'\\).read\\(\\)\\); print\\('main.py syntax OK'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('experiments.py'\\).read\\(\\)\\); print\\('OK'\\)\")"
     ]
   }
 }

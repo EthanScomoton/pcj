@@ -19,38 +19,38 @@ Rule-Based Peak Shaving              0.82               0.44               -0.37
   推荐策略: Economic MPC
 ================================================================================
  · 经济性指标
-     total_cost_CNY                : 23466183.09345535
-     energy_cost_CNY               : 20490941.882769994
-     demand_charge_CNY             : 2975241.2106853547
-     peak_grid_kW                  : 78295.82133382512
+     total_cost_CNY                : 23466183.237964645
+     energy_cost_CNY               : 20490942.027251802
+     demand_charge_CNY             : 2975241.2107128445
+     peak_grid_kW                  : 78295.82133454854
      simulation_hours              : 720
-     avg_hourly_cost_CNY           : 32591.920963132427
-     total_grid_kwh                : 25966967.151288673
-     NPV_CNY                       : 48203526.83450013
-     payback_period                : 1.696016360194155
-     IRR                           : 0.5630639455840425
-     annual_savings_CNY            : 8962177.698722169
+     avg_hourly_cost_CNY           : 32591.921163839786
+     total_grid_kwh                : 25966967.239226848
+     NPV_CNY                       : 48203514.3711836
+     payback_period                : 1.696016692918033
+     IRR                           : 0.56306382665455
+     annual_savings_CNY            : 8962175.940525724
      annual_om_CNY                 : 200000.0
      investment_cost_CNY           : 15200000
  · 环保性指标
-     total_CO2_kg                  : 18599155.931928482
-     total_CO2_tons                : 18599.155931928482
+     total_CO2_kg                  : 18599157.387899734
+     total_CO2_tons                : 18599.157387899733
      total_renewable_kwh           : 9925604.361833334
      renewable_self_consumption_rate: 27.744519814532254
-     grid_independence_rate        : 30.400608901352427
-     carbon_cost_CNY               : 2231898.711831418
-     equivalent_trees_year         : 836962.0169367817
-     equivalent_cars_year          : 4043.29476781054
+     grid_independence_rate        : 30.400611217753674
+     carbon_cost_CNY               : 2231898.886547968
+     equivalent_trees_year         : 836962.082455488
+     equivalent_cars_year          : 4043.295084326029
  · 技术性指标
-     peak_demand_kW                : 78295.82133382512
-     avg_demand_kW                 : 36065.2321545676
-     load_factor                   : 0.46062780286572985
-     avg_soc                       : 0.48138003091095305
+     peak_demand_kW                : 78295.82133454854
+     avg_demand_kW                 : 36065.23227670396
+     load_factor                   : 0.4606278044214084
+     avg_soc                       : 0.4814315398880037
      min_soc                       : 0.1
      max_soc                       : 0.9
      soc_range                     : 0.8
      estimated_cycles              : 112.0
-     total_charge_kwh              : 1067778.969706262
-     total_discharge_kwh           : 965416.1003972942
+     total_charge_kwh              : 1067779.886337182
+     total_discharge_kwh           : 965416.9290900409
 
 ================================================================================

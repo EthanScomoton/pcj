@@ -295,6 +295,23 @@ def main():
     print(f"   校正后预测均值: {predictions_by_index[:sim_hours].mean():.1f} kW "
           f"(实际 E_total 均值: {data_df['E_total'].iloc[:sim_hours].mean():.1f} kW)")
 
+    # ---- 在 E_total 空间重校准保形预测器 ----
+    # 原 q_hat 基于 E_grid 残差 (step 4)，现在切换到 E_total 残差以保持一致
+    print("   在 E_total 空间重校准保形预测器 ...")
+    cal_start = int(0.80 * len(data_df))
+    cal_end   = min(len(data_df), cal_start + int(cfg.CAL_FRACTION * len(data_df)))
+    cal_end   = min(cal_end, len(predictions_by_index))
+    if cal_end - cal_start >= 30:
+        cal_preds   = predictions_by_index[cal_start:cal_end]
+        cal_actuals = data_df['E_total'].values[cal_start:cal_end]
+        cal_resid   = np.abs(cal_preds - cal_actuals)
+        old_qhat = conformal.q_hat
+        conformal.calibrate_from_residuals(cal_resid)
+        print(f"   q_hat: {old_qhat:.0f} -> {conformal.q_hat:.0f} kW "
+              f"(校准样本={cal_end - cal_start})")
+    else:
+        print("   校准样本不足，保留原始 q_hat")
+
     # ==================================================================
     # 7) 策略评估
     # ==================================================================

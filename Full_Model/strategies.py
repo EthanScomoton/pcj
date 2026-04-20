@@ -303,28 +303,27 @@ class PeakShavingRuleStrategy(BaseStrategy):
         cap = bess.capacity
         avg_price = float(np.mean(grid_prices)) if len(grid_prices) else 1.0
 
-        # 计算净需求 & 峰值目标——充电时不得推高购电峰值
+        # 削峰目标: 用均值做分界——高于均值放电,低于均值充电
         net = np.maximum(0.0, pred_demand - renewable_gen)
-        peak_target = float(np.percentile(net, 75))
+        peak_target = float(np.mean(net))
 
         for t in range(H):
-            net_t = pred_demand[t] - renewable_gen[t]
-            if grid_prices[t] < avg_price * self.valley_ratio and soc < bess.max_soc:
-                room = (bess.max_soc - soc) * cap
-                c = min(bess.max_power, room * 0.5)
-                # 关键修复：限制充电量，使 grid_import = net_t + c 不超过 peak_target
-                headroom = max(0.0, peak_target - max(0.0, net_t))
-                c = min(c, headroom)
-                charge[t] = max(0.0, c)
-                soc += charge[t] * bess.charging_efficiency / cap
-            elif (grid_prices[t] > avg_price * self.peak_ratio
-                  and soc > bess.min_soc and net_t > peak_target):
-                # 仅在净需求超过 peak_target 时放电，削峰至目标线
+            net_t = max(0.0, pred_demand[t] - renewable_gen[t])
+            if net_t > peak_target and soc > bess.min_soc:
+                # ---- 放电: 将 net 削至 peak_target ----
                 excess = net_t - peak_target
                 avail = (soc - bess.min_soc) * cap
-                d = min(bess.max_power, excess, avail * 0.5)
+                d = min(bess.max_power, excess, avail)
                 discharge[t] = max(0.0, d)
                 soc -= discharge[t] / bess.discharging_efficiency / cap
+            elif net_t < peak_target and soc < bess.max_soc:
+                # ---- 充电: 优先在低价时段, 且不推高 grid_import 超过 peak_target ----
+                if grid_prices[t] <= avg_price:
+                    headroom = max(0.0, peak_target - net_t)
+                    room = (bess.max_soc - soc) * cap
+                    c = min(bess.max_power, room, headroom)
+                    charge[t] = max(0.0, c)
+                    soc += charge[t] * bess.charging_efficiency / cap
 
         grid = np.maximum(0.0, pred_demand - renewable_gen - discharge + charge)
         return {

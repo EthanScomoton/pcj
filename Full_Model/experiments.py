@@ -288,14 +288,23 @@ def experiment_cp_vs_reparam(model, conformal, data_df,
         handle.remove()
 
         raw = fc_output['val'].numpy().flatten()
-        mu_raw, logvar_raw = raw[0], raw[1]
+        mu_raw, logvar_raw = raw[0], raw[1] if len(raw) > 1 else 0.0
         # 反归一化 mu
         if scaler_y is not None:
             mu_real = scaler_y.inverse_transform([[mu_raw]])[0, 0]
             mu_real = np.expm1(mu_real)
         else:
             mu_real = mu_raw
-        sigma_real = 0.1 * np.exp(0.5 * logvar_raw) * mu_real * 0.5  # 近似缩放
+        # 反归一化 sigma — delta method:
+        #   模型输出 logvar 在 StandardScaler(log1p(y)) 空间
+        #   sigma_norm = exp(0.5 * logvar_raw)
+        #   链式求导: sigma_real = (1 + mu_real) * scaler_y.scale_ * sigma_norm
+        sigma_norm = np.exp(0.5 * float(logvar_raw))
+        if scaler_y is not None:
+            scale_y = float(scaler_y.scale_[0])
+        else:
+            scale_y = 1.0
+        sigma_real = (1.0 + abs(mu_real)) * scale_y * sigma_norm
         mu_arr.append(mu_real)
         sigma_arr.append(max(sigma_real, 1.0))
 
@@ -918,7 +927,8 @@ def experiment_bess_capacity(
     print("  [Exp 6] BESS 容量优化 ...")
     _apply_style()
     if capacities is None:
-        capacities = [0, 5000, 10000, 15000, 20000, 30000, 40000, 50000]
+        capacities = [0, 5000, 10000, 15000, 20000, 30000,
+                      40000, 50000, 60000, 75000, 100000]
 
     c_rate = cfg.BESS_POWER_KW / max(cfg.BESS_CAPACITY_KWH, 1)
     pcw = getattr(cfg, 'DEMAND_CHARGE_CNY_PER_KW_MONTH', 38.0) / 30.0

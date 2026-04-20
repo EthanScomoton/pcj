@@ -24,7 +24,9 @@
       "Bash(python -c \"import ast; ast.parse\\(open\\('strategies.py'\\).read\\(\\)\\); print\\('strategies.py OK'\\)\")",
       "Bash(python -c \"import ast; ast.parse\\(open\\('analysis.py'\\).read\\(\\)\\); print\\('analysis.py OK'\\)\")",
       "Bash(python3 -c ' *)",
-      "Bash(python -c ' *)"
+      "Bash(python -c ' *)",
+      "Bash(python -c \"import torch; print\\('torch:', torch.__version__\\)\")",
+      "Bash(conda run *)"
     ]
   }
 }

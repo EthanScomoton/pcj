@@ -299,21 +299,30 @@ class PeakShavingRuleStrategy(BaseStrategy):
                 'status':         'optimal',
             }
 
-        # 无真实 SOC 模拟，这里只做一个近似“虚拟 SOC”来约束决策
         soc = bess.get_soc()
         cap = bess.capacity
         avg_price = float(np.mean(grid_prices)) if len(grid_prices) else 1.0
 
+        # 计算净需求 & 峰值目标——充电时不得推高购电峰值
+        net = np.maximum(0.0, pred_demand - renewable_gen)
+        peak_target = float(np.percentile(net, 75))
+
         for t in range(H):
-            net = pred_demand[t] - renewable_gen[t]
+            net_t = pred_demand[t] - renewable_gen[t]
             if grid_prices[t] < avg_price * self.valley_ratio and soc < bess.max_soc:
                 room = (bess.max_soc - soc) * cap
                 c = min(bess.max_power, room * 0.5)
+                # 关键修复：限制充电量，使 grid_import = net_t + c 不超过 peak_target
+                headroom = max(0.0, peak_target - max(0.0, net_t))
+                c = min(c, headroom)
                 charge[t] = max(0.0, c)
                 soc += charge[t] * bess.charging_efficiency / cap
-            elif grid_prices[t] > avg_price * self.peak_ratio and soc > bess.min_soc and net > 0:
+            elif (grid_prices[t] > avg_price * self.peak_ratio
+                  and soc > bess.min_soc and net_t > peak_target):
+                # 仅在净需求超过 peak_target 时放电，削峰至目标线
+                excess = net_t - peak_target
                 avail = (soc - bess.min_soc) * cap
-                d = min(bess.max_power, net, avail * 0.5)
+                d = min(bess.max_power, excess, avail * 0.5)
                 discharge[t] = max(0.0, d)
                 soc -= discharge[t] / bess.discharging_efficiency / cap
 

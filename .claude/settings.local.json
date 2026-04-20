@@ -20,7 +20,11 @@
       "Bash(python3 -c \"import ast; ast.parse\\(open\\('analysis.py'\\).read\\(\\)\\); print\\('✅ analysis.py syntax OK'\\)\")",
       "Bash(python -c \"import ast; ast.parse\\(open\\('experiments.py'\\).read\\(\\)\\); print\\('experiments.py syntax OK'\\)\")",
       "Bash(python -c \"import ast; ast.parse\\(open\\('main.py'\\).read\\(\\)\\); print\\('main.py syntax OK'\\)\")",
-      "Bash(python -c \"import ast; ast.parse\\(open\\('experiments.py'\\).read\\(\\)\\); print\\('OK'\\)\")"
+      "Bash(python -c \"import ast; ast.parse\\(open\\('experiments.py'\\).read\\(\\)\\); print\\('OK'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('strategies.py'\\).read\\(\\)\\); print\\('strategies.py OK'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('analysis.py'\\).read\\(\\)\\); print\\('analysis.py OK'\\)\")",
+      "Bash(python3 -c ' *)",
+      "Bash(python -c ' *)"
     ]
   }
 }

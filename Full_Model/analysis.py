@@ -2,7 +2,7 @@
 经济性 + 环保性 + 技术性 综合分析模块
 =====================================
 提供 9 种维度的可视化：
-    1. plot_strategy_kpis        四象限柱状 (总成本 / CO2 / 峰值 / SCR)  带数值标注
+    1. plot_strategy_kpis        四象限柱状 (总成本 / CO2 / 峰值 / Grid Indep.)  带数值标注
     2. plot_time_series          时序曲线 (grid / SOC / 累计CO2 / 累计成本)
     3. plot_pareto_cost_vs_co2   Pareto 前沿  带智能避让标签
     4. plot_radar_chart          雷达图 —— 5 维归一化综合能力
@@ -181,12 +181,15 @@ def compute_environmental_kpis(results_df, carbon_price_cny_per_ton=100.0):
     grid_indep = (float(local_served.sum()) / total_demand * 100.0
                   if total_demand > 0 else 0.0)
 
+    # renewable_penetration = 可再生总发电 / 总需求（系统固有特征，不随调度变化）
+    renewable_penetration = (total_re_kwh / total_demand * 100.0
+                             if total_demand > 0 else 0.0)
+    # effective_local_rate = 本地实际供应率（= grid_indep），随储能调度变化
     return {
         'total_CO2_kg':                    total_co2_kg,
         'total_CO2_tons':                  total_co2_kg / 1000.0,
         'total_renewable_kwh':             total_re_kwh,
-        'renewable_self_consumption_rate': (total_re_kwh / total_demand * 100.0)
-                                            if total_demand > 0 else 0.0,
+        'renewable_penetration':           renewable_penetration,
         'grid_independence_rate':          grid_indep,
         'carbon_cost_CNY':                 (total_co2_kg / 1000.0) * carbon_price_cny_per_ton,
         'equivalent_trees_year':           (total_co2_kg / 1000.0) * 45.0,
@@ -233,7 +236,7 @@ def build_comparison_table(strategy_results, baseline_name="Baseline (No Storage
             'Carbon Cost (CNY)':     round(env['carbon_cost_CNY'], 2),
             'Peak Grid (kW)':        round(tech['peak_demand_kW'], 2),
             'Load Factor':           round(tech['load_factor'], 3),
-            'Renewable SCR (%)':     round(env['renewable_self_consumption_rate'], 2),
+            'RE Penetration (%)':    round(env['renewable_penetration'], 2),
             'Grid Indep. (%)':       round(env['grid_independence_rate'], 2),
             'BESS Cycles':           round(tech['estimated_cycles'], 1),
             'Avg SOC':               round(tech['avg_soc'], 3),
@@ -497,7 +500,7 @@ def plot_radar_chart(strategy_results, save_path=None, baseline_name="Baseline (
 def plot_improvement_heatmap(comparison_df, save_path=None):
     _apply_style()
     cols = ['Cost Savings (%)', 'CO2 Reduction (%)', 'Peak Reduction (%)',
-            'Grid Indep. (%)', 'Load Factor', 'Renewable SCR (%)']
+            'Grid Indep. (%)', 'Load Factor', 'RE Penetration (%)']
     df = comparison_df.set_index('Strategy')[cols].copy()
     df.index = [_short(x) for x in df.index]
 
@@ -735,6 +738,12 @@ def format_final_report(strategy_results, scored_df, bess_config,
     cols_show = ['Strategy', 'Cost Savings (%)', 'CO2 Reduction (%)',
                  'Peak Reduction (%)', 'Grid Indep. (%)', 'score']
     lines.append(scored_df[cols_show].to_string(index=False))
+
+    lines.append("\n【指标定义说明】")
+    lines.append("  RE Penetration (%):  可再生总发电量 / 总需求。"
+                 "系统固有特征，不随调度策略变化。")
+    lines.append("  Grid Indep. (%):     本地资源(可再生+储能放电)实际供应率。"
+                 "随储能调度策略变化，体现储能对本地消纳的增益。")
 
     best_name = scored_df.iloc[0]['Strategy']
     best = strategy_results[best_name]

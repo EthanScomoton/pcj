@@ -276,8 +276,13 @@ def experiment_cp_vs_reparam(model, conformal, data_df,
                              predictions_by_index,
                              scaler_X, scaler_y, feature_cols,
                              sim_hours, output_dir, device=None,
-                             n_sample=200):
-    print("  [Exp 2] CP vs 重参数化 UQ 对比 ...")
+                             n_sample=200, uq_method='mc_dropout',
+                             mc_n=30):
+    """
+    Exp 2: CP vs 其他 UQ 方法对比
+    uq_method ∈ {'mc_dropout' (P0 推荐), 'reparam' (旧, 有缺陷)}
+    """
+    print(f"  [Exp 2] CP vs {uq_method} UQ 对比 ...")
     _apply_style()
     if device is None:
         device = next(model.parameters()).device
@@ -286,56 +291,71 @@ def experiment_cp_vs_reparam(model, conformal, data_df,
     preds   = predictions_by_index[:sim_hours].copy()
     q90 = conformal.q_hat
 
-    # 提取 mu 和 logvar
+    # 提取 mu 和 sigma
     sample_idx = np.linspace(0, sim_hours - 1, min(n_sample, sim_hours), dtype=int)
     window_size = getattr(model, 'window_size', 20)
 
     mu_arr, sigma_arr = [], []
     model.eval()
-    for idx in sample_idx:
-        start = max(0, idx - window_size + 1)
-        seq = data_df[feature_cols].iloc[start:idx + 1].values.astype(np.float32)
-        if len(seq) < window_size:
-            seq = np.pad(seq, ((window_size - len(seq), 0), (0, 0)), mode='edge')
-        seq_scaled = scaler_X.transform(seq).astype(np.float32)
-        x = torch.tensor(seq_scaled[np.newaxis], dtype=torch.float32).to(device)
 
-        # hook 拦截 fc 层输出 (shape [1, 2])
-        fc_output = {}
-        def _hook(mod, inp, out):
-            fc_output['val'] = out.detach().cpu()
-        handle = model.fc.register_forward_hook(_hook)
-        with torch.no_grad():
-            _ = model(x)
-        handle.remove()
+    if uq_method == 'mc_dropout':
+        # P0 修复: MC Dropout 代替 delta method reparam
+        from uq_methods import mc_dropout_predict
+        # 批量构造 x
+        x_list = []
+        for idx in sample_idx:
+            start = max(0, idx - window_size + 1)
+            seq = data_df[feature_cols].iloc[start:idx + 1].values.astype(np.float32)
+            if len(seq) < window_size:
+                seq = np.pad(seq, ((window_size - len(seq), 0), (0, 0)), mode='edge')
+            x_list.append(scaler_X.transform(seq).astype(np.float32))
+        x_batch = np.stack(x_list)
+        mu_arr, sigma_arr = mc_dropout_predict(
+            model, x_batch, n_samples=mc_n,
+            scaler_y=scaler_y, use_log_y=True, device=device)
+        # 兜底: 若 dropout 率为 0, sigma 会全为 0, 退回 reparam
+        if float(np.mean(sigma_arr)) < 1e-3:
+            print(f"    [警告] MC Dropout sigma~0 (模型无 Dropout 层), 回退 reparam")
+            uq_method = 'reparam'
 
-        raw = fc_output['val'].numpy().flatten()
-        mu_raw, logvar_raw = raw[0], raw[1] if len(raw) > 1 else 0.0
-        # 反归一化 mu
-        if scaler_y is not None:
-            mu_real = scaler_y.inverse_transform([[mu_raw]])[0, 0]
-            mu_real = np.expm1(mu_real)
-        else:
-            mu_real = mu_raw
-        # 反归一化 sigma — delta method:
-        #   模型输出 logvar 在 StandardScaler(log1p(y)) 空间
-        #   sigma_norm = exp(0.5 * logvar_raw)
-        #   链式求导: sigma_real = (1 + mu_real) * scaler_y.scale_ * sigma_norm
-        sigma_norm = np.exp(0.5 * float(logvar_raw))
-        if scaler_y is not None:
-            scale_y = float(scaler_y.scale_[0])
-        else:
-            scale_y = 1.0
-        sigma_real = (1.0 + abs(mu_real)) * scale_y * sigma_norm
-        mu_arr.append(mu_real)
-        sigma_arr.append(max(sigma_real, 1.0))
+    if uq_method == 'reparam':
+        # 旧方法 (delta method)
+        mu_arr, sigma_arr = [], []
+        for idx in sample_idx:
+            start = max(0, idx - window_size + 1)
+            seq = data_df[feature_cols].iloc[start:idx + 1].values.astype(np.float32)
+            if len(seq) < window_size:
+                seq = np.pad(seq, ((window_size - len(seq), 0), (0, 0)), mode='edge')
+            seq_scaled = scaler_X.transform(seq).astype(np.float32)
+            x = torch.tensor(seq_scaled[np.newaxis], dtype=torch.float32).to(device)
 
-    mu_arr = np.array(mu_arr)
-    sigma_arr = np.array(sigma_arr)
+            fc_output = {}
+            def _hook(mod, inp, out):
+                fc_output['val'] = out.detach().cpu()
+            handle = model.fc.register_forward_hook(_hook)
+            with torch.no_grad():
+                _ = model(x)
+            handle.remove()
+
+            raw = fc_output['val'].numpy().flatten()
+            mu_raw, logvar_raw = raw[0], raw[1] if len(raw) > 1 else 0.0
+            if scaler_y is not None:
+                mu_real = scaler_y.inverse_transform([[mu_raw]])[0, 0]
+                mu_real = np.expm1(mu_real)
+            else:
+                mu_real = mu_raw
+            sigma_norm = np.exp(0.5 * float(logvar_raw))
+            scale_y = float(scaler_y.scale_[0]) if scaler_y is not None else 1.0
+            sigma_real = (1.0 + abs(mu_real)) * scale_y * sigma_norm
+            mu_arr.append(mu_real)
+            sigma_arr.append(max(sigma_real, 1.0))
+        mu_arr = np.array(mu_arr)
+        sigma_arr = np.array(sigma_arr)
+
     actuals_s = actuals[sample_idx]
     preds_s   = preds[sample_idx]
 
-    # 重参数化 90% 区间 (Gaussian z=1.645)
+    # 基线 UQ 90% 区间 (Gaussian z=1.645)
     reparam_lower = mu_arr - 1.645 * sigma_arr
     reparam_upper = mu_arr + 1.645 * sigma_arr
     cov_reparam = ((actuals_s >= reparam_lower) & (actuals_s <= reparam_upper)).mean() * 100
@@ -349,9 +369,13 @@ def experiment_cp_vs_reparam(model, conformal, data_df,
     width_cp = cp_widths_all.mean()
 
     # ---- 图 1: 覆盖率 + 区间宽度联合对比 (双柱状图) ----
+    baseline_label = ('MC Dropout\n(uncalibrated)' if uq_method == 'mc_dropout'
+                      else 'Reparam\n(uncalibrated)')
+    baseline_short = 'MC Dropout' if uq_method == 'mc_dropout' else 'Reparam'
     fig, axes = plt.subplots(1, 2, figsize=(12, 5), constrained_layout=True)
-    fig.suptitle('CP vs Reparameterization UQ Comparison', fontweight='bold', fontsize=13)
-    methods = ['Reparam\n(uncalibrated)', 'Conformal\nPrediction']
+    fig.suptitle(f'CP vs {baseline_short} UQ Comparison',
+                 fontweight='bold', fontsize=13)
+    methods = [baseline_label, 'Conformal\nPrediction']
     colors_m = ['#E45756', '#2e86ab']
     # 左: 覆盖率
     bars = axes[0].bar(methods, [cov_reparam, cov_cp],
@@ -387,7 +411,7 @@ def experiment_cp_vs_reparam(model, conformal, data_df,
     vp['bodies'][1].set_facecolor('#2e86ab')
     vp['bodies'][1].set_alpha(0.6)
     ax.set_xticks([1, 2])
-    ax.set_xticklabels(['Reparam', 'CP'])
+    ax.set_xticklabels([baseline_short, 'CP'])
     ax.set_ylabel('Interval Width (kW)')
     ax.set_title('Interval Width Distribution (Violin)', fontweight='bold')
     plt.savefig(os.path.join(output_dir, 'exp02_uq_width_violin.png'),
@@ -398,7 +422,7 @@ def experiment_cp_vs_reparam(model, conformal, data_df,
     vis_len = min(168, len(sample_idx))
     vis_idx = sample_idx[:vis_len]
     fig, axes = plt.subplots(2, 1, figsize=(15, 8), constrained_layout=True, sharex=True)
-    fig.suptitle('Prediction Intervals: CP vs Reparameterization', fontweight='bold')
+    fig.suptitle(f'Prediction Intervals: CP vs {baseline_short}', fontweight='bold')
     x_axis = np.arange(vis_len)
     # 上图: CP
     axes[0].plot(x_axis, actuals[vis_idx], 'k-', lw=1.3, label='Actual', zorder=3)
@@ -420,7 +444,7 @@ def experiment_cp_vs_reparam(model, conformal, data_df,
     axes[1].plot(x_axis, mu_arr[:vis_len], '--', color='#E45756', lw=0.9, alpha=0.7)
     axes[1].fill_between(x_axis, reparam_lower[:vis_len], reparam_upper[:vis_len],
                          alpha=0.3, color='#E45756',
-                         label=f'Reparam 90% (w_avg={width_reparam:.0f} kW)')
+                         label=f'{baseline_short} 90% (w_avg={width_reparam:.0f} kW)')
     miss_rp = ~((actuals[vis_idx] >= reparam_lower[:vis_len]) &
                 (actuals[vis_idx] <= reparam_upper[:vis_len]))
     if miss_rp.any():
@@ -428,7 +452,8 @@ def experiment_cp_vs_reparam(model, conformal, data_df,
                         color='red', s=14, zorder=4, label='Miss')
     axes[1].set_xlabel('Sample Index')
     axes[1].set_ylabel('Demand (kW)')
-    axes[1].set_title('Reparameterization (Gaussian)')
+    axes[1].set_title(f'{baseline_short} '
+                      f'({"MC sampling" if uq_method == "mc_dropout" else "Gaussian"})')
     axes[1].legend(fontsize=8, ncol=3)
     plt.savefig(os.path.join(output_dir, 'exp02_uq_intervals_timeseries.png'),
                 dpi=150, bbox_inches='tight')
@@ -437,7 +462,7 @@ def experiment_cp_vs_reparam(model, conformal, data_df,
     # ---- 图 4: 区间宽度 vs 实际负荷 (自适应性对比) ----
     fig, ax = plt.subplots(figsize=(8, 6), constrained_layout=True)
     ax.scatter(actuals_s, reparam_widths, s=15, alpha=0.5,
-               color='#E45756', label='Reparam (adaptive)')
+               color='#E45756', label=f'{baseline_short} (adaptive)')
     ax.scatter(actuals_s, cp_widths_all, s=15, alpha=0.5,
                color='#2e86ab', label=f'CP (avg={width_cp:.0f} kW)')
     ax.set_xlabel('Actual Demand (kW)')
@@ -459,7 +484,7 @@ def experiment_cp_vs_reparam(model, conformal, data_df,
     ws_cp = winkler_score(cp_lower, cp_upper, actuals_s, alpha_val)
     ws_rp = winkler_score(reparam_lower, reparam_upper, actuals_s, alpha_val)
     fig, ax = plt.subplots(figsize=(7, 5), constrained_layout=True)
-    bp = ax.boxplot([ws_rp, ws_cp], labels=['Reparam', 'CP'], patch_artist=True,
+    bp = ax.boxplot([ws_rp, ws_cp], labels=[baseline_short, 'CP'], patch_artist=True,
                     widths=0.4, showfliers=False)
     bp['boxes'][0].set_facecolor('#E45756')
     bp['boxes'][1].set_facecolor('#2e86ab')
@@ -494,12 +519,18 @@ def experiment_noise_robustness(
     price_df, carbon_intensity_hourly, carbon_tracker,
     scaler_X, scaler_y, feature_cols, sim_hours,
     baseline_total_cost, output_dir,
-    noise_levels=None,
+    noise_levels=None, n_trials=None,
 ):
-    print("  [Exp 3] 噪声注入鲁棒性实验 ...")
+    """
+    P1 修复: 每个噪声水平做 ≥20 次 MC 采样, 报告 mean ± 95% CI。
+    """
+    print("  [Exp 3] 噪声注入鲁棒性实验 (MC bootstrap) ...")
     _apply_style()
     if noise_levels is None:
         noise_levels = [0.0, 0.10, 0.20, 0.30]
+    if n_trials is None:
+        n_trials = int(getattr(cfg, 'NOISE_MC_TRIALS', 20))
+    n_trials = max(1, int(n_trials))
 
     pcw = getattr(cfg, 'DEMAND_CHARGE_CNY_PER_KW_MONTH', 38.0) / 30.0
     strategies_cfg = {
@@ -510,116 +541,200 @@ def experiment_noise_robustness(
             safety_factor=1.0, peak_charge_weight=pcw),
     }
 
-    records = []
-    np.random.seed(42)
+    raw_records = []     # 每个 trial 一行
+    import time as _time
+    _exp3_t0 = _time.time()
+    total_sims = 0
     for nl in noise_levels:
-        noised = predictions_by_index.copy()
-        if nl > 0:
-            noised *= (1.0 + nl * np.random.randn(len(noised)))
-            noised = np.maximum(noised, 0.0)
+        total_sims += (1 if nl == 0 else n_trials) * len(strategies_cfg)
+    done_sims = 0
 
-        for sname, sfactory in strategies_cfg.items():
-            strat = sfactory()
-            ts = _run_sim(strat, data_df, noised, model, cfg,
-                          price_df, carbon_intensity_hourly, carbon_tracker,
-                          conformal, scaler_X, scaler_y, feature_cols, sim_hours)
-            eco = compute_economic_kpis(
-                ts, demand_charge_rate=getattr(cfg, 'DEMAND_CHARGE_CNY_PER_KW_MONTH', 0))
-            tech = compute_technical_kpis(ts)
-            records.append({
-                'noise': nl, 'strategy': sname,
-                'total_cost': eco['total_cost_CNY'],
-                'peak_kW': tech['peak_demand_kW'],
-            })
-        print(f"    noise={nl:.0%} done")
+    for nl in noise_levels:
+        # 0 噪声只跑一次 (确定性)
+        actual_trials = 1 if nl == 0 else n_trials
+        for trial in range(actual_trials):
+            rng = np.random.default_rng(seed=1000 * int(nl * 100) + trial)
+            noised = predictions_by_index.copy()
+            if nl > 0:
+                noised *= (1.0 + nl * rng.standard_normal(len(noised)))
+                noised = np.maximum(noised, 0.0)
 
-    df = pd.DataFrame(records)
+            for sname, sfactory in strategies_cfg.items():
+                _t_sim = _time.time()
+                strat = sfactory()
+                ts = _run_sim(strat, data_df, noised, model, cfg,
+                              price_df, carbon_intensity_hourly, carbon_tracker,
+                              conformal, scaler_X, scaler_y, feature_cols, sim_hours)
+                eco = compute_economic_kpis(
+                    ts, demand_charge_rate=getattr(cfg, 'DEMAND_CHARGE_CNY_PER_KW_MONTH', 0))
+                tech = compute_technical_kpis(ts)
+                raw_records.append({
+                    'noise': nl, 'strategy': sname, 'trial': trial,
+                    'total_cost': eco['total_cost_CNY'],
+                    'peak_kW': tech['peak_demand_kW'],
+                })
+                done_sims += 1
+                elapsed = _time.time() - _exp3_t0
+                per_sim = elapsed / max(done_sims, 1)
+                eta = per_sim * (total_sims - done_sims)
+                print(f"      [{done_sims:>3d}/{total_sims}] noise={nl:.0%} trial={trial+1}/{actual_trials} "
+                      f"{sname:<13s} sim={_time.time()-_t_sim:5.1f}s | elapsed={elapsed/60:5.1f}min | ETA={eta/60:5.1f}min",
+                      flush=True)
+        print(f"    ✓ noise={nl:.0%} × {actual_trials} trials done", flush=True)
 
-    # 退化率
+    raw_df = pd.DataFrame(raw_records)
+
+    # 聚合: 对每个 (noise, strategy) 求 mean / sem / 95% CI
+    def _agg(group):
+        x = group['total_cost'].values
+        p = group['peak_kW'].values
+        return pd.Series({
+            'total_cost_mean':   np.mean(x),
+            'total_cost_std':    np.std(x, ddof=1) if len(x) > 1 else 0.0,
+            'total_cost_lo95':   np.percentile(x, 2.5)  if len(x) > 1 else np.mean(x),
+            'total_cost_hi95':   np.percentile(x, 97.5) if len(x) > 1 else np.mean(x),
+            'peak_mean':         np.mean(p),
+            'peak_std':          np.std(p, ddof=1) if len(p) > 1 else 0.0,
+            'peak_lo95':         np.percentile(p, 2.5)  if len(p) > 1 else np.mean(p),
+            'peak_hi95':         np.percentile(p, 97.5) if len(p) > 1 else np.mean(p),
+            'n_trials':          len(x),
+        })
+    df = raw_df.groupby(['noise', 'strategy']).apply(_agg).reset_index()
+
+    # 退化率 (基于 mean)
     for sname in strategies_cfg:
-        base_cost = df[(df['strategy'] == sname) & (df['noise'] == 0)]['total_cost'].values[0]
-        base_peak = df[(df['strategy'] == sname) & (df['noise'] == 0)]['peak_kW'].values[0]
+        mask_base = (df['strategy'] == sname) & (df['noise'] == 0)
+        base_cost = df.loc[mask_base, 'total_cost_mean'].values[0]
+        base_peak = df.loc[mask_base, 'peak_mean'].values[0]
         mask = df['strategy'] == sname
-        df.loc[mask, 'cost_degrad_%'] = (df.loc[mask, 'total_cost'] - base_cost) / base_cost * 100
-        df.loc[mask, 'peak_degrad_%'] = (df.loc[mask, 'peak_kW'] - base_peak) / max(base_peak, 1) * 100
+        df.loc[mask, 'cost_degrad_%'] = (
+            df.loc[mask, 'total_cost_mean'] - base_cost) / base_cost * 100
+        df.loc[mask, 'peak_degrad_%'] = (
+            df.loc[mask, 'peak_mean'] - base_peak) / max(base_peak, 1) * 100
 
-    # ---- 图 1: 成本 & 峰值退化曲线 ----
+    # 保存原始 trial 数据以备复核
+    raw_df.to_csv(os.path.join(output_dir, 'exp03_noise_raw_trials.csv'), index=False)
+
+    # ---- 图 1: 成本 & 峰值退化曲线 + 95% CI 阴影 ----
     fig, axes = plt.subplots(1, 2, figsize=(13, 5), constrained_layout=True)
-    fig.suptitle('Prediction Noise Robustness', fontweight='bold')
+    fig.suptitle(f'Prediction Noise Robustness (MC bootstrap, N={n_trials} per point)',
+                 fontweight='bold')
     for sname, color, mk in [('Economic MPC', '#2e86ab', 'o'),
                               ('Robust MPC', '#a23b72', 's')]:
-        sub = df[df['strategy'] == sname]
+        sub = df[df['strategy'] == sname].sort_values('noise')
+        # 成本退化 CI: 由 total_cost lo95/hi95 反推 (相对于 base)
+        base_cost = sub[sub['noise'] == 0]['total_cost_mean'].values[0]
+        cost_lo_pct = (sub['total_cost_lo95'] - base_cost) / base_cost * 100
+        cost_hi_pct = (sub['total_cost_hi95'] - base_cost) / base_cost * 100
         axes[0].plot(sub['noise'] * 100, sub['cost_degrad_%'], f'{mk}-',
                      color=color, label=sname, lw=2, markersize=7)
+        axes[0].fill_between(sub['noise'] * 100, cost_lo_pct, cost_hi_pct,
+                             color=color, alpha=0.18)
+
+        base_peak = sub[sub['noise'] == 0]['peak_mean'].values[0]
+        peak_lo_pct = (sub['peak_lo95'] - base_peak) / max(base_peak, 1) * 100
+        peak_hi_pct = (sub['peak_hi95'] - base_peak) / max(base_peak, 1) * 100
         axes[1].plot(sub['noise'] * 100, sub['peak_degrad_%'], f'{mk}-',
                      color=color, label=sname, lw=2, markersize=7)
+        axes[1].fill_between(sub['noise'] * 100, peak_lo_pct, peak_hi_pct,
+                             color=color, alpha=0.18)
+
     axes[0].set_xlabel('Noise Level (%)')
     axes[0].set_ylabel('Cost Degradation (%)')
-    axes[0].set_title('Total Cost Degradation')
+    axes[0].set_title('Total Cost Degradation (shaded = 95% CI)')
     axes[0].axhline(0, color='gray', ls='--', lw=0.7)
     axes[0].legend()
     axes[1].set_xlabel('Noise Level (%)')
     axes[1].set_ylabel('Peak Degradation (%)')
-    axes[1].set_title('Peak Demand Degradation')
+    axes[1].set_title('Peak Demand Degradation (shaded = 95% CI)')
     axes[1].axhline(0, color='gray', ls='--', lw=0.7)
     axes[1].legend()
     plt.savefig(os.path.join(output_dir, 'exp03_noise_degradation.png'),
-                dpi=150, bbox_inches='tight')
+                dpi=200, bbox_inches='tight')
     plt.close(fig)
 
-    # ---- 图 2: 绝对成本柱状图 (分噪声水平) ----
+    # ---- 图 2: 绝对成本柱状图 + error bar (95% CI) ----
     fig, ax = plt.subplots(figsize=(10, 5), constrained_layout=True)
     nls = sorted(df['noise'].unique())
     x_pos = np.arange(len(nls))
     w = 0.35
     for i, (sname, color) in enumerate([('Economic MPC', '#2e86ab'),
                                          ('Robust MPC', '#a23b72')]):
-        vals = [df[(df['strategy'] == sname) & (df['noise'] == nl)]['total_cost'].values[0]
-                for nl in nls]
-        bars = ax.bar(x_pos + i * w, np.array(vals) / 1e4, w,
-                      label=sname, color=color, edgecolor='black', linewidth=0.5)
-        for b, v in zip(bars, vals):
+        means = []
+        err_lo, err_hi = [], []
+        for nl in nls:
+            r = df[(df['strategy'] == sname) & (df['noise'] == nl)].iloc[0]
+            means.append(r['total_cost_mean'])
+            err_lo.append(r['total_cost_mean'] - r['total_cost_lo95'])
+            err_hi.append(r['total_cost_hi95'] - r['total_cost_mean'])
+        means = np.array(means) / 1e4
+        err = np.stack([np.array(err_lo) / 1e4, np.array(err_hi) / 1e4])
+        bars = ax.bar(x_pos + i * w, means, w, yerr=err, capsize=4,
+                      label=sname, color=color, edgecolor='black', linewidth=0.5,
+                      error_kw={'ecolor': 'black', 'lw': 0.8})
+        for b, v in zip(bars, means):
             ax.text(b.get_x() + b.get_width()/2, b.get_height() + 0.01,
-                    f'{v/1e4:.1f}', ha='center', fontsize=7.5)
+                    f'{v:.1f}', ha='center', fontsize=7.5)
     ax.set_xticks(x_pos + w / 2)
     ax.set_xticklabels([f'{nl:.0%}' for nl in nls])
     ax.set_xlabel('Prediction Noise Level')
-    ax.set_ylabel('Total Cost (x10k CNY)')
-    ax.set_title('Absolute Cost at Different Noise Levels', fontweight='bold')
+    ax.set_ylabel('Total Cost (x10k CNY), mean ± 95% CI')
+    ax.set_title(f'Absolute Cost with 95% CI (N={n_trials} trials/level)',
+                 fontweight='bold')
     ax.legend()
     plt.savefig(os.path.join(output_dir, 'exp03_noise_absolute_cost.png'),
-                dpi=150, bbox_inches='tight')
+                dpi=200, bbox_inches='tight')
     plt.close(fig)
 
-    # ---- 图 3: Robust vs Economic 成本差异 ----
+    # ---- 图 3: Robust vs Economic 成本差异 + 配对 bootstrap CI ----
     fig, ax = plt.subplots(figsize=(8, 5), constrained_layout=True)
-    gains = []
+    gains, gain_cis = [], []
     for nl in nls:
-        ec = df[(df['strategy'] == 'Economic MPC') & (df['noise'] == nl)]['total_cost'].values[0]
-        rb = df[(df['strategy'] == 'Robust MPC') & (df['noise'] == nl)]['total_cost'].values[0]
-        gain = (ec - rb) / ec * 100
-        gains.append(gain)
-        color = '#2ca02c' if gain > 0 else '#E45756'
-        ax.bar(f'{nl:.0%}', gain, color=color, edgecolor='black', linewidth=0.5)
-    # 标注放在柱子内部或紧贴柱顶，防止甩出画布
+        ec_trials = raw_df[(raw_df['strategy'] == 'Economic MPC') &
+                           (raw_df['noise'] == nl)]['total_cost'].values
+        rb_trials = raw_df[(raw_df['strategy'] == 'Robust MPC') &
+                           (raw_df['noise'] == nl)]['total_cost'].values
+        n_min = min(len(ec_trials), len(rb_trials))
+        paired_gains = (ec_trials[:n_min] - rb_trials[:n_min]) / ec_trials[:n_min] * 100
+        gains.append(np.mean(paired_gains))
+        if n_min > 1:
+            lo = np.percentile(paired_gains, 2.5)
+            hi = np.percentile(paired_gains, 97.5)
+            gain_cis.append((np.mean(paired_gains) - lo,
+                             hi - np.mean(paired_gains)))
+        else:
+            gain_cis.append((0.0, 0.0))
+
+    gain_err = np.array(gain_cis).T    # [2, N]
     y_range = max(abs(min(gains)), abs(max(gains)), 0.1)
-    ax.set_ylim(-y_range * 1.6, y_range * 1.6)
-    for i, (nl, g) in enumerate(zip(nls, gains)):
+    ax.set_ylim(-y_range * 1.8, y_range * 1.8)
+    colors_b = ['#2ca02c' if g > 0 else '#E45756' for g in gains]
+    ax.bar(range(len(nls)), gains, yerr=gain_err, capsize=5,
+           color=colors_b, edgecolor='black', linewidth=0.6,
+           error_kw={'ecolor': 'black', 'lw': 0.8})
+    for i, g in enumerate(gains):
         va = 'bottom' if g >= 0 else 'top'
         offset = y_range * 0.08 if g >= 0 else -y_range * 0.08
         ax.text(i, g + offset, f'{g:.3f}%', ha='center', va=va,
                 fontsize=9, fontweight='bold')
+    ax.set_xticks(range(len(nls)))
+    ax.set_xticklabels([f'{nl:.0%}' for nl in nls])
     ax.axhline(0, color='gray', ls='--', lw=0.8)
     ax.set_xlabel('Prediction Noise Level')
     ax.set_ylabel('Cost Difference (%)\n(positive = Robust cheaper)')
-    ax.set_title('Robust vs Economic MPC Cost Difference by Noise Level',
-                 fontweight='bold')
+    ax.set_title(f'Robust vs Economic MPC — paired bootstrap 95% CI '
+                 f'(N={n_trials}/level)', fontweight='bold')
     plt.savefig(os.path.join(output_dir, 'exp03_noise_robust_advantage.png'),
                 dpi=200, bbox_inches='tight')
     plt.close(fig)
 
-    print(f"    完成, {len(records)} 条记录 -> 3 张图已保存")
-    return df.to_dict('records')
+    print(f"    完成, {len(raw_records)} 条原始试验记录, "
+          f"{len(df)} 条聚合记录 -> 3 张图已保存")
+    return {
+        'aggregated': df.to_dict('records'),
+        'raw_trials': raw_df.to_dict('records'),
+        'n_trials_per_level': n_trials,
+    }
 
 
 # =====================================================================
@@ -766,9 +881,99 @@ def experiment_carbon_sensitivity(
                 dpi=150, bbox_inches='tight')
     plt.close(fig)
 
-    result = {'crossover_price': crossover, 'data': df.to_dict('records')}
-    print(f"    交叉碳价: {crossover:.0f} CNY/t" if crossover else "    未找到交叉点")
-    print(f"    -> 3 张图已保存")
+    # ---- 图 4 (新): 碳价 × 碳敏感度二维扫描 — 识别最优工作点 ----
+    # 固定一个代表性碳价（取中位值或配置值），扫描 carbon_sensitivity ∈ [0.5, 10]
+    rep_cp = getattr(cfg, 'CARBON_PRICE', 120.0)
+    sens_grid = [0.5, 1.0, 2.0, 3.0, 5.0, 7.0, 10.0]
+    sens_records = []
+    for s_val in sens_grid:
+        ca_s = CarbonAwareMPCStrategy(
+            horizon=cfg.MPC_HORIZON, carbon_price_cny_per_ton=rep_cp,
+            peak_charge_weight=pcw, carbon_sensitivity=s_val)
+        ct_s = CarbonTracker(carbon_price=rep_cp)
+        ca_ts_s = _run_sim(ca_s, data_df, predictions_by_index, model, cfg,
+                           price_df, carbon_intensity_hourly, ct_s,
+                           None, scaler_X, scaler_y, feature_cols, sim_hours)
+        eco_s = compute_economic_kpis(ca_ts_s, demand_charge_rate=dc_rate)
+        env_s = compute_environmental_kpis(ca_ts_s, carbon_price_cny_per_ton=rep_cp)
+        sens_records.append({
+            'sensitivity':  s_val,
+            'energy_cost':  eco_s['total_cost_CNY'],
+            'co2_tons':     env_s['total_CO2_tons'],
+            'total_w_carbon': eco_s['total_cost_CNY'] + env_s['carbon_cost_CNY'],
+        })
+        print(f"    敏感度={s_val} → cost={eco_s['total_cost_CNY']:.0f}, "
+              f"CO2={env_s['total_CO2_tons']:.1f}")
+
+    sens_df = pd.DataFrame(sens_records)
+    # 最优敏感度 = 含碳总成本最小
+    best_s_idx = sens_df['total_w_carbon'].idxmin()
+    best_s = sens_df.loc[best_s_idx, 'sensitivity']
+    best_s_cost = sens_df.loc[best_s_idx, 'total_w_carbon']
+    best_s_co2  = sens_df.loc[best_s_idx, 'co2_tons']
+
+    annual_factor = 8760.0 / max(1, sim_hours)
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5), constrained_layout=True)
+    fig.suptitle(f'Carbon Sensitivity Scan @ Carbon Price = {rep_cp:.0f} CNY/t '
+                 f'(年化系数 ×{annual_factor:.2f})', fontweight='bold')
+
+    # 左: 含碳总成本 vs 敏感度
+    axes[0].plot(sens_df['sensitivity'], sens_df['total_w_carbon'] / 1e4,
+                 'o-', color='#2e86ab', lw=2, markersize=7)
+    axes[0].axvline(best_s, color='red', ls='--', lw=1.5,
+                    label=f'Optimal: sens={best_s:.1f}')
+    axes[0].scatter([best_s], [best_s_cost / 1e4],
+                    marker='*', s=220, color='red', zorder=5,
+                    edgecolor='black', linewidth=0.8)
+    axes[0].annotate(
+        f'min: {best_s_cost/1e4:.0f} 万\n(年化: {best_s_cost*annual_factor/1e4:.0f} 万/年)',
+        xy=(best_s, best_s_cost / 1e4), xytext=(15, 15),
+        textcoords='offset points', fontsize=9,
+        bbox=dict(boxstyle='round,pad=0.3', fc='lightyellow', ec='red'),
+        arrowprops=dict(arrowstyle='->', color='red'))
+    axes[0].set_xlabel('Carbon Sensitivity (MPC weight)')
+    axes[0].set_ylabel('Total Cost incl. Carbon (x10k CNY)')
+    axes[0].set_title('Cost vs Sensitivity — Optimal Point')
+    axes[0].legend(fontsize=9)
+
+    # 右: 能量成本 vs CO2 排放 帕累托前沿
+    axes[1].plot(sens_df['co2_tons'], sens_df['energy_cost'] / 1e4,
+                 'o-', color='#2ca02c', lw=2, markersize=7)
+    for _, r in sens_df.iterrows():
+        axes[1].annotate(f's={r["sensitivity"]:.1f}',
+                         (r['co2_tons'], r['energy_cost'] / 1e4),
+                         fontsize=7.5, xytext=(5, 5),
+                         textcoords='offset points')
+    axes[1].scatter([best_s_co2], [sens_df.loc[best_s_idx, 'energy_cost'] / 1e4],
+                    marker='*', s=220, color='red', zorder=5,
+                    edgecolor='black', linewidth=0.8,
+                    label=f'Optimal (含碳总成本最小)')
+    axes[1].set_xlabel(f'{CO2_LABEL} Emissions (tons)')
+    axes[1].set_ylabel('Energy Cost (x10k CNY)')
+    axes[1].set_title('Cost–Emission Pareto Front')
+    axes[1].legend(fontsize=9)
+
+    plt.savefig(os.path.join(output_dir, 'exp04_carbon_sensitivity_scan.png'),
+                dpi=200, bbox_inches='tight')
+    plt.close(fig)
+
+    result = {
+        'crossover_price':        crossover,
+        'optimal_sensitivity':    float(best_s),
+        'optimal_sens_cost':      float(best_s_cost),
+        'optimal_sens_co2':       float(best_s_co2),
+        'annual_factor':          annual_factor,
+        'data':                   df.to_dict('records'),
+        'sensitivity_scan':       sens_df.to_dict('records'),
+    }
+    if crossover:
+        print(f"    交叉碳价: {crossover:.0f} CNY/t")
+    else:
+        print("    未找到交叉点")
+    print(f"    最优碳敏感度: {best_s:.1f} (含碳总成本最小 = "
+          f"{best_s_cost/1e4:.0f} 万 = 年化 {best_s_cost*annual_factor/1e4:.0f} 万/年)")
+    print(f"    -> 4 张图已保存")
     return result
 
 
@@ -1001,10 +1206,28 @@ def experiment_bess_capacity(
 
     df = pd.DataFrame(records)
 
-    # 最优容量
+    # 最优容量（离散最大 + 二次插值精细最优）
     valid = df.dropna(subset=['NPV'])
     best_idx = valid['NPV'].idxmax() if len(valid) > 0 else 0
     best_cap = df.loc[best_idx, 'capacity_kwh'] if best_idx in df.index else 0
+    best_npv = df.loc[best_idx, 'NPV'] if best_idx in df.index else 0
+
+    # 围绕最优点做二次拟合，找连续最优
+    interp_cap, interp_npv = None, None
+    if 1 <= best_idx < len(df) - 1:
+        xs = df['capacity_kwh'].values[best_idx - 1 : best_idx + 2].astype(float)
+        ys = df['NPV'].values[best_idx - 1 : best_idx + 2].astype(float)
+        if np.all(np.isfinite(ys)):
+            # y = a x^2 + b x + c; 顶点在 x* = -b/(2a)
+            coeffs = np.polyfit(xs, ys, 2)
+            a, b = coeffs[0], coeffs[1]
+            if a < 0 and abs(a) > 1e-12:
+                interp_cap = -b / (2 * a)
+                interp_npv = np.polyval(coeffs, interp_cap)
+                # 钳制到相邻样本区间内，避免外推到不合理值
+                interp_cap = float(np.clip(interp_cap, xs[0], xs[-1]))
+                interp_npv = float(np.polyval(coeffs, interp_cap))
+
     x = df['capacity_kwh'] / 1000
 
     # ---- 图 1: NPV / IRR / 年化净收益 三合一 ----
@@ -1019,15 +1242,28 @@ def experiment_bess_capacity(
     axes[0].axhline(0, color='gray', ls='--', lw=0.8)
     if best_cap > 0:
         axes[0].axvline(best_cap / 1000, color='red', ls=':', lw=1.5,
-                        label=f'Optimal {best_cap/1000:.0f} MWh')
-        axes[0].legend(fontsize=9)
+                        label=f'Discrete optimum: {best_cap/1000:.0f} MWh '
+                              f'(NPV={best_npv/1e4:.0f} 万)')
+        # 离散最优点标记
+        axes[0].scatter([best_cap / 1000], [best_npv / 1e4],
+                        marker='*', s=220, color='red', zorder=5,
+                        edgecolor='black', linewidth=0.8)
+        if interp_cap is not None and interp_npv is not None:
+            axes[0].axvline(interp_cap / 1000, color='orange', ls='--', lw=1.2,
+                            label=f'Interp. optimum: {interp_cap/1000:.1f} MWh')
+            axes[0].scatter([interp_cap / 1000], [interp_npv / 1e4],
+                            marker='o', s=60, color='orange', zorder=5,
+                            edgecolor='black', linewidth=0.8)
+        axes[0].legend(fontsize=8, loc='best')
     axes[0].set_xlabel('Capacity (MWh)')
     axes[0].set_ylabel('NPV (x10k CNY)')
-    axes[0].set_title('Net Present Value')
+    axes[0].set_title('Net Present Value (with Optimal Point)')
 
     irr_pct = df['IRR'].apply(lambda v: v * 100 if not np.isnan(v) else np.nan)
     axes[1].plot(x, irr_pct, 's-', color='#2ca02c', lw=2, markersize=6)
     axes[1].axhline(5, color='red', ls='--', lw=1, label='Discount Rate 5%')
+    if best_cap > 0:
+        axes[1].axvline(best_cap / 1000, color='red', ls=':', lw=1.2, alpha=0.6)
     axes[1].set_xlabel('Capacity (MWh)')
     axes[1].set_ylabel('IRR (%)')
     axes[1].set_title('Internal Rate of Return')
@@ -1035,9 +1271,17 @@ def experiment_bess_capacity(
 
     axes[2].plot(x, df['annual_savings'] / 1e4, '^-', color='#F58518', lw=2, markersize=6)
     axes[2].axhline(0, color='gray', ls='--', lw=0.8)
+    if best_cap > 0:
+        axes[2].axvline(best_cap / 1000, color='red', ls=':', lw=1.2, alpha=0.6)
+        axes[2].scatter([best_cap / 1000],
+                        [df.loc[best_idx, 'annual_savings'] / 1e4],
+                        marker='*', s=220, color='red', zorder=5,
+                        edgecolor='black', linewidth=0.8,
+                        label=f'Optimal @ {best_cap/1000:.0f} MWh')
+        axes[2].legend(fontsize=8)
     axes[2].set_xlabel('Capacity (MWh)')
-    axes[2].set_ylabel('Annual Net Savings (x10k CNY)')
-    axes[2].set_title('Annual Net Savings')
+    axes[2].set_ylabel('Annual Net Savings (x10k CNY / year)')
+    axes[2].set_title('Annualized Net Savings (sim × 8760/h)')
     plt.savefig(os.path.join(output_dir, 'exp06_bess_npv_irr.png'),
                 dpi=150, bbox_inches='tight')
     plt.close(fig)
@@ -1090,23 +1334,117 @@ def experiment_bess_capacity(
                 dpi=150, bbox_inches='tight')
     plt.close(fig)
 
-    # ---- 图 4: 总成本 vs 容量 (含无储能基线) ----
+    # ---- 图 4: 总成本 vs 容量 (含无储能基线, 双轴: 仿真 30 天 + 年化) ----
+    annual_factor = 8760.0 / max(1, sim_hours)
     fig, ax = plt.subplots(figsize=(9, 5), constrained_layout=True)
     ax.plot(x, df['total_cost'] / 1e4, 'o-', color='#2e86ab', lw=2,
-            markersize=6, label='Total Operating Cost')
+            markersize=6, label='Total Operating Cost (仿真周期)')
     if baseline_total_cost is not None:
         ax.axhline(baseline_total_cost / 1e4, color='#7f7f7f', ls='--', lw=1.5,
                    label=f'Baseline (no BESS) = {baseline_total_cost/1e4:.1f}')
+    if best_cap > 0:
+        ax.axvline(best_cap / 1000, color='red', ls=':', lw=1.5,
+                   label=f'Optimal {best_cap/1000:.0f} MWh')
     ax.set_xlabel('Capacity (MWh)')
-    ax.set_ylabel('Total Cost (x10k CNY)')
-    ax.set_title('Operating Cost vs BESS Capacity', fontweight='bold')
-    ax.legend(fontsize=9)
+    ax.set_ylabel(f'Total Cost (x10k CNY / {sim_hours}h)')
+    ax.set_title('Operating Cost vs BESS Capacity (with annualized axis)',
+                 fontweight='bold')
+    ax.legend(fontsize=9, loc='upper left')
+    # 强制布局计算 ylim
+    fig.canvas.draw()
+    y0, y1 = ax.get_ylim()
+    # 右轴: 年化
+    ax2 = ax.twinx()
+    ax2.set_ylim(y0 * annual_factor, y1 * annual_factor)
+    ax2.set_ylabel(f'Annualized Cost (x10k CNY / year, ×{annual_factor:.1f})',
+                   color='#7f7f7f')
+    ax2.tick_params(axis='y', labelcolor='#7f7f7f')
     plt.savefig(os.path.join(output_dir, 'exp06_bess_total_cost.png'),
-                dpi=150, bbox_inches='tight')
+                dpi=200, bbox_inches='tight')
     plt.close(fig)
 
-    print(f"    最优容量: {best_cap/1000:.0f} MWh -> 4 张图已保存")
-    return {'optimal_capacity_kwh': best_cap, 'data': df.to_dict('records')}
+    # ---- 图 5 (新): 敏感性曲线综合 — 年化净收益 + NPV/投资比 + 最优点标注 ----
+    fig, ax1 = plt.subplots(figsize=(10, 6), constrained_layout=True)
+
+    ann_sav_arr = df['annual_savings'].values / 1e4   # 万 CNY / 年
+    npv_per_inv = np.where(df['investment'].values > 0,
+                           df['NPV'].values / df['investment'].values,
+                           np.nan)
+
+    # 主轴: 年化净收益
+    ax1.plot(x, ann_sav_arr, 'o-', color='#F58518', lw=2.2, markersize=7,
+             label='Annual Net Savings (万 CNY/年)')
+    ax1.axhline(0, color='gray', ls='--', lw=0.8)
+    ax1.set_xlabel('BESS Capacity (MWh)')
+    ax1.set_ylabel('Annual Net Savings (x10k CNY / year)', color='#F58518')
+    ax1.tick_params(axis='y', labelcolor='#F58518')
+
+    # 次轴: NPV / Investment 收益率
+    ax2 = ax1.twinx()
+    ax2.plot(x, npv_per_inv, 's-', color='#2e86ab', lw=2.2, markersize=7,
+             alpha=0.85, label='NPV / Investment')
+    ax2.axhline(0, color='#2e86ab', ls=':', lw=0.8, alpha=0.5)
+    ax2.set_ylabel('NPV / Investment ratio', color='#2e86ab')
+    ax2.tick_params(axis='y', labelcolor='#2e86ab')
+
+    # 标注最优点
+    if best_cap > 0:
+        ax1.axvline(best_cap / 1000, color='red', ls='--', lw=1.5, alpha=0.8,
+                    label=f'Discrete optimum: {best_cap/1000:.0f} MWh')
+        if interp_cap is not None:
+            ax1.axvline(interp_cap / 1000, color='red', ls=':', lw=1.2, alpha=0.6,
+                        label=f'Interp. optimum: {interp_cap/1000:.1f} MWh')
+        # 最优点的注释框
+        ann_text = (f"最优 @ {best_cap/1000:.0f} MWh\n"
+                    f"NPV={best_npv/1e4:.0f} 万\n"
+                    f"年化净收益={ann_sav_arr[best_idx]:.1f} 万/年\n"
+                    f"NPV/Inv={npv_per_inv[best_idx]:.2f}")
+        ax1.annotate(ann_text,
+                     xy=(best_cap / 1000, ann_sav_arr[best_idx]),
+                     xytext=(20, 20), textcoords='offset points',
+                     fontsize=9, ha='left',
+                     bbox=dict(boxstyle='round,pad=0.4',
+                               fc='lightyellow', ec='red', lw=1),
+                     arrowprops=dict(arrowstyle='->', color='red', lw=1))
+
+    # 合并图例
+    h1, l1 = ax1.get_legend_handles_labels()
+    h2, l2 = ax2.get_legend_handles_labels()
+    ax1.legend(h1 + h2, l1 + l2, loc='lower right', fontsize=9)
+    ax1.set_title(f'BESS Capacity Sensitivity — Optimal Point Identification '
+                  f'(年化系数 ×{annual_factor:.2f})', fontweight='bold')
+    plt.savefig(os.path.join(output_dir, 'exp06_bess_optimal_sensitivity.png'),
+                dpi=200, bbox_inches='tight')
+    plt.close(fig)
+
+    ann_savings = (df.loc[best_idx, 'annual_savings']
+                   if best_idx in df.index else np.nan)
+
+    msg_lines = [
+        f"    离散最优容量: {best_cap/1000:.0f} MWh "
+        f"(NPV={best_npv/1e4:.0f} 万 CNY)",
+    ]
+    if interp_cap is not None:
+        msg_lines.append(
+            f"    二次插值最优: {interp_cap/1000:.1f} MWh "
+            f"(NPV={interp_npv/1e4:.0f} 万 CNY)")
+    if not np.isnan(ann_savings):
+        msg_lines.append(
+            f"    年化净收益 @最优: {ann_savings/1e4:.1f} 万 CNY/年 "
+            f"(年化系数 × {annual_factor:.2f})")
+    msg_lines.append("    -> 5 张图已保存 (含 optimal sensitivity)")
+    for ml in msg_lines:
+        print(ml)
+
+    return {
+        'optimal_capacity_kwh':     best_cap,
+        'optimal_NPV_CNY':          best_npv,
+        'interp_optimal_capacity':  interp_cap,
+        'interp_optimal_NPV':       interp_npv,
+        'annual_savings_optimal':   ann_savings,
+        'annual_factor':            annual_factor,
+        'data':                     df.to_dict('records'),
+    }
 
 
 # =====================================================================
@@ -1423,11 +1761,14 @@ def run_all_experiments(
     except Exception as e:
         print(f"  [Exp 1] 失败: {e}")
 
-    # --- 2. CP vs Reparam ---
+    # --- 2. CP vs 其他 UQ 基线 (MC Dropout / Reparam) ---
     try:
+        uq_method = getattr(cfg, 'UQ_METHOD', 'mc_dropout')
+        mc_n      = getattr(cfg, 'MC_DROPOUT_N', 30)
         results['exp02'] = experiment_cp_vs_reparam(
             model, conformal, data_df, predictions_by_index,
-            scaler_X, scaler_y, feature_cols, sim_hours, exp_dir)
+            scaler_X, scaler_y, feature_cols, sim_hours, exp_dir,
+            uq_method=uq_method, mc_n=mc_n)
     except Exception as e:
         print(f"  [Exp 2] 失败: {e}")
 

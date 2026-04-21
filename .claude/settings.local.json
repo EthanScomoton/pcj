@@ -36,7 +36,9 @@
       "Bash(grep -v \"^$\")",
       "Read(//opt/anaconda3/envs/**)",
       "Bash(pip list *)",
-      "Bash(/opt/anaconda3/envs/yanjiu/bin/python -c ' *)"
+      "Bash(/opt/anaconda3/envs/yanjiu/bin/python -c ' *)",
+      "Bash(python3)",
+      "Bash(python -c \"import py_compile; py_compile.compile\\('post_hoc_corrector.py', doraise=True\\); py_compile.compile\\('main.py', doraise=True\\); print\\('syntax OK'\\)\")"
     ]
   }
 }

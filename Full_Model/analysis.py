@@ -279,6 +279,180 @@ def score_strategies(comparison_df, weights=None):
 
 
 # =======================================================================
+# P2: Pareto 前沿 + 决策推荐器
+# =======================================================================
+def pareto_front(comparison_df,
+                 objectives=('Cost Savings (%)', 'CO2 Reduction (%)',
+                             'Peak Reduction (%)')):
+    """
+    非支配排序: 返回 Pareto 最优策略集合 (越大越好的目标)。
+
+    Returns
+    -------
+    pareto_df : DataFrame   只含 Pareto 最优策略的子集
+    is_pareto : Series[bool] 与 comparison_df 同序, True 表示 Pareto 最优
+    """
+    df = comparison_df.copy()
+    n = len(df)
+    is_pareto = np.ones(n, dtype=bool)
+    vals = df[list(objectives)].values.astype(float)
+    for i in range(n):
+        if not is_pareto[i]:
+            continue
+        for j in range(n):
+            if i == j:
+                continue
+            # j 支配 i: 所有目标都 ≥ i, 至少一个严格 >
+            if np.all(vals[j] >= vals[i]) and np.any(vals[j] > vals[i]):
+                is_pareto[i] = False
+                break
+    pareto_df = df[is_pareto].copy().reset_index(drop=True)
+    return pareto_df, pd.Series(is_pareto, index=df.index)
+
+
+def decision_recommender(comparison_df, user_profile='balanced',
+                         custom_weights=None,
+                         objectives=('Cost Savings (%)', 'CO2 Reduction (%)',
+                                     'Peak Reduction (%)', 'Grid Indep. (%)')):
+    """
+    决策推荐器: 根据用户偏好 profile 自动选推荐策略。
+
+    user_profile ∈ {
+      'economic'  : 偏成本 (cost 0.7, co2 0.15, peak 0.15)
+      'green'     : 偏碳减 (cost 0.2, co2 0.6,  peak 0.2)
+      'peak'      : 偏削峰 (cost 0.3, co2 0.2,  peak 0.5)
+      'balanced'  : 均衡 (0.4, 0.35, 0.25)
+      'grid_indep': 偏离网率
+      'custom'    : 使用 custom_weights
+    }
+
+    Returns
+    -------
+    dict with keys: recommended_strategy, weights_used, ranked_df, pareto_set
+    """
+    profiles = {
+        'economic':   {'cost': 0.70, 'co2': 0.15, 'peak': 0.15},
+        'green':      {'cost': 0.20, 'co2': 0.60, 'peak': 0.20},
+        'peak':       {'cost': 0.30, 'co2': 0.20, 'peak': 0.50},
+        'balanced':   {'cost': 0.40, 'co2': 0.35, 'peak': 0.25},
+        'grid_indep': {'cost': 0.25, 'co2': 0.25, 'peak': 0.20, 'grid': 0.30},
+    }
+    if user_profile == 'custom':
+        if not custom_weights:
+            raise ValueError("custom 模式需要 custom_weights")
+        weights = custom_weights
+    else:
+        weights = profiles.get(user_profile, profiles['balanced'])
+
+    df = comparison_df.copy()
+
+    def _norm(s):
+        s = pd.to_numeric(s, errors='coerce')
+        lo, hi = float(s.min()), float(s.max())
+        return np.zeros(len(s)) if (hi - lo) < 1e-9 else (s - lo) / (hi - lo)
+
+    score = (weights.get('cost', 0.0) * _norm(df['Cost Savings (%)']) +
+             weights.get('co2',  0.0) * _norm(df['CO2 Reduction (%)']) +
+             weights.get('peak', 0.0) * _norm(df['Peak Reduction (%)']))
+    if 'grid' in weights:
+        score = score + weights['grid'] * _norm(df['Grid Indep. (%)'])
+
+    df['score'] = score
+    ranked = df.sort_values('score', ascending=False).reset_index(drop=True)
+
+    # Pareto
+    pareto_df, is_pareto = pareto_front(
+        comparison_df, objectives=objectives[:3])
+
+    return {
+        'recommended_strategy': ranked.iloc[0]['Strategy'],
+        'recommended_score':    float(ranked.iloc[0]['score']),
+        'profile_used':         user_profile,
+        'weights_used':         weights,
+        'ranked_df':            ranked,
+        'pareto_df':            pareto_df,
+        'is_pareto':            is_pareto.tolist(),
+    }
+
+
+def plot_pareto_front(comparison_df, save_path=None,
+                      objectives=('Cost Savings (%)', 'CO2 Reduction (%)',
+                                  'Peak Reduction (%)')):
+    """绘制 3 个双目标投影 + Pareto 高亮, 以及雷达图对比"""
+    _apply_style()
+    pareto_df, is_pareto = pareto_front(comparison_df, objectives=objectives)
+
+    fig = plt.figure(figsize=(16, 10), constrained_layout=True)
+    gs = fig.add_gridspec(2, 3)
+
+    axs = [
+        fig.add_subplot(gs[0, 0]),
+        fig.add_subplot(gs[0, 1]),
+        fig.add_subplot(gs[0, 2]),
+    ]
+    ax_radar = fig.add_subplot(gs[1, :], projection='polar')
+
+    # 3 个二维投影
+    pairs = [(0, 1), (0, 2), (1, 2)]
+    for ax, (i, j) in zip(axs, pairs):
+        ox = objectives[i]
+        oy = objectives[j]
+        for k in range(len(comparison_df)):
+            sn = comparison_df.iloc[k]['Strategy']
+            x = float(comparison_df.iloc[k][ox])
+            y = float(comparison_df.iloc[k][oy])
+            color = '#e41a1c' if is_pareto.iloc[k] else '#888888'
+            marker = '*' if is_pareto.iloc[k] else 'o'
+            s = 220 if is_pareto.iloc[k] else 80
+            ax.scatter(x, y, s=s, c=color, marker=marker,
+                       edgecolor='black', linewidth=0.6, zorder=3)
+            ax.annotate(_short(sn), (x, y), fontsize=8,
+                        xytext=(6, 6), textcoords='offset points')
+        # 连接 Pareto 点 (按 x 排序)
+        pts = comparison_df.loc[is_pareto, [ox, oy]].values
+        if len(pts) > 1:
+            pts = pts[np.argsort(pts[:, 0])]
+            ax.plot(pts[:, 0], pts[:, 1], 'r--', lw=1.2, alpha=0.6,
+                    label='Pareto frontier')
+            ax.legend(fontsize=8)
+        ax.set_xlabel(ox)
+        ax.set_ylabel(oy)
+        ax.set_title(f'{ox.split("(")[0].strip()} vs '
+                     f'{oy.split("(")[0].strip()}', fontsize=10)
+
+    # 雷达图 — 各策略 4 维指标
+    angles = np.linspace(0, 2 * np.pi, len(objectives), endpoint=False).tolist()
+    angles += angles[:1]
+    for k in range(len(comparison_df)):
+        sn = comparison_df.iloc[k]['Strategy']
+        vals = [float(comparison_df.iloc[k][o]) for o in objectives]
+        # 归一化到 [0, 1]
+        vmax = max(max(float(comparison_df[o].max()), 1e-6) for o in objectives)
+        vals_norm = [v / vmax for v in vals]
+        vals_norm += vals_norm[:1]
+        alpha = 0.6 if is_pareto.iloc[k] else 0.25
+        lw = 2.0 if is_pareto.iloc[k] else 1.0
+        ax_radar.plot(angles, vals_norm, lw=lw, alpha=alpha,
+                      color=_color(sn), label=_short(sn))
+        if is_pareto.iloc[k]:
+            ax_radar.fill(angles, vals_norm, alpha=0.08, color=_color(sn))
+    ax_radar.set_xticks(angles[:-1])
+    ax_radar.set_xticklabels([o.split('(')[0].strip() for o in objectives],
+                             fontsize=9)
+    ax_radar.set_title('Radar — Pareto strategies highlighted',
+                       fontweight='bold', pad=18)
+    ax_radar.legend(loc='upper right', bbox_to_anchor=(1.35, 1.0), fontsize=8)
+
+    fig.suptitle('Pareto Front + Decision Platform',
+                 fontsize=14, fontweight='bold')
+    if save_path:
+        plt.savefig(save_path, dpi=200, bbox_inches='tight')
+        print(f"  [plot] Pareto 前沿图: {save_path}")
+    plt.close(fig)
+    return pareto_df
+
+
+# =======================================================================
 # 可视化 1: 4 象限 KPI 柱状图 (带数值标注)
 # =======================================================================
 def plot_strategy_kpis(strategy_results, save_path=None):
@@ -724,10 +898,14 @@ def format_final_report(strategy_results, scored_df, bess_config,
                         sim_hours, carbon_price,
                         demand_charge_rate=0.0):
     lines = []
+    # 年化因子: 8760h / sim_hours （近似 12 倍，当 sim_hours=720）
+    annual_factor = 8760.0 / max(1, sim_hours)
+
     lines.append("=" * 80)
     lines.append("     港口综合能源系统 — 策略选择平台  最终分析报告")
     lines.append("=" * 80)
-    lines.append(f"  仿真时长     : {sim_hours} 小时 ({sim_hours/24:.1f} 天)")
+    lines.append(f"  仿真时长     : {sim_hours} 小时 ({sim_hours/24:.1f} 天) "
+                 f"→ 年化系数 × {annual_factor:.2f}")
     lines.append(f"  储能配置     : {bess_config['capacity_kwh']} kWh / "
                  f"{bess_config['power_kw']} kW")
     lines.append(f"  碳价         : {carbon_price:.1f} 元/tCO2")
@@ -745,17 +923,56 @@ def format_final_report(strategy_results, scored_df, bess_config,
     lines.append("  Grid Indep. (%):     本地资源(可再生+储能放电)实际供应率。"
                  "随储能调度策略变化，体现储能对本地消纳的增益。")
 
+    # ---- 年化口径对比 (sim_hours × annual_factor) ----
+    lines.append("\n【年化口径汇总 (年化 = 仿真值 × {:.2f})】".format(annual_factor))
+    ann_lines = [
+        f"{'Strategy':<28} {'Ann. Cost (万CNY)':>18} {'Ann. CO2 (t)':>16} "
+        f"{'Ann. Savings (万CNY)':>22} {'Peak (kW)':>12}"
+    ]
+    baseline_cost_hours = None
+    for nm, d in strategy_results.items():
+        if 'Baseline' in nm:
+            baseline_cost_hours = d['economic']['total_cost_CNY']
+            break
+    for nm, d in strategy_results.items():
+        ann_cost = d['economic']['total_cost_CNY'] * annual_factor / 1e4
+        ann_co2  = d['environmental']['total_CO2_tons'] * annual_factor
+        if baseline_cost_hours is not None:
+            ann_save = (baseline_cost_hours - d['economic']['total_cost_CNY']) \
+                       * annual_factor / 1e4
+        else:
+            ann_save = float('nan')
+        pk = d['economic']['peak_grid_kW']
+        short_nm = nm if len(nm) <= 27 else nm[:24] + '...'
+        ann_lines.append(
+            f"{short_nm:<28} {ann_cost:>18.1f} {ann_co2:>16.1f} "
+            f"{ann_save:>22.1f} {pk:>12.0f}")
+    lines.extend(ann_lines)
+
     best_name = scored_df.iloc[0]['Strategy']
     best = strategy_results[best_name]
     lines.append("\n" + "=" * 80)
     lines.append(f"  推荐策略: {best_name}")
     lines.append("=" * 80)
-    lines.append(" · 经济性指标")
+    lines.append(" · 经济性指标  (原始=仿真周期; 年化=×{:.2f})".format(annual_factor))
+    # 需要年化的键
+    annualize_keys = {'total_cost_CNY', 'energy_cost_CNY', 'demand_charge_CNY',
+                      'total_grid_kwh'}
     for k, v in best['economic'].items():
-        lines.append(f"     {k:30s}: {v}")
-    lines.append(" · 环保性指标")
+        if k in annualize_keys and isinstance(v, (int, float)):
+            ann_v = v * annual_factor
+            lines.append(f"     {k:30s}: {v}    (年化: {ann_v:,.0f})")
+        else:
+            lines.append(f"     {k:30s}: {v}")
+    lines.append(" · 环保性指标  (原始=仿真周期; 年化=×{:.2f})".format(annual_factor))
+    annualize_env = {'total_CO2_kg', 'total_CO2_tons', 'total_renewable_kwh',
+                     'carbon_cost_CNY'}
     for k, v in best['environmental'].items():
-        lines.append(f"     {k:30s}: {v}")
+        if k in annualize_env and isinstance(v, (int, float)):
+            ann_v = v * annual_factor
+            lines.append(f"     {k:30s}: {v}    (年化: {ann_v:,.2f})")
+        else:
+            lines.append(f"     {k:30s}: {v}")
     lines.append(" · 技术性指标")
     for k, v in best['technical'].items():
         lines.append(f"     {k:30s}: {v}")

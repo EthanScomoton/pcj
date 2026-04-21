@@ -271,6 +271,120 @@ class RobustMPCStrategy(BaseStrategy):
 
 
 # ========================================================================
+# 3.5) 随机 / 分布鲁棒 MPC (P2)
+# ========================================================================
+class StochasticMPCStrategy(BaseStrategy):
+    """
+    场景化随机 MPC:
+      - 从 CP 区间 [lo, hi] 采样 K 条需求轨迹
+      - 用场景平均目标值 + CVaR (最差 β 分位) 作为鲁棒化
+      - 通过对每条场景单独优化再取平均动作 (heuristic) 避免 K 倍变量爆炸
+
+    参考: Wang et al. 2021 "Scenario-based stochastic MPC for battery"
+          Shapiro & Dentcheva 2014 "Lectures on stochastic programming"
+    """
+    name = "Stochastic MPC"
+    description = "场景化随机 MPC, 用 CP 区间上下限采样多轨迹取均值动作"
+
+    def __init__(self, horizon: int = 24, conformal_predictor=None,
+                 n_scenarios: int = 10, cvar_beta: float = 0.2,
+                 peak_charge_weight: float = 1.5):
+        self.horizon = horizon
+        self.conformal = conformal_predictor
+        self.n_scenarios = int(n_scenarios)
+        self.cvar_beta = float(cvar_beta)
+        self.peak_charge_weight = peak_charge_weight
+        self._mpc = None
+
+    def optimize(self, bess, pred_demand, renewable_gen, grid_prices,
+                 carbon_intensity=None, pred_upper=None):
+        if bess.capacity <= 1e-3:
+            return BaselineStrategy().optimize(bess, pred_demand, renewable_gen, grid_prices)
+
+        pd_arr = np.asarray(pred_demand, dtype=float)
+        H = len(pd_arr)
+
+        # 生成场景: 从区间 [lo, hi] 中均匀 + 截断高斯混合
+        if self.conformal is not None:
+            lo, hi = self.conformal.predict_interval(pd_arr)
+        else:
+            lo = pd_arr * 0.9
+            hi = pd_arr * 1.1
+        lo = np.asarray(lo)
+        hi = np.asarray(hi)
+
+        rng = np.random.default_rng()
+        scenarios = []
+        # 场景 0: 点预测
+        scenarios.append(pd_arr.copy())
+        # 场景 1: 上界 (worst-case demand)
+        scenarios.append(hi.copy())
+        # 场景 2: 下界
+        scenarios.append(np.maximum(lo, 0.0))
+        # 剩余场景: 区间内截断高斯
+        sigma = (hi - lo) / 4.0
+        for _ in range(max(0, self.n_scenarios - 3)):
+            eps = rng.standard_normal(H)
+            scn = np.clip(pd_arr + eps * sigma, lo, hi)
+            scenarios.append(np.maximum(scn, 0.0))
+
+        if self._mpc is None or self._mpc.bess is not bess:
+            self._mpc = _ParametrizedMPC(bess, self.horizon,
+                                         include_carbon=False,
+                                         include_peak_charge=True,
+                                         peak_charge_weight=self.peak_charge_weight)
+
+        # 对每条场景求解, 收集第 1 步动作
+        action_charge, action_discharge = [], []
+        costs = []
+        for scn in scenarios:
+            try:
+                res = self._mpc.solve(bess.get_soc(), scn,
+                                      renewable_gen, grid_prices)
+                ch = float(np.asarray(res['bess_charge']).flatten()[0])
+                dc = float(np.asarray(res['bess_discharge']).flatten()[0])
+                obj = float(res.get('objective_value', 0.0))
+                action_charge.append(ch)
+                action_discharge.append(dc)
+                costs.append(obj)
+            except Exception:
+                action_charge.append(0.0)
+                action_discharge.append(0.0)
+                costs.append(0.0)
+
+        costs = np.asarray(costs)
+        action_charge    = np.asarray(action_charge)
+        action_discharge = np.asarray(action_discharge)
+
+        # CVaR 加权: 最差 β 场景权重加倍
+        if len(costs) > 1 and self.cvar_beta > 0:
+            k = max(1, int(np.ceil(self.cvar_beta * len(costs))))
+            worst_idx = np.argsort(costs)[-k:]   # top-k 最差
+            weights = np.ones_like(costs)
+            weights[worst_idx] *= 2.0
+            weights = weights / weights.sum()
+        else:
+            weights = np.ones_like(costs) / len(costs)
+
+        # 加权平均第 1 步动作
+        mean_ch = float(np.sum(weights * action_charge))
+        mean_dc = float(np.sum(weights * action_discharge))
+
+        # 填充剩余 horizon (仅第 1 步会执行, 其余占位)
+        sched_charge    = np.zeros(H)
+        sched_discharge = np.zeros(H)
+        sched_charge[0]    = max(0.0, mean_ch)
+        sched_discharge[0] = max(0.0, mean_dc)
+
+        return {
+            'bess_charge':    sched_charge,
+            'bess_discharge': sched_discharge,
+            'soc_profile':    np.full(H + 1, bess.get_soc()),
+            'objective_value': float(np.sum(weights * costs)),
+        }
+
+
+# ========================================================================
 # 4) 规则型削峰填谷 （对照组）
 # ========================================================================
 class PeakShavingRuleStrategy(BaseStrategy):

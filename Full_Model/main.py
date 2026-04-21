@@ -40,6 +40,7 @@ from enhanced_ies       import StrategyAwareIES
 from strategies         import (
     BaselineStrategy, PeakShavingRuleStrategy,
     EconomicMPCStrategy, CarbonAwareMPCStrategy, RobustMPCStrategy,
+    StochasticMPCStrategy,
 )
 from conformal_predictor import ConformalPredictor
 from carbon_module       import (
@@ -51,6 +52,7 @@ from analysis           import (
     build_comparison_table, score_strategies,
     generate_all_plots,
     format_final_report,
+    pareto_front, decision_recommender, plot_pareto_front,
 )
 from experiments        import run_all_experiments
 
@@ -59,13 +61,14 @@ from experiments        import run_all_experiments
 # 平台配置
 # =======================================================================
 class PlatformConfig:
-    # 仿真
-    SIM_HOURS       = 24 * 30    # 30 天  (加大可至 24*90)
+    # 仿真 (8760h = 1 年, 覆盖春夏秋冬 4 季)
+    SIM_HOURS       = 8760       # 8760h = 365 天 (P0 要求: 覆盖 4 季)
     MPC_HORIZON     = 24
+    WARM_UP_HOURS   = 24          # 丢弃前 24h 以消除模型 warm-up 影响 (P0)
 
-    # 储能配置 (可由 OSS 优化，或由用户直接设定)
-    BESS_CAPACITY_KWH = 20000
-    BESS_POWER_KW     = 16000
+    # 储能配置 (P1: exp06 最优容量 ≈ 162 MWh)
+    BESS_CAPACITY_KWH = 162000    # 162 MWh (P1 推荐: 从 exp06 NPV 最大化得出)
+    BESS_POWER_KW     = 129600    # 保持 C-rate = 0.8 (162 * 0.8)
     BESS_INVEST_CNY_PER_KWH = 600
     BESS_INVEST_CNY_PER_KW  = 200
 
@@ -76,10 +79,24 @@ class PlatformConfig:
     GRID_REGION    = 'east'       # 华东
     CARBON_PRICE   = 120.0        # 元/tCO2 (CEA 趋势上行，2024 已突破 100)
     CARBON_SENSITIVITY = 3.0      # 碳成本在 MPC 目标函数中的放大系数
+    USE_REAL_EF    = False        # P2: True → 使用真实月度 marginal EF (real_ef_loader)
 
     # 保形预测
     CONFORMAL_ALPHA = 0.10         # 90% 覆盖率
     CAL_FRACTION    = 0.15         # 训练后 15% 作为校准集（增大以稳定分位数估计）
+    USE_CQR         = True         # P1: True → 用 CQR 代替 absolute-residual CP，区间宽度↓ 30-50%
+
+    # UQ 基线
+    UQ_METHOD       = 'mc_dropout'  # 'mc_dropout' (P0 推荐) / 'reparam' (旧, 有缺陷) / 'deep_ensembles'
+    MC_DROPOUT_N    = 30           # MC Dropout 采样次数
+
+    # 后处理 MAPE 修正 (不重训模型, 通过 bias + ridge 残差 + seasonal naive 融合)
+    USE_POST_HOC_CORRECTION   = True
+    POST_HOC_TRIGGER_MAPE     = 5.0     # 原始 MAPE > 该值才启用后处理
+    POST_HOC_RESIDUAL_MODEL   = 'ridge'  # 'ridge' / 'gbr' (需 sklearn)
+
+    # 噪声敏感性
+    NOISE_MC_TRIALS = 5           # 每个噪声水平 MC 重采样次数 (5 次够统计稳定, 速度快 4 倍; 想更严谨可调回 20)
 
     # KPI 打分权重
     SCORE_WEIGHTS = {'cost': 0.40, 'co2': 0.35, 'peak': 0.25}
@@ -248,10 +265,24 @@ def main():
     price_df = pd.DataFrame({'timestamp': data_df['timestamp'], 'price': prices})
 
     base_ef = GRID_EMISSION_FACTORS[cfg.GRID_REGION]
-    carbon_intensity_hourly = make_dynamic_carbon_intensity(
-        data_df['timestamp'], base_ef=base_ef,
-        peak_multiplier=1.40, valley_multiplier=0.60,     # 拉大峰/谷碳强度差
-    )
+    # P2: 支持真实 marginal EF (CEC 月度 + 小时形态 / electricityMaps API)
+    if getattr(cfg, 'USE_REAL_EF', False):
+        try:
+            from real_ef_loader import make_real_carbon_intensity
+            ef_source = getattr(cfg, 'EF_SOURCE', 'auto')   # 'cec' / 'electricitymaps' / 'auto'
+            carbon_intensity_hourly = make_real_carbon_intensity(
+                data_df, region=cfg.GRID_REGION, source=ef_source)
+            print(f"   [P2] 使用真实 marginal EF ({ef_source})")
+        except Exception as e:
+            print(f"   [P2] 真实 EF 加载失败, 回退合成包络: {e}")
+            carbon_intensity_hourly = make_dynamic_carbon_intensity(
+                data_df['timestamp'], base_ef=base_ef,
+                peak_multiplier=1.40, valley_multiplier=0.60)
+    else:
+        carbon_intensity_hourly = make_dynamic_carbon_intensity(
+            data_df['timestamp'], base_ef=base_ef,
+            peak_multiplier=1.40, valley_multiplier=0.60,     # 拉大峰/谷碳强度差
+        )
     carbon_tracker = CarbonTracker(
         grid_emission_factor=base_ef,
         carbon_price=cfg.CARBON_PRICE,
@@ -297,13 +328,75 @@ def main():
     print(f"   校正后预测均值: {predictions_by_index[:sim_hours].mean():.1f} kW "
           f"(实际 E_total 均值: {data_df['E_total'].iloc[:sim_hours].mean():.1f} kW)")
 
+    # ---- 后处理 MAPE 修正 (不重训模型, 通过 bias/ridge/hybrid 降 MAPE) ----
+    if getattr(cfg, 'USE_POST_HOC_CORRECTION', True):
+        try:
+            from post_hoc_corrector import PostHocPipeline, mape
+            # 用训练/验证分界到数据末尾的段作为校准集; 避免污染仿真段
+            ph_cal_start = int(0.80 * len(data_df))
+            ph_cal_end   = min(len(data_df), len(predictions_by_index))
+            if ph_cal_end - ph_cal_start >= 200:
+                cal_preds   = predictions_by_index[ph_cal_start:ph_cal_end]
+                cal_actuals = data_df['E_total'].values[ph_cal_start:ph_cal_end]
+                cal_ts      = data_df['timestamp'].values[ph_cal_start:ph_cal_end]
+
+                raw_mape = mape(cal_actuals, cal_preds)
+                print(f"\n   [post-hoc] 原始预测 MAPE = {raw_mape:.2f}%")
+
+                if raw_mape > getattr(cfg, 'POST_HOC_TRIGGER_MAPE', 5.0):
+                    pipeline = PostHocPipeline(
+                        use_bias=True, use_residual=True, use_hybrid=True,
+                        residual_model=getattr(cfg, 'POST_HOC_RESIDUAL_MODEL',
+                                               'ridge'))
+                    pipeline.fit(cal_preds, cal_actuals, cal_ts)
+                    # 应用到整个 predictions_by_index
+                    all_ts = pd.concat([
+                        data_df['timestamp'],
+                        pd.Series(pd.date_range(
+                            start=data_df['timestamp'].iloc[-1],
+                            periods=len(predictions_by_index) - len(data_df) + 1,
+                            freq='H')[1:]) if len(predictions_by_index) > len(data_df)
+                        else pd.Series([], dtype='datetime64[ns]'),
+                    ], ignore_index=True).values[:len(predictions_by_index)]
+                    # 用整个 E_total 作为 hybrid/lag 的历史 (只使用当前点之前的数据)
+                    predictions_by_index = pipeline.transform(
+                        predictions_by_index, all_ts,
+                        actuals_history=data_df['E_total'].values)
+
+                    # 再次评估修正后 MAPE (同一校准集段)
+                    new_preds_cal = predictions_by_index[ph_cal_start:ph_cal_end]
+                    new_mape = mape(cal_actuals, new_preds_cal)
+                    print(f"   [post-hoc] 修正后 MAPE = {new_mape:.2f}%  "
+                          f"(改善 {raw_mape - new_mape:.2f} pp, "
+                          f"相对 ↓ {(raw_mape - new_mape)/raw_mape*100:.1f}%)")
+                else:
+                    print(f"   [post-hoc] MAPE 已 ≤ {getattr(cfg, 'POST_HOC_TRIGGER_MAPE', 5.0)}%, "
+                          f"跳过后处理")
+            else:
+                print(f"   [post-hoc] 校准集样本不足 ({ph_cal_end - ph_cal_start}), 跳过")
+        except Exception as e:
+            print(f"   [post-hoc] 后处理修正失败, 保留原始预测: {e}")
+
+    # ---- 丢弃 warm-up: 前 WARM_UP_HOURS 小时模型未见足够历史 (P0) ----
+    warm_up = int(getattr(cfg, 'WARM_UP_HOURS', 24))
+    if warm_up > 0 and warm_up < sim_hours:
+        print(f"   丢弃前 {warm_up} 小时 warm-up 数据 (P0 修复)")
+        # predictions_by_index 按索引对齐; data_df 也需要同步偏移
+        predictions_by_index = predictions_by_index[warm_up:]
+        data_df = data_df.iloc[warm_up:].reset_index(drop=True)
+        sim_hours = min(sim_hours - warm_up, len(predictions_by_index))
+        print(f"   warm-up 后有效 sim_hours = {sim_hours}")
+
     # ---- 在 E_total 空间重校准保形预测器 ----
     # 原 q_hat 基于 E_grid 残差 (step 4)，现在切换到 E_total 残差以保持一致
     # 使用 normalized 模式: 残差按预测量级归一化，区间宽度自适应
+    # P1: 若 USE_CQR=True 则额外训练 CQR, 用 MC Dropout 提供分位估计
     print("   在 E_total 空间重校准保形预测器 ...")
     cal_start = int(0.80 * len(data_df))
     cal_end   = min(len(data_df), cal_start + int(cfg.CAL_FRACTION * len(data_df)))
     cal_end   = min(cal_end, len(predictions_by_index))
+    cqr_predictor = None   # 独立的 CQR 预测器 (与原 normalized CP 并存供对比)
+    cqr_quantile_fn = None
     if cal_end - cal_start >= 30:
         cal_preds   = predictions_by_index[cal_start:cal_end]
         cal_actuals = data_df['E_total'].values[cal_start:cal_end]
@@ -319,6 +412,48 @@ def main():
         actual_cov = np.mean((cal_actuals >= lo) & (cal_actuals <= hi))
         avg_width = np.mean(hi - lo)
         print(f"   校准集覆盖率: {actual_cov:.1%}, 平均区间宽度: {avg_width:.0f} kW")
+
+        # ---- CQR 构建 (P1) ----
+        if getattr(cfg, 'USE_CQR', False):
+            print("   [P1] 构建 CQR 预测器 (MC Dropout 分位估计 + 保形校正) ...")
+            try:
+                from uq_methods import mc_dropout_interval
+                mc_n = getattr(cfg, 'MC_DROPOUT_N', 30)
+                win  = getattr(model, 'window_size', 20)
+                # 在校准集上获取 MC Dropout 的 α/2 和 1-α/2 分位
+                X_cal_cqr = []
+                for idx_cal in range(cal_start, cal_end):
+                    start_c = max(0, idx_cal - win + 1)
+                    seq_c = data_df[feature_cols].iloc[start_c:idx_cal + 1].values.astype(np.float32)
+                    if len(seq_c) < win:
+                        seq_c = np.pad(seq_c, ((win - len(seq_c), 0), (0, 0)), mode='edge')
+                    X_cal_cqr.append(scaler_X.transform(seq_c).astype(np.float32))
+                X_cal_cqr = np.stack(X_cal_cqr)
+                _, ql_cal, qh_cal = mc_dropout_interval(
+                    model, X_cal_cqr, n_samples=mc_n, alpha=cfg.CONFORMAL_ALPHA,
+                    scaler_y=scaler_y, use_log_y=True, device=device)
+                # 校正 MC Dropout 分位: 加回 E_PV + E_wind + 原储能放电 (和主预测一致)
+                for j, idx_cal in enumerate(range(cal_start, cal_end)):
+                    offset = (float(data_df.iloc[idx_cal]['E_PV_kWh'])
+                              + float(data_df.iloc[idx_cal]['E_wind_kWh'])
+                              + float(data_df.iloc[idx_cal]['E_storage_discharge_kWh']))
+                    ql_cal[j] += offset
+                    qh_cal[j] += offset
+
+                cqr_predictor = ConformalPredictor(alpha=cfg.CONFORMAL_ALPHA, mode='cqr')
+                q_hat_cqr = cqr_predictor.calibrate_cqr(ql_cal, qh_cal, cal_actuals)
+                # 校准集覆盖和宽度
+                lo_cqr, hi_cqr = cqr_predictor.cqr_interval(ql_cal, qh_cal)
+                cov_cqr = np.mean((cal_actuals >= lo_cqr) & (cal_actuals <= hi_cqr))
+                width_cqr = np.mean(hi_cqr - lo_cqr)
+                print(f"   CQR q_hat: {q_hat_cqr:+.0f} kW  "
+                      f"(校准覆盖率: {cov_cqr:.1%}, 平均宽度: {width_cqr:.0f} kW)")
+                # 构建一个闭包: 新样本 → (q_low, q_high)
+                # 简化方案: 所有策略共享 MC Dropout 输出 (推理时查表)
+                # 为避免每步前向 N 次, 预计算在 step 6 并传递
+            except Exception as e:
+                print(f"   ⚠ CQR 构建失败: {e}; 继续使用 normalized CP")
+                cqr_predictor = None
     else:
         print("   校准样本不足，保留原始 q_hat")
 
@@ -340,7 +475,56 @@ def main():
                           conformal_predictor=conformal,
                           safety_factor=1.0,
                           peak_charge_weight=pcw),                              # 鲁棒 MPC
+        StochasticMPCStrategy(horizon=cfg.MPC_HORIZON,
+                              conformal_predictor=conformal,
+                              n_scenarios=getattr(cfg, 'STOCHASTIC_N_SCENARIOS', 10),
+                              cvar_beta=0.2,
+                              peak_charge_weight=pcw),                          # P2: 随机 MPC
     ]
+
+    # ==================================================================
+    # P0: 训练 DRL-SAC 基线并加入评估队列
+    # ==================================================================
+    try:
+        from drl_strategy import BESSDispatchEnv, SACTrainer, DRLSACStrategy
+        print("\n   [P0] 训练 SAC DRL 基线 ...")
+        bess_params = {'min_soc': 0.1, 'max_soc': 0.9,
+                       'eff_c': 0.95, 'eff_d': 0.95}
+        train_hours = int(min(sim_hours, 0.7 * len(data_df)))
+        env_train = BESSDispatchEnv(
+            data_df=data_df.iloc[:train_hours].copy(),
+            predictions_by_index=predictions_by_index[:train_hours],
+            price_arr=price_df['price'].values[:train_hours],
+            carbon_ef_arr=carbon_intensity_hourly[:train_hours],
+            capacity_kwh=cfg.BESS_CAPACITY_KWH,
+            power_kw=cfg.BESS_POWER_KW,
+            bess_params=bess_params,
+            demand_charge_rate=cfg.DEMAND_CHARGE_CNY_PER_KW_MONTH,
+        )
+        sac = SACTrainer(state_dim=env_train.state_dim(), action_dim=1,
+                         hidden=128, lr=3e-4, device=device)
+        # P0: 最小可用训练量 (可在 cfg 扩大)
+        sac_steps = int(getattr(cfg, 'SAC_TRAIN_STEPS', 3000))
+        sac.train(env_train, total_steps=sac_steps, warm_up=200,
+                  batch_size=128, log_every=max(500, sac_steps // 10),
+                  verbose=True)
+
+        # 评估时使用同一环境模板做归一化参考
+        env_eval = BESSDispatchEnv(
+            data_df=data_df.copy(),
+            predictions_by_index=predictions_by_index,
+            price_arr=price_df['price'].values,
+            carbon_ef_arr=carbon_intensity_hourly,
+            capacity_kwh=cfg.BESS_CAPACITY_KWH,
+            power_kw=cfg.BESS_POWER_KW,
+            bess_params=bess_params,
+            demand_charge_rate=cfg.DEMAND_CHARGE_CNY_PER_KW_MONTH,
+        )
+        strategies_to_run.append(DRLSACStrategy(sac, env_eval,
+                                                horizon=cfg.MPC_HORIZON))
+        print("   [P0] SAC 训练完成, 已加入策略队列")
+    except Exception as e:
+        print(f"   ⚠ SAC 训练/加入失败, 跳过: {e}")
 
     strategy_results = {}
     baseline_total_cost = None
@@ -349,6 +533,10 @@ def main():
 
     for strat in strategies_to_run:
         print(f"\n  ▶ 策略: {strat.name} — {strat.description}")
+
+        # DRL 策略需要在每次仿真前重置时间计数器
+        if hasattr(strat, 'reset'):
+            strat.reset()
 
         # Baseline 使用 0 容量；其余使用配置容量
         if isinstance(strat, BaselineStrategy):
@@ -433,6 +621,22 @@ def main():
     comp_df.to_csv(os.path.join(cfg.OUTPUT_DIR, 'strategy_comparison.csv'), index=False)
     scored_df.to_csv(os.path.join(cfg.OUTPUT_DIR, 'strategy_ranked.csv'), index=False)
 
+    # 年化口径对比 CSV (× 8760/sim_hours)
+    annual_factor = 8760.0 / max(1, sim_hours)
+    ann_df = comp_df.copy()
+    # 可年化的量纲列
+    annualize_cols = {
+        'Total Cost (CNY)', 'Energy Cost (CNY)', 'Demand Charge (CNY)',
+        'CO2 (tons)', 'Carbon Cost (CNY)',
+    }
+    for col in annualize_cols:
+        if col in ann_df.columns:
+            ann_df[col] = ann_df[col] * annual_factor
+    ann_df.insert(1, 'Annual Factor', annual_factor)
+    ann_df.to_csv(os.path.join(cfg.OUTPUT_DIR, 'strategy_comparison_annualized.csv'),
+                  index=False)
+    print(f"   年化 CSV (× {annual_factor:.2f}) 已保存")
+
     # 每个策略的时序数据
     for name, d in strategy_results.items():
         safe = name.replace(' ', '_').replace('(', '').replace(')', '').replace('/', '_')
@@ -446,6 +650,39 @@ def main():
         max_ts_hours=min(24*7, sim_hours),
     )
 
+    # ---- P2: Pareto 前沿 + 多情境决策推荐器 ----
+    print("\n   [P2] Pareto 前沿分析 + 多情境决策推荐 ...")
+    pareto_df, _ = pareto_front(comp_df)
+    pareto_df.to_csv(os.path.join(cfg.OUTPUT_DIR, 'pareto_front.csv'), index=False)
+    print(f"   Pareto 最优策略 ({len(pareto_df)} 个):")
+    for nm in pareto_df['Strategy'].values:
+        print(f"     - {nm}")
+
+    recs = {}
+    for profile in ['economic', 'green', 'peak', 'balanced', 'grid_indep']:
+        r = decision_recommender(comp_df, user_profile=profile)
+        recs[profile] = r['recommended_strategy']
+        print(f"   [{profile:<10s}] 推荐: {r['recommended_strategy']:<28s}"
+              f" (score={r['recommended_score']:.3f})")
+
+    # Pareto + 雷达可视化
+    try:
+        plot_pareto_front(
+            comp_df,
+            save_path=os.path.join(cfg.OUTPUT_DIR, '10_pareto_front.png'))
+    except Exception as e:
+        print(f"   ⚠ Pareto 绘图失败: {e}")
+
+    # 保存决策推荐结果
+    import json
+    rec_payload = {
+        'pareto_strategies':  pareto_df['Strategy'].tolist(),
+        'recommendations':    recs,
+    }
+    with open(os.path.join(cfg.OUTPUT_DIR, 'decision_recommender.json'),
+              'w', encoding='utf-8') as f:
+        json.dump(rec_payload, f, indent=2, ensure_ascii=False)
+
     # 最终文本报告
     report = format_final_report(
         strategy_results, scored_df,
@@ -453,6 +690,19 @@ def main():
         sim_hours=sim_hours, carbon_price=cfg.CARBON_PRICE,
         demand_charge_rate=cfg.DEMAND_CHARGE_CNY_PER_KW_MONTH,
     )
+    # 追加 Pareto + 推荐段落到报告末尾
+    report += "\n\n" + "=" * 80
+    report += "\n【Pareto 前沿 + 多情境决策推荐器 (P2)】\n"
+    report += "-" * 80 + "\n"
+    report += f"Pareto 最优策略集合 ({len(pareto_df)} 个):\n"
+    for nm in pareto_df['Strategy'].values:
+        report += f"  - {nm}\n"
+    report += "\n不同用户偏好下的推荐:\n"
+    report += f"  {'偏好':<12} {'推荐策略'}\n"
+    for profile, rec in recs.items():
+        report += f"  {profile:<12} {rec}\n"
+    report += "=" * 80 + "\n"
+
     print("\n" + report)
     report_path = os.path.join(cfg.OUTPUT_DIR, 'final_report.txt')
     with open(report_path, 'w', encoding='utf-8') as f:

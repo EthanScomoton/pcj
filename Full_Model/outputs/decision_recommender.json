@@ -1,0 +1,13 @@
+{
+  "pareto_strategies": [
+    "Rule-Based Peak Shaving",
+    "Stochastic MPC"
+  ],
+  "recommendations": {
+    "economic": "Stochastic MPC",
+    "green": "Stochastic MPC",
+    "peak": "Stochastic MPC",
+    "balanced": "Stochastic MPC",
+    "grid_indep": "Stochastic MPC"
+  }
+}

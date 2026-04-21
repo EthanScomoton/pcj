@@ -6,11 +6,16 @@
 - 后处理方法，不改变原有 .pth 模型
 - 输出点预测 + 预测区间，供鲁棒 MPC 使用
 
-支持两种模式:
-  - 'absolute'  (默认): 固定宽度区间 ŷ ± q̂
-  - 'normalized': 归一化保形预测，区间宽度随预测量级自适应缩放
-    s_i = |y_i - ŷ_i| / max(|ŷ_i|, ε)
-    区间 = ŷ ± q̂_norm * max(|ŷ|, ε)
+支持三种模式:
+  - 'absolute'  : 固定宽度区间 ŷ ± q̂
+  - 'normalized': 区间宽度随预测量级自适应缩放
+                  s_i = |y_i - ŷ_i| / max(|ŷ_i|, ε)
+                  区间 = ŷ ± q̂_norm * max(|ŷ|, ε)
+  - 'cqr'       : 条件保形分位数回归 (Romano et al. 2019, NeurIPS)
+                  需外部提供 q̂_low(x), q̂_high(x) 分位预测
+                  s_i = max(q̂_low - y_i, y_i - q̂_high)
+                  区间 = [q̂_low - Q̂, q̂_high + Q̂]
+                  比 absolute 宽度通常窄 30-50%
 """
 import numpy as np
 import torch
@@ -35,10 +40,14 @@ class ConformalPredictor:
     def __init__(self, alpha: float = 0.1, mode: str = 'normalized',
                  norm_eps: float = 1000.0):
         self.alpha = float(alpha)
-        self.mode = mode          # 'absolute' or 'normalized'
+        self.mode = mode          # 'absolute' / 'normalized' / 'cqr'
         self.norm_eps = float(norm_eps)
         self.q_hat = None
         self.calibration_residuals = None
+
+        # CQR 模式: 存校准集上的分位函数输出, 以便在新样本上查询
+        # 实际上 CQR 使用外部分位估计器, 这里只缓存 Q̂
+        self._cqr_calibrated = False
 
     # --------------------------------------------------------------
     def calibrate_from_sequences(self,
@@ -136,6 +145,58 @@ class ConformalPredictor:
     def predict_interval(self, point_pred):
         return self.predict_lower(point_pred), self.predict_upper(point_pred)
 
+    # --------------------------------------------------------------
+    # CQR (Conditional Quantile Regression) —— Romano et al. 2019
+    # --------------------------------------------------------------
+    def calibrate_cqr(self, q_low_cal, q_high_cal, y_cal):
+        """
+        CQR 校准: 用分位预测器在校准集上的输出 (q̂_low, q̂_high) 与真值 y 计算
+                   非一致性分数 s = max(q̂_low - y, y - q̂_high), 取 (1-α) 分位。
+
+        Parameters
+        ----------
+        q_low_cal  : array [m]   校准集上的下分位预测 (α/2)
+        q_high_cal : array [m]   校准集上的上分位预测 (1-α/2)
+        y_cal      : array [m]   校准集真值
+
+        Returns
+        -------
+        q_hat : float   CQR 校正量 (原尺度, 可加减直接修正区间)
+        """
+        q_low_cal  = np.asarray(q_low_cal,  dtype=float)
+        q_high_cal = np.asarray(q_high_cal, dtype=float)
+        y_cal      = np.asarray(y_cal,      dtype=float)
+
+        # 非一致性分数: 真值落在区间外的超出量, 落在区间内则 ≤ 0
+        scores = np.maximum(q_low_cal - y_cal, y_cal - q_high_cal)
+
+        self.mode = 'cqr'
+        self.calibration_residuals = scores
+        m = len(scores)
+        q_level = min(np.ceil((m + 1) * (1 - self.alpha)) / m, 1.0)
+        self.q_hat = float(np.quantile(scores, q_level))
+        self._cqr_calibrated = True
+        return self.q_hat
+
+    def cqr_interval(self, q_low_new, q_high_new):
+        """
+        对新样本的分位预测 (q̂_low, q̂_high) 应用 CQR 校正:
+          lower = q̂_low  - Q̂
+          upper = q̂_high + Q̂
+
+        若 Q̂ > 0 → 扩宽区间 (分位预测欠覆盖)
+        若 Q̂ < 0 → 收窄区间 (分位预测过覆盖, CQR 能自动变窄!)
+        """
+        if not self._cqr_calibrated or self.q_hat is None:
+            # 未校准 → 直接返回原始分位
+            return np.asarray(q_low_new), np.asarray(q_high_new)
+
+        q_low_new  = np.asarray(q_low_new,  dtype=float)
+        q_high_new = np.asarray(q_high_new, dtype=float)
+        lower = np.maximum(0.0, q_low_new  - self.q_hat)
+        upper = q_high_new + self.q_hat
+        return lower, upper
+
     def summary(self) -> dict:
         return {
             'alpha': self.alpha,
@@ -144,4 +205,5 @@ class ConformalPredictor:
             'mode': self.mode,
             'calibration_size': 0 if self.calibration_residuals is None
                                     else len(self.calibration_residuals),
+            'cqr_calibrated': self._cqr_calibrated,
         }

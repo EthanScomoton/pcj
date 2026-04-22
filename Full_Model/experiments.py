@@ -541,46 +541,73 @@ def experiment_noise_robustness(
             safety_factor=1.0, peak_charge_weight=pcw),
     }
 
-    raw_records = []     # 每个 trial 一行
-    import time as _time
-    _exp3_t0 = _time.time()
-    total_sims = 0
+    # 构造所有 (nl, trial) 任务
+    tasks = []
     for nl in noise_levels:
-        total_sims += (1 if nl == 0 else n_trials) * len(strategies_cfg)
-    done_sims = 0
-
-    for nl in noise_levels:
-        # 0 噪声只跑一次 (确定性)
         actual_trials = 1 if nl == 0 else n_trials
         for trial in range(actual_trials):
-            rng = np.random.default_rng(seed=1000 * int(nl * 100) + trial)
-            noised = predictions_by_index.copy()
-            if nl > 0:
-                noised *= (1.0 + nl * rng.standard_normal(len(noised)))
-                noised = np.maximum(noised, 0.0)
+            tasks.append((nl, trial, actual_trials))
 
-            for sname, sfactory in strategies_cfg.items():
-                _t_sim = _time.time()
-                strat = sfactory()
-                ts = _run_sim(strat, data_df, noised, model, cfg,
-                              price_df, carbon_intensity_hourly, carbon_tracker,
-                              conformal, scaler_X, scaler_y, feature_cols, sim_hours)
-                eco = compute_economic_kpis(
-                    ts, demand_charge_rate=getattr(cfg, 'DEMAND_CHARGE_CNY_PER_KW_MONTH', 0))
-                tech = compute_technical_kpis(ts)
-                raw_records.append({
-                    'noise': nl, 'strategy': sname, 'trial': trial,
-                    'total_cost': eco['total_cost_CNY'],
-                    'peak_kW': tech['peak_demand_kW'],
-                })
-                done_sims += 1
-                elapsed = _time.time() - _exp3_t0
-                per_sim = elapsed / max(done_sims, 1)
-                eta = per_sim * (total_sims - done_sims)
-                print(f"      [{done_sims:>3d}/{total_sims}] noise={nl:.0%} trial={trial+1}/{actual_trials} "
-                      f"{sname:<13s} sim={_time.time()-_t_sim:5.1f}s | elapsed={elapsed/60:5.1f}min | ETA={eta/60:5.1f}min",
-                      flush=True)
-        print(f"    ✓ noise={nl:.0%} × {actual_trials} trials done", flush=True)
+    # 单任务函数: 跑一对 (Economic, Robust) 仿真
+    def _run_one_trial(task):
+        nl, trial, _ = task
+        rng = np.random.default_rng(seed=1000 * int(nl * 100) + trial)
+        noised = predictions_by_index.copy()
+        if nl > 0:
+            noised *= (1.0 + nl * rng.standard_normal(len(noised)))
+            noised = np.maximum(noised, 0.0)
+
+        results = []
+        for sname, sfactory in strategies_cfg.items():
+            strat = sfactory()
+            ts = _run_sim(strat, data_df, noised, model, cfg,
+                          price_df, carbon_intensity_hourly, carbon_tracker,
+                          conformal, scaler_X, scaler_y, feature_cols, sim_hours)
+            eco = compute_economic_kpis(
+                ts, demand_charge_rate=getattr(cfg, 'DEMAND_CHARGE_CNY_PER_KW_MONTH', 0))
+            tech = compute_technical_kpis(ts)
+            results.append({
+                'noise': nl, 'strategy': sname, 'trial': trial,
+                'total_cost': eco['total_cost_CNY'],
+                'peak_kW': tech['peak_demand_kW'],
+            })
+        return results
+
+    # Apple Silicon 优化: 线程级并行 (CVXPY 底层 C solver 释放 GIL)
+    import time as _time
+    _exp3_t0 = _time.time()
+    raw_records = []
+    use_parallel = getattr(cfg, 'PARALLEL_EXPERIMENTS', True)
+    if use_parallel and len(tasks) > 1:
+        try:
+            from mac_optim import parallel_map, _detect_perf_cores
+            # 线程数 = min(P-core数, 任务数); 线程安全因 CVXPY 子进程独立
+            n_workers = min(_detect_perf_cores(), len(tasks))
+            print(f"    [parallel] 以 {n_workers} 线程跑 {len(tasks)} 个噪声试验")
+            batched = parallel_map(_run_one_trial, tasks,
+                                    n_jobs=n_workers, backend='threading',
+                                    verbose=0)
+            for sub in batched:
+                raw_records.extend(sub)
+        except Exception as e:
+            print(f"    [parallel] 失败 ({e}), 回退串行")
+            use_parallel = False
+
+    if not use_parallel or len(raw_records) == 0:
+        # 串行兜底
+        total_sims = len(tasks) * len(strategies_cfg)
+        done = 0
+        for task in tasks:
+            subs = _run_one_trial(task)
+            raw_records.extend(subs)
+            done += len(subs)
+            elapsed = _time.time() - _exp3_t0
+            per = elapsed / max(done, 1)
+            eta = per * (total_sims - done)
+            print(f"      [{done:>3d}/{total_sims}] elapsed={elapsed/60:5.1f}min "
+                  f"ETA={eta/60:5.1f}min", flush=True)
+    print(f"    ✓ {len(raw_records)} 条仿真完成 "
+          f"(总耗时 {(_time.time() - _exp3_t0) / 60:.1f} min)", flush=True)
 
     raw_df = pd.DataFrame(raw_records)
 
@@ -763,9 +790,8 @@ def experiment_carbon_sensitivity(
                        None, scaler_X, scaler_y, feature_cols, sim_hours)
     econ_eco = compute_economic_kpis(econ_ts, demand_charge_rate=dc_rate)
 
-    records = []
-    for cp_val in carbon_prices:
-        # Carbon-Aware MPC (目标函数含碳价)
+    # 单碳价运行函数
+    def _run_one_cp(cp_val):
         ca_strat = CarbonAwareMPCStrategy(
             horizon=cfg.MPC_HORIZON, carbon_price_cny_per_ton=cp_val,
             peak_charge_weight=pcw,
@@ -776,17 +802,34 @@ def experiment_carbon_sensitivity(
                          None, scaler_X, scaler_y, feature_cols, sim_hours)
         ca_eco = compute_economic_kpis(ca_ts, demand_charge_rate=dc_rate)
         ca_env = compute_environmental_kpis(ca_ts, carbon_price_cny_per_ton=cp_val)
-
-        econ_env = compute_environmental_kpis(econ_ts, carbon_price_cny_per_ton=cp_val)
-
-        records.append({
+        econ_env_p = compute_environmental_kpis(econ_ts, carbon_price_cny_per_ton=cp_val)
+        return {
             'carbon_price': cp_val,
-            'econ_total': econ_eco['total_cost_CNY'] + econ_env['carbon_cost_CNY'],
-            'econ_co2':   econ_env['total_CO2_tons'],
+            'econ_total': econ_eco['total_cost_CNY'] + econ_env_p['carbon_cost_CNY'],
+            'econ_co2':   econ_env_p['total_CO2_tons'],
             'carbon_total': ca_eco['total_cost_CNY'] + ca_env['carbon_cost_CNY'],
             'carbon_co2':   ca_env['total_CO2_tons'],
-        })
-        print(f"    碳价={cp_val} 元/t done")
+        }
+
+    # Apple Silicon 优化: 多线程扫描 (每个碳价独立仿真)
+    if getattr(cfg, 'PARALLEL_EXPERIMENTS', True) and len(carbon_prices) > 1:
+        try:
+            from mac_optim import parallel_map, _detect_perf_cores
+            n_workers = min(_detect_perf_cores(), len(carbon_prices))
+            print(f"    [parallel] {n_workers} 线程扫描 {len(carbon_prices)} 个碳价")
+            records = parallel_map(_run_one_cp, carbon_prices,
+                                    n_jobs=n_workers, backend='threading',
+                                    verbose=0)
+            for r in records:
+                print(f"    碳价={r['carbon_price']} 元/t done")
+        except Exception as e:
+            print(f"    [parallel] 失败 ({e}), 回退串行")
+            records = [_run_one_cp(cp_val) for cp_val in carbon_prices]
+    else:
+        records = []
+        for cp_val in carbon_prices:
+            records.append(_run_one_cp(cp_val))
+            print(f"    碳价={cp_val} 元/t done")
 
     df = pd.DataFrame(records)
 
@@ -1175,14 +1218,12 @@ def experiment_bess_capacity(
     pcw = getattr(cfg, 'DEMAND_CHARGE_CNY_PER_KW_MONTH', 38.0) / 30.0
     dc_rate = getattr(cfg, 'DEMAND_CHARGE_CNY_PER_KW_MONTH', 0)
 
-    records = []
-    for cap in capacities:
+    # 单容量运行函数
+    def _run_one_cap(cap):
         pwr = cap * c_rate
         inv = cap * cfg.BESS_INVEST_CNY_PER_KWH + pwr * cfg.BESS_INVEST_CNY_PER_KW
-        strat = EconomicMPCStrategy(horizon=cfg.MPC_HORIZON, peak_charge_weight=pcw)
-        if cap == 0:
-            strat = BaselineStrategy()
-
+        strat = EconomicMPCStrategy(horizon=cfg.MPC_HORIZON, peak_charge_weight=pcw) \
+                if cap > 0 else BaselineStrategy()
         ts = _run_sim(strat, data_df, predictions_by_index, model, cfg,
                       price_df, carbon_intensity_hourly, carbon_tracker,
                       conformal, scaler_X, scaler_y, feature_cols, sim_hours,
@@ -1193,18 +1234,41 @@ def experiment_bess_capacity(
             demand_charge_rate=dc_rate,
             bess_capacity_kwh=cap,
         )
-        records.append({
+        return {
             'capacity_kwh': cap, 'investment': inv,
             'total_cost': eco['total_cost_CNY'],
             'NPV': eco.get('NPV_CNY', np.nan),
             'IRR': eco.get('IRR', np.nan),
             'payback': eco.get('payback_period', np.nan),
             'annual_savings': eco.get('annual_savings_CNY', np.nan),
-        })
-        print(f"    {cap:6d} kWh → cost={eco['total_cost_CNY']:.0f}, "
-              f"NPV={eco.get('NPV_CNY', 0):.0f}")
+        }
+
+    # Apple Silicon 优化: 容量扫描完全独立, 线程并行
+    records = []
+    if getattr(cfg, 'PARALLEL_EXPERIMENTS', True) and len(capacities) > 1:
+        try:
+            from mac_optim import parallel_map, _detect_perf_cores
+            n_workers = min(_detect_perf_cores(), len(capacities))
+            print(f"    [parallel] {n_workers} 线程扫描 {len(capacities)} 个容量")
+            records = parallel_map(_run_one_cap, capacities,
+                                    n_jobs=n_workers, backend='threading',
+                                    verbose=0)
+        except Exception as e:
+            print(f"    [parallel] 失败 ({e}), 回退串行")
+            records = [_run_one_cap(cap) for cap in capacities]
+    else:
+        for cap in capacities:
+            r = _run_one_cap(cap)
+            records.append(r)
+            print(f"    {cap:6d} kWh → cost={r['total_cost']:.0f}, "
+                  f"NPV={r.get('NPV', 0):.0f}")
 
     df = pd.DataFrame(records)
+    # 并行版本不会按顺序打印, 这里统一汇报
+    if getattr(cfg, 'PARALLEL_EXPERIMENTS', True):
+        for r in records:
+            print(f"    {r['capacity_kwh']:6d} kWh → cost={r['total_cost']:.0f}, "
+                  f"NPV={r.get('NPV', 0):.0f}")
 
     # 最优容量（离散最大 + 二次插值精细最优）
     valid = df.dropna(subset=['NPV'])

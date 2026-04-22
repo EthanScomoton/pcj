@@ -23,6 +23,10 @@ import warnings
 warnings.filterwarnings("ignore", category=UserWarning, module='cvxpy')
 warnings.filterwarnings("ignore", category=FutureWarning)
 
+# ---- Apple Silicon 优化: 必须在 import numpy/torch 之前设置 BLAS 线程 ----
+from mac_optim import configure_blas, auto_device, log_system
+configure_blas(verbose=True)
+
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -85,6 +89,11 @@ class PlatformConfig:
     CONFORMAL_ALPHA = 0.10         # 90% 覆盖率
     CAL_FRACTION    = 0.15         # 训练后 15% 作为校准集（增大以稳定分位数估计）
     USE_CQR         = True         # P1: True → 用 CQR 代替 absolute-residual CP，区间宽度↓ 30-50%
+
+    # Apple Silicon / 硬件加速
+    TORCH_DEVICE        = 'auto'   # 'auto' / 'mps' / 'cuda' / 'cpu'
+    INFER_BATCH_SIZE    = 256      # 批量推理 batch size
+    PARALLEL_EXPERIMENTS = True    # 实验并行 (MC 噪声扫描等)
 
     # UQ 基线
     UQ_METHOD       = 'mc_dropout'  # 'mc_dropout' (P0 推荐) / 'reparam' (旧, 有缺陷) / 'deep_ensembles'
@@ -173,8 +182,10 @@ def main():
     # 3) 模型加载
     # ==================================================================
     print("\n[3/9] 创建并加载预测模型 (best_EModel_FeatureWeight4.pth) ...")
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print(f"   设备: {device}")
+    # Apple Silicon: 优先 MPS (Metal) → CUDA → CPU
+    device = auto_device(verbose=False,
+                         prefer=getattr(cfg, 'TORCH_DEVICE', 'auto'))
+    log_system(device)
 
     feature_importance = calculate_feature_importance(data_df, feature_cols, target_col)
     feat_dim = len(feature_cols)
@@ -307,7 +318,8 @@ def main():
         verbose=False,
     )
     predictions_by_index = cache_ies.precompute_predictions(
-        data_df, sim_hours, horizon=cfg.MPC_HORIZON
+        data_df, sim_hours, horizon=cfg.MPC_HORIZON,
+        batch_size=getattr(cfg, 'INFER_BATCH_SIZE', 256),
     )
 
     # ---- 恢复原始可再生数据 (供仿真阶段 get_renewable_forecast 使用) ----

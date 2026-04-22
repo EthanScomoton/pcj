@@ -141,13 +141,31 @@ class _ParametrizedMPC:
                                                   .flatten()[:self.horizon])
             self.carbon_weight.value = max(0.0, float(carbon_weight))
 
+        # Apple Silicon 优化: 为 CLARABEL / OSQP 传入放宽后的容忍度参数,
+        # 搭配 warm-start 减少迭代次数 (通常 2-4× 加速 每次 solve)
         status = None
+        solver_kwargs = {
+            cp.OSQP: dict(
+                eps_abs=1e-4, eps_rel=1e-4,       # 原 1e-6 太严, 收敛慢
+                max_iter=8000,
+                polish=False,                     # 跳过末端 refinement
+                adaptive_rho=True, adaptive_rho_interval=25,
+                scaling=10,
+            ),
+            cp.CLARABEL: dict(
+                eps_abs=1e-5, eps_rel=1e-5,
+                max_iter=200,
+                time_limit=5.0,
+            ),
+        }
         for solver in (cp.OSQP, cp.CLARABEL, None):
             try:
                 if solver is None:
                     self.problem.solve(warm_start=True, verbose=False)
                 else:
-                    self.problem.solve(solver=solver, warm_start=True, verbose=False)
+                    kw = solver_kwargs.get(solver, {})
+                    self.problem.solve(solver=solver, warm_start=True,
+                                        verbose=False, **kw)
                 status = self.problem.status
                 if status in (cp.OPTIMAL, cp.OPTIMAL_INACCURATE):
                     break

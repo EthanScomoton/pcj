@@ -321,6 +321,8 @@ class PostHocPipeline:
                                          actuals_history=actuals_history)
         if self.hybrid_c is not None and actuals_history is not None:
             cur = self.hybrid_c.transform(cur, actuals_history)
+        # 修复: 防止过度修正产生负值 (CSV 出现负 predicted_demand 的根因)
+        cur = np.maximum(cur, 0.0)
         return cur
 
     def summary(self):

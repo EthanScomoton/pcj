@@ -40,9 +40,22 @@ COLOR_PALETTE = {
 
 
 def _apply_style():
+    # 修复 Plot 9: 中文字体回退链, 解决 macOS 上中文标题显示成 □□□ 的问题
+    # macOS 优先 PingFang/Hiragino, 其次 Arial Unicode (含中文), 然后回退英文字体
+    cjk_fallbacks = [
+        'PingFang SC',           # macOS 默认
+        'Hiragino Sans GB',      # macOS 旧版
+        'Arial Unicode MS',      # 包含中文的英文字体
+        'STHeiti',               # macOS 黑体
+        'WenQuanYi Zen Hei',     # Linux 默认中文字体
+        'Noto Sans CJK SC',      # Google Noto 中文
+        'Microsoft YaHei',       # Windows
+        'SimHei',                # Windows 黑体
+    ]
     plt.rcParams.update({
         'font.family': 'sans-serif',
-        'font.sans-serif': ['Arial', 'DejaVu Sans', 'Liberation Sans'],
+        'font.sans-serif': cjk_fallbacks + ['Arial', 'DejaVu Sans',
+                                            'Liberation Sans'],
         'axes.unicode_minus': False,
         'axes.titlesize': 11,
         'axes.labelsize': 10,
@@ -672,39 +685,64 @@ def plot_radar_chart(strategy_results, save_path=None, baseline_name="Baseline (
 # 可视化 5: 改进率热力图
 # =======================================================================
 def plot_improvement_heatmap(comparison_df, save_path=None):
+    """
+    修复 Plot 5: 之前 6 列混合 % 改进 + 绝对值, 共用同一色阶导致绝对值列饱和。
+    现拆为两个并排子图, 各用独立色阶:
+      - 左: % 改进 (RdYlGn, 居中 0)
+      - 右: 绝对量 KPI (viridis 顺序色阶)
+    """
     _apply_style()
-    cols = ['Cost Savings (%)', 'CO2 Reduction (%)', 'Peak Reduction (%)',
-            'Grid Indep. (%)', 'Load Factor', 'RE Penetration (%)']
-    df = comparison_df.set_index('Strategy')[cols].copy()
-    df.index = [_short(x) for x in df.index]
+    pct_cols = ['Cost Savings (%)', 'CO2 Reduction (%)', 'Peak Reduction (%)']
+    abs_cols = ['Grid Indep. (%)', 'Load Factor', 'RE Penetration (%)']
+    df_full = comparison_df.set_index('Strategy').copy()
+    df_full.index = [_short(x) for x in df_full.index]
+    df_pct = df_full[pct_cols].astype(float)
+    df_abs = df_full[abs_cols].astype(float)
 
-    fig, ax = plt.subplots(figsize=(11, max(3, 0.6 * len(df) + 1.5)),
-                           constrained_layout=True)
+    fig, axes = plt.subplots(
+        1, 2, figsize=(14, max(3, 0.6 * len(df_full) + 1.5)),
+        constrained_layout=True,
+        gridspec_kw={'width_ratios': [len(pct_cols), len(abs_cols)]})
 
-    data = df.values.astype(float)
-    im = ax.imshow(data, cmap='RdYlGn', aspect='auto',
-                   vmin=-max(1, abs(data).max()), vmax=max(1, abs(data).max()))
+    # 左: % 改进 (居中色阶)
+    data_pct = df_pct.values
+    vlim = max(1.0, np.abs(data_pct).max())
+    im0 = axes[0].imshow(data_pct, cmap='RdYlGn', aspect='auto',
+                         vmin=-vlim, vmax=vlim)
+    axes[0].set_xticks(range(len(pct_cols)))
+    axes[0].set_xticklabels(pct_cols, rotation=22, ha='right')
+    axes[0].set_yticks(range(len(df_pct.index)))
+    axes[0].set_yticklabels(df_pct.index)
+    for i in range(data_pct.shape[0]):
+        for j in range(data_pct.shape[1]):
+            v = data_pct[i, j]
+            axes[0].text(j, i, f'{v:.2f}', ha='center', va='center',
+                         color='black' if abs(v) < 0.6 * vlim else 'white',
+                         fontsize=9, fontweight='medium')
+    plt.colorbar(im0, ax=axes[0], shrink=0.8,
+                 label='Improvement vs Baseline (%)')
+    axes[0].set_title('Improvement Metrics (% vs Baseline)', fontweight='bold')
 
-    ax.set_xticks(range(len(cols)))
-    ax.set_xticklabels(cols, rotation=22, ha='right')
-    ax.set_yticks(range(len(df.index)))
-    ax.set_yticklabels(df.index)
-
-    for i in range(data.shape[0]):
-        for j in range(data.shape[1]):
-            v = data[i, j]
-            ax.text(j, i, f'{v:.2f}',
-                    ha='center', va='center',
-                    color='black' if abs(v) < 0.6 * abs(data).max() else 'white',
-                    fontsize=9, fontweight='medium')
-
-    cbar = plt.colorbar(im, ax=ax, shrink=0.8)
-    cbar.set_label('Improvement vs Baseline (%)', fontsize=9)
-    ax.set_title('Strategy Improvement Heatmap', fontweight='bold')
+    # 右: 绝对量 (顺序色阶)
+    data_abs = df_abs.values
+    im1 = axes[1].imshow(data_abs, cmap='viridis', aspect='auto')
+    axes[1].set_xticks(range(len(abs_cols)))
+    axes[1].set_xticklabels(abs_cols, rotation=22, ha='right')
+    axes[1].set_yticks(range(len(df_abs.index)))
+    axes[1].set_yticklabels(df_abs.index)
+    for i in range(data_abs.shape[0]):
+        for j in range(data_abs.shape[1]):
+            v = data_abs[i, j]
+            ymin, ymax = data_abs.min(), data_abs.max()
+            color = 'white' if (v - ymin) / max(ymax - ymin, 1e-6) < 0.5 else 'black'
+            axes[1].text(j, i, f'{v:.2f}', ha='center', va='center',
+                         color=color, fontsize=9, fontweight='medium')
+    plt.colorbar(im1, ax=axes[1], shrink=0.8, label='Absolute Value')
+    axes[1].set_title('Absolute KPIs (system-level)', fontweight='bold')
 
     if save_path:
-        plt.savefig(save_path, dpi=150, bbox_inches='tight')
-        print(f"  [plot] 改进率热力图: {save_path}")
+        plt.savefig(save_path, dpi=200, bbox_inches='tight')
+        print(f"  [plot] 改进率 + 绝对量热力图: {save_path}")
     plt.show()
     plt.close(fig)
 
@@ -733,16 +771,28 @@ def plot_cost_breakdown(strategy_results, save_path=None):
     b3 = ax.bar(short, carbon, bottom=bot3, color='#E45756',
                 label=f'{CO2_LABEL} Cost', edgecolor='black', linewidth=0.6)
 
-    total = [e + d + c for e, d, c in zip(energy, demand, carbon)]
-    ymax = max(total) * 1.15
+    # 修复 Plot 6: 区分两种"总成本"口径, 防止与 01 图 / strategy_comparison.csv 不一致
+    #   - "Operating Cost"  = energy + demand_charge   (与 CSV 中 Total Cost 一致)
+    #   - "Cost incl. CO2"  = energy + demand + carbon (本图叠加全部三段)
+    operating_total = [e + d for e, d in zip(energy, demand)]
+    grand_total     = [e + d + c for e, d, c in zip(energy, demand, carbon)]
+    ymax = max(grand_total) * 1.18
     ax.set_ylim(0, ymax)
-    for i, t in enumerate(total):
-        ax.text(i, t + ymax * 0.01, f'{t:,.0f}',
-                ha='center', va='bottom', fontsize=9, fontweight='medium')
+    for i, (op, gt) in enumerate(zip(operating_total, grand_total)):
+        # 在 operating_cost 顶部标 (= CSV 一致口径)
+        ax.text(i, op + ymax * 0.005,
+                f'op:{op/1e4:,.0f}万', ha='center', va='bottom',
+                fontsize=8, color='#202020')
+        # 在叠加 carbon 后总成本标
+        ax.text(i, gt + ymax * 0.012,
+                f'+co2:{gt/1e4:,.0f}万', ha='center', va='bottom',
+                fontsize=8, fontweight='bold', color='#7c2025')
 
     ax.set_ylabel('Cost (CNY)')
-    ax.set_title(f'Total Cost Breakdown (Energy + Demand Charge + {CO2_LABEL})',
-                 fontweight='bold')
+    ax.set_title(
+        'Cost Breakdown — Operating (Energy+Demand) vs incl. CO2 Cost\n'
+        '"op" = strategy_comparison.csv 口径; "+co2" = 含碳费总成本',
+        fontweight='bold')
     ax.tick_params(axis='x', rotation=15)
     for lbl in ax.get_xticklabels():
         lbl.set_horizontalalignment('right')

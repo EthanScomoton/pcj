@@ -329,32 +329,16 @@ def main():
 
     # ---- 将模型预测从 E_grid → E_total ----
     # 模型预测的是电网购电量，需加回可再生 + 原有储能才是港口总需求
-    # 修复: 向量化 + 物理合理性约束 (clip 到 [0, 真值最大 1.5×])
     print("   将预测值从 E_grid 校正为 E_total ...")
-    n_preds = len(predictions_by_index)
-    safe_n = min(n_preds, len(data_df))
-    add_arr = (data_df['E_PV_kWh'].values[:safe_n]
-               + data_df['E_wind_kWh'].values[:safe_n]
-               + data_df['E_storage_discharge_kWh'].values[:safe_n])
-    if n_preds > safe_n:   # 末尾用最后一个值填充
-        add_arr = np.concatenate([add_arr,
-                                  np.full(n_preds - safe_n, add_arr[-1])])
-    predictions_by_index = predictions_by_index + add_arr
-
-    # 物理合理性约束: predict 不应为负, 也不应远超历史最大需求
-    e_total_max = float(data_df['E_total'].max())
-    upper_bound = e_total_max * 1.5
-    n_neg  = int(np.sum(predictions_by_index < 0))
-    n_high = int(np.sum(predictions_by_index > upper_bound))
-    if n_neg > 0 or n_high > 0:
-        print(f"   ⚠ 异常预测被截断: {n_neg} 个 < 0, {n_high} 个 > {upper_bound:.0f} kW")
-    predictions_by_index = np.clip(predictions_by_index, 0.0, upper_bound)
-
-    raw_actual_mean = data_df['E_total'].iloc[:sim_hours].mean()
-    raw_pred_mean   = predictions_by_index[:sim_hours].mean()
-    bias_pct = (raw_pred_mean - raw_actual_mean) / max(raw_actual_mean, 1) * 100
-    print(f"   校正后预测均值: {raw_pred_mean:.1f} kW "
-          f"(实际 E_total 均值: {raw_actual_mean:.1f} kW, 偏差 {bias_pct:+.1f}%)")
+    for idx in range(len(predictions_by_index)):
+        safe_idx = min(idx, len(data_df) - 1)
+        predictions_by_index[idx] += (
+            float(data_df.iloc[safe_idx]['E_PV_kWh'])
+            + float(data_df.iloc[safe_idx]['E_wind_kWh'])
+            + float(data_df.iloc[safe_idx]['E_storage_discharge_kWh'])
+        )
+    print(f"   校正后预测均值: {predictions_by_index[:sim_hours].mean():.1f} kW "
+          f"(实际 E_total 均值: {data_df['E_total'].iloc[:sim_hours].mean():.1f} kW)")
 
     # ---- 后处理 MAPE 修正 (不重训模型, 通过 bias/ridge/hybrid 降 MAPE) ----
     if getattr(cfg, 'USE_POST_HOC_CORRECTION', True):
@@ -531,17 +515,11 @@ def main():
         )
         sac = SACTrainer(state_dim=env_train.state_dim(), action_dim=1,
                          hidden=128, lr=3e-4, device=device)
-        # Bug 4 修复: 3k 步太短, 之前策略只学到 "充满 SOC=0.9 后无动作".
-        # 默认 30k 步, 配合 reward scaling, 通常足够收敛到合理充放电策略
-        sac_steps = int(getattr(cfg, 'SAC_TRAIN_STEPS', 30000))
-        sac.train(env_train, total_steps=sac_steps,
-                  warm_up=max(500, sac_steps // 30),    # 充分初始探索
-                  batch_size=256,
-                  log_every=max(1000, sac_steps // 15),
+        # P0: 最小可用训练量 (可在 cfg 扩大)
+        sac_steps = int(getattr(cfg, 'SAC_TRAIN_STEPS', 3000))
+        sac.train(env_train, total_steps=sac_steps, warm_up=200,
+                  batch_size=128, log_every=max(500, sac_steps // 10),
                   verbose=True)
-
-        # 检查训练效果: 末段 reward / SOC 多样性
-        # (DRLSACStrategy 仿真后再补诊断打印)
 
         # 评估时使用同一环境模板做归一化参考
         env_eval = BESSDispatchEnv(
@@ -578,14 +556,13 @@ def main():
         else:
             cap, pwr = cfg.BESS_CAPACITY_KWH, cfg.BESS_POWER_KW
 
-        # 始终传 conformal 给 IES (供 predicted_upper 列记录), 但只有 RobustMPCStrategy 真正用它优化
         ies = StrategyAwareIES(
             capacity_kwh=cap, bess_power_kw=pwr,
             prediction_model=model,
             feature_cols=feature_cols,
             scaler_X=scaler_X, scaler_y=scaler_y,
             strategy=strat,
-            conformal_predictor=conformal,
+            conformal_predictor=conformal if isinstance(strat, RobustMPCStrategy) else None,
             carbon_tracker=carbon_tracker,
             carbon_intensity_hourly=carbon_intensity_hourly,
             allow_grid_export=False,

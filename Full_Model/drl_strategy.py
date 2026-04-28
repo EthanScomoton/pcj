@@ -132,13 +132,6 @@ class BESSDispatchEnv:
         self._demand_max = float(np.max(self.df['E_total'].values
                                          if 'E_total' in self.df.columns
                                          else self.df['E_grid'].values)) or 1.0
-        # Bug 4 修复: 计算典型每小时成本作为 reward scale, 让 reward 量级 ~ O(1)
-        # 典型 = 平均需求 × 平均电价
-        avg_demand = float(np.mean(self.df['E_total'].values
-                                   if 'E_total' in self.df.columns
-                                   else self.df['E_grid'].values))
-        avg_price  = float(np.mean(np.abs(self.price)))
-        self._reward_scale = max(1.0, avg_demand * avg_price)
         self.T_total = min(len(self.df), len(self.preds)) - 1
         self.reset()
 
@@ -214,29 +207,11 @@ class BESSDispatchEnv:
         self.peak_grid = max(self.peak_grid, grid_t)
 
         # Reward: 负成本 + 负 CO2 + 负 peak 超额
-        # 修复 Bug 4: 原 reward 量级达 10^4-10^5 (cost=grid_kWh×price), 让 Q 值发散
-        # 改进:
-        #   1. 把 reward 按典型量级 (基线一小时成本) 缩放到 O(1)
-        #   2. 加入显式 round-trip 损耗惩罚, 鼓励合理充放电而非保持不动
-        #   3. 高 SOC 上限附近加二次惩罚, 防止策略学到 "永远充电到 0.9"
         cost_t = grid_t * self.price[t]
         co2_t  = grid_t * self.ef[t]   # kg
-        demand_charge_inc = peak_excess * self.dc_rate / 30.0
+        demand_charge_inc = peak_excess * self.dc_rate / 30.0   # 日化
 
-        raw_reward = cost_t + self.carbon_penalty * co2_t + demand_charge_inc
-
-        # 缩放到 O(1)
-        scale = self._reward_scale if hasattr(self, '_reward_scale') and self._reward_scale > 0 \
-                else (self._demand_max * 1.0 + 1.0)
-        reward = -raw_reward / scale
-
-        # SOC 边界惩罚: 鼓励保持中等 SOC, 不要锁死在 0.1 或 0.9
-        soc_pen = 0.0
-        if self.soc >= self.bp['max_soc'] - 0.02:
-            soc_pen = 0.05
-        elif self.soc <= self.bp['min_soc'] + 0.02:
-            soc_pen = 0.05
-        reward -= soc_pen
+        reward = -(cost_t + self.carbon_penalty * co2_t + demand_charge_inc)
 
         self.t += 1
         done = (self.t >= self.T_total)

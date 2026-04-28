@@ -154,17 +154,8 @@ def experiment_cp_coverage(conformal, data_df, predictions_by_index,
     widths = hi_90 - lo_90
 
     # ---- 图 1: 条件覆盖率 (按季节/时段/负荷水平) ----
-    # 修复 Plot 7: 原 ylim=[70,105] 让覆盖率 1-43% 全部出框. 改为自适应区间.
     fig, axes = plt.subplots(1, 3, figsize=(15, 5), constrained_layout=True)
     fig.suptitle('CP Empirical Coverage (90% Nominal)', fontweight='bold')
-    # 全局 y 范围用所有条件覆盖率的实际值 + 90% 参考线计算
-    all_vals_flat = [v for cd in cond.values() for v in cd.values()]
-    if all_vals_flat:
-        v_lo = min(min(all_vals_flat) - 5, 0)
-        v_hi = max(max(all_vals_flat) + 5, 105)
-    else:
-        v_lo, v_hi = 0, 105
-
     for ax, (label, cdict) in zip(axes, cond.items()):
         names = list(cdict.keys())
         vals  = [cdict[n] for n in names]
@@ -172,13 +163,13 @@ def experiment_cp_coverage(conformal, data_df, predictions_by_index,
         ax.axhline(90, color='red', ls='--', lw=1.2, label='Nominal 90%')
         ax.set_ylabel('Coverage (%)')
         ax.set_title(f'By {label}')
-        ax.set_ylim(v_lo, v_hi)
+        ax.set_ylim(70, 105)
         ax.legend(fontsize=8)
         for b, v in zip(bars, vals):
-            ax.text(b.get_x() + b.get_width()/2, v + (v_hi - v_lo) * 0.01,
+            ax.text(b.get_x() + b.get_width()/2, v + 0.5,
                     f'{v:.1f}%', ha='center', fontsize=8)
     plt.savefig(os.path.join(output_dir, 'exp01_cp_coverage_by_condition.png'),
-                dpi=200, bbox_inches='tight')
+                dpi=150, bbox_inches='tight')
     plt.close(fig)
 
     # ---- 图 2: 校准残差/分数分布 + 分位阈值 ----
@@ -1073,9 +1064,7 @@ def experiment_mpc_timing(
             ci = carbon_intensity_hourly[idx:idx + horizon] if ckwargs['include_carbon'] else None
             if ci is not None and len(ci) < horizon:
                 ci = np.pad(ci, (0, horizon - len(ci)), 'edge')
-            # 与 CarbonAwareMPCStrategy 保持一致 (Bug 3 修复后): cw = price/100 * sens
-            cw = (cfg.CARBON_PRICE / 100.0 * getattr(cfg, 'CARBON_SENSITIVITY', 3.0)
-                  if ckwargs['include_carbon'] else 0.0)
+            cw = 0.36 if ckwargs['include_carbon'] else 0.0
 
             # warm start 计时
             mpc.soc_init.value = float(bess.get_soc())
@@ -1095,24 +1084,9 @@ def experiment_mpc_timing(
                         mpc.problem.solve(solver=solver, warm_start=True, verbose=False)
                     status = mpc.problem.status
                     if status in (cp_mod.OPTIMAL, cp_mod.OPTIMAL_INACCURATE):
-                        # 修复 Plot 10: 优先读 solver_stats.solver_name (CVXPY 权威来源),
-                        # 否则回退到循环变量推断
-                        stats = getattr(mpc.problem, 'solver_stats', None)
-                        sname = None
-                        if stats is not None and getattr(stats, 'solver_name', None):
-                            sn_raw = str(stats.solver_name).upper()
-                            if 'OSQP' in sn_raw:
-                                sname = 'OSQP'
-                            elif 'CLARABEL' in sn_raw:
-                                sname = 'CLARABEL'
-                            else:
-                                sname = sn_raw
-                        if sname is None:
-                            sname = ('OSQP' if solver == cp_mod.OSQP
-                                     else ('CLARABEL' if solver == cp_mod.CLARABEL
-                                           else 'default'))
-                        # 累加求解器使用计数 (动态加 key 防 default → SCS 等情况)
-                        solver_used[sname] = solver_used.get(sname, 0) + 1
+                        sname = 'OSQP' if solver == cp_mod.OSQP else (
+                            'CLARABEL' if solver == cp_mod.CLARABEL else 'default')
+                        solver_used[sname] += 1
                         break
                 except Exception:
                     continue

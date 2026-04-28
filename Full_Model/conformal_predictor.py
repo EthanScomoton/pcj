@@ -195,15 +195,6 @@ class ConformalPredictor:
         q_high_new = np.asarray(q_high_new, dtype=float)
         lower = np.maximum(0.0, q_low_new  - self.q_hat)
         upper = q_high_new + self.q_hat
-
-        # 修复 Plot 8: 当 Q̂ < 0 (CQR 收窄) 且原始分位预测倒序 / 接近时,
-        # 可能产生 upper < lower (负宽度). 强制保证 upper ≥ lower.
-        # 倒序时取中点 ± 1e-3 % 的微宽区间, 让 violin/scatter 不出负宽度
-        bad = upper < lower
-        if np.any(bad):
-            mid = (lower[bad] + upper[bad]) / 2
-            lower[bad] = mid - 1e-6 * np.abs(mid).clip(min=1.0)
-            upper[bad] = mid + 1e-6 * np.abs(mid).clip(min=1.0)
         return lower, upper
 
     def summary(self) -> dict:

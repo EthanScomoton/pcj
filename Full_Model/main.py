@@ -70,6 +70,17 @@ class PlatformConfig:
     MPC_HORIZON     = 24
     WARM_UP_HOURS   = 24          # 丢弃前 24h 以消除模型 warm-up 影响 (P0)
 
+    # 预测来源
+    # ─────────────────────────────────────────────────────────────────
+    # USE_ORACLE_FORECAST = True  → 直接用真实 E_total 作为完美预测 (Oracle)
+    #   - 跳过 .pth 模型加载、CP 校准、post-hoc 修正
+    #   - 评估的就是 "调度策略本身的优劣", 排除预测污染
+    #   - 是判断代码逻辑是否正确的最关键基准:
+    #     · oracle 下 MPC Cost Savings 仍为负 → BESS 经济性本身有问题
+    #     · oracle 正常但 NN 模式跑出负 → 100% 是预测的锅
+    # USE_ORACLE_FORECAST = False → 走原 NN .pth 路径 + post-hoc 修正
+    USE_ORACLE_FORECAST = True
+
     # 储能配置 (P1: exp06 最优容量 ≈ 162 MWh)
     BESS_CAPACITY_KWH = 162000    # 162 MWh (P1 推荐: 从 exp06 NPV 最大化得出)
     BESS_POWER_KW     = 129600    # 保持 C-rate = 0.8 (162 * 0.8)
@@ -179,80 +190,96 @@ def main():
     scaler_y = StandardScaler().fit(np.log1p(y_all[:train_size]).reshape(-1, 1))
 
     # ==================================================================
-    # 3) 模型加载
+    # 3) 模型加载  (ORACLE 模式下整段跳过)
     # ==================================================================
-    print("\n[3/9] 创建并加载预测模型 (best_EModel_FeatureWeight4.pth) ...")
-    # Apple Silicon: 优先 MPS (Metal) → CUDA → CPU
+    USE_ORACLE = bool(getattr(cfg, 'USE_ORACLE_FORECAST', False))
+    # 设备/feat_dim 在两种模式下都需要 (DRL-SAC 训练用 device, 后续判定用 feat_dim)
     device = auto_device(verbose=False,
                          prefer=getattr(cfg, 'TORCH_DEVICE', 'auto'))
-    log_system(device)
-
-    feature_importance = calculate_feature_importance(data_df, feature_cols, target_col)
     feat_dim = len(feature_cols)
 
-    model = EModel_FeatureWeight4(
-        feature_dim=feat_dim,
-        lstm_hidden_size=256,
-        lstm_num_layers=2,
-        feature_importance=feature_importance,
-    ).to(device)
-
-    model_path = os.path.join(os.path.dirname(__file__), 'best_EModel_FeatureWeight4.pth')
-    if os.path.exists(model_path):
-        try:
-            sd = torch.load(model_path, map_location=device, weights_only=True)
-            if sd['feature_importance'].size(0) == feat_dim:
-                model.load_state_dict(sd)
-                print("   ✅ 权重加载成功")
-            else:
-                print(f"   特征维度不匹配 ({sd['feature_importance'].size(0)}→{feat_dim})，转换 ...")
-                converted = convert_model_weights(
-                    pretrained_path=model_path,
-                    new_feature_dim=feat_dim,
-                    output_path=os.path.join(cfg.OUTPUT_DIR, 'converted.pth'),
-                    feature_cols=feature_cols,
-                    data_df=data_df, target_col=target_col,
-                )
-                model.load_state_dict(converted.state_dict()
-                                      if hasattr(converted, 'state_dict')
-                                      else torch.load(os.path.join(cfg.OUTPUT_DIR, 'converted.pth'),
-                                                      map_location=device, weights_only=True))
-                print("   ✅ 转换权重加载成功")
-        except Exception as e:
-            print(f"   ⚠ 权重加载失败: {e}; 将使用未训练模型")
+    if USE_ORACLE:
+        print("\n[3/9] [ORACLE 模式] 跳过 .pth 模型加载, 使用真实 E_total 作为完美预测")
+        log_system(device)
+        model = None
+        feature_importance = None
     else:
-        print(f"   ⚠ 未找到 {model_path}, 使用未训练模型")
-    model.eval()
+        print("\n[3/9] 创建并加载预测模型 (best_EModel_FeatureWeight4.pth) ...")
+        log_system(device)
+
+        feature_importance = calculate_feature_importance(data_df, feature_cols, target_col)
+
+        model = EModel_FeatureWeight4(
+            feature_dim=feat_dim,
+            lstm_hidden_size=256,
+            lstm_num_layers=2,
+            feature_importance=feature_importance,
+        ).to(device)
+
+        model_path = os.path.join(os.path.dirname(__file__), 'best_EModel_FeatureWeight4.pth')
+        if os.path.exists(model_path):
+            try:
+                sd = torch.load(model_path, map_location=device, weights_only=True)
+                if sd['feature_importance'].size(0) == feat_dim:
+                    model.load_state_dict(sd)
+                    print("   ✅ 权重加载成功")
+                else:
+                    print(f"   特征维度不匹配 ({sd['feature_importance'].size(0)}→{feat_dim})，转换 ...")
+                    converted = convert_model_weights(
+                        pretrained_path=model_path,
+                        new_feature_dim=feat_dim,
+                        output_path=os.path.join(cfg.OUTPUT_DIR, 'converted.pth'),
+                        feature_cols=feature_cols,
+                        data_df=data_df, target_col=target_col,
+                    )
+                    model.load_state_dict(converted.state_dict()
+                                          if hasattr(converted, 'state_dict')
+                                          else torch.load(os.path.join(cfg.OUTPUT_DIR, 'converted.pth'),
+                                                          map_location=device, weights_only=True))
+                    print("   ✅ 转换权重加载成功")
+            except Exception as e:
+                print(f"   ⚠ 权重加载失败: {e}; 将使用未训练模型")
+        else:
+            print(f"   ⚠ 未找到 {model_path}, 使用未训练模型")
+        model.eval()
 
     # ==================================================================
-    # 4) 保形预测校准 (§三.3.3)
+    # 4) 保形预测校准 (§三.3.3)  (ORACLE 模式下用零残差 CP)
     # ==================================================================
-    print("\n[4/9] 保形预测校准 ...")
-    conformal = ConformalPredictor(alpha=cfg.CONFORMAL_ALPHA)
-    try:
-        win = getattr(model, 'window_size', 20)
-        cal_start = int(0.80 * len(data_df))
-        cal_end   = min(len(data_df), cal_start + int(cfg.CAL_FRACTION * len(data_df)))
-        X_cal, y_cal = [], []
-        for idx in range(cal_start + win, cal_end):
-            seq = X_all[idx - win: idx]
-            seq_scaled = scaler_X.transform(seq)
-            X_cal.append(seq_scaled)
-            y_cal.append(y_all[idx])
-        if len(X_cal) >= 30:
-            X_cal_arr = np.stack(X_cal).astype(np.float32)
-            y_cal_arr = np.asarray(y_cal, dtype=float)
-            qhat = conformal.calibrate_from_sequences(
-                model, X_cal_arr, y_cal_arr, device,
-                scaler_y=scaler_y, use_log_y=True,
-            )
-            unit = '' if conformal.mode == 'normalized' else ' kW'
-            print(f"   ✅ 保形校准完成 ({conformal.mode}): q̂={qhat:.4f}{unit}, "
-                  f"样本数={len(X_cal)}")
-        else:
-            print("   ⚠ 校准样本不足，鲁棒 MPC 将使用默认 10% margin")
-    except Exception as e:
-        print(f"   ⚠ 保形校准失败: {e}")
+    if USE_ORACLE:
+        print("\n[4/9] [ORACLE 模式] 跳过 CP 校准, 使用零残差预测器 (区间宽度 = 0)")
+        conformal = ConformalPredictor(alpha=cfg.CONFORMAL_ALPHA, mode='normalized')
+        conformal.q_hat = 0.0
+        conformal.calibration_residuals = np.zeros(1)
+        # 这样 Robust MPC 的 pred_upper = pred_demand, 退化为 Economic MPC,
+        # 但 Stochastic MPC 的场景采样仍能跑 (区间退化为单点 → 等价于点预测)
+    else:
+        print("\n[4/9] 保形预测校准 ...")
+        conformal = ConformalPredictor(alpha=cfg.CONFORMAL_ALPHA)
+        try:
+            win = getattr(model, 'window_size', 20)
+            cal_start = int(0.80 * len(data_df))
+            cal_end   = min(len(data_df), cal_start + int(cfg.CAL_FRACTION * len(data_df)))
+            X_cal, y_cal = [], []
+            for idx in range(cal_start + win, cal_end):
+                seq = X_all[idx - win: idx]
+                seq_scaled = scaler_X.transform(seq)
+                X_cal.append(seq_scaled)
+                y_cal.append(y_all[idx])
+            if len(X_cal) >= 30:
+                X_cal_arr = np.stack(X_cal).astype(np.float32)
+                y_cal_arr = np.asarray(y_cal, dtype=float)
+                qhat = conformal.calibrate_from_sequences(
+                    model, X_cal_arr, y_cal_arr, device,
+                    scaler_y=scaler_y, use_log_y=True,
+                )
+                unit = '' if conformal.mode == 'normalized' else ' kW'
+                print(f"   ✅ 保形校准完成 ({conformal.mode}): q̂={qhat:.4f}{unit}, "
+                      f"样本数={len(X_cal)}")
+            else:
+                print("   ⚠ 校准样本不足，鲁棒 MPC 将使用默认 10% margin")
+        except Exception as e:
+            print(f"   ⚠ 保形校准失败: {e}")
 
     # ==================================================================
     # 5) 电价 + 动态碳强度
@@ -306,88 +333,121 @@ def main():
     # ==================================================================
     # 6) 预计算负荷预测 (跨策略共享)
     # ==================================================================
-    print(f"\n[6/9] 预计算 {cfg.SIM_HOURS} + {cfg.MPC_HORIZON} 小时的负荷预测 ...")
     sim_hours = min(cfg.SIM_HOURS, len(data_df) - cfg.MPC_HORIZON - 1)
-    cache_ies = StrategyAwareIES(
-        capacity_kwh=cfg.BESS_CAPACITY_KWH,
-        bess_power_kw=cfg.BESS_POWER_KW,
-        prediction_model=model,
-        feature_cols=feature_cols,
-        scaler_X=scaler_X, scaler_y=scaler_y,
-        strategy=BaselineStrategy(),
-        verbose=False,
-    )
-    predictions_by_index = cache_ies.precompute_predictions(
-        data_df, sim_hours, horizon=cfg.MPC_HORIZON,
-        batch_size=getattr(cfg, 'INFER_BATCH_SIZE', 256),
-    )
 
     # ---- 恢复原始可再生数据 (供仿真阶段 get_renewable_forecast 使用) ----
     # feature_engineering 已对 E_PV/E_wind 做了 LabelEncode, 需要还原为 kWh
+    # 这两行在 ORACLE 和 NN 模式下都需要 (strategy 里 get_renewable_forecast 仍要用)
     data_df['E_PV']   = data_df['E_PV_kWh']
     data_df['E_wind']  = data_df['E_wind_kWh']
 
-    # ---- 将模型预测从 E_grid → E_total ----
-    # 模型预测的是电网购电量，需加回可再生 + 原有储能才是港口总需求
-    print("   将预测值从 E_grid 校正为 E_total ...")
-    for idx in range(len(predictions_by_index)):
-        safe_idx = min(idx, len(data_df) - 1)
-        predictions_by_index[idx] += (
-            float(data_df.iloc[safe_idx]['E_PV_kWh'])
-            + float(data_df.iloc[safe_idx]['E_wind_kWh'])
-            + float(data_df.iloc[safe_idx]['E_storage_discharge_kWh'])
+    if USE_ORACLE:
+        # ── 完美前瞻: predictions_by_index ← 真实 E_total ──
+        # 等于告诉 MPC "你 24h 内会看到的需求就是这些"
+        # 这是策略上界 (upper bound), 也是判断代码逻辑是否正确的最关键基准
+        print(f"\n[6/9] [ORACLE 模式] 直接读 E_total 作为 forecast (跳过模型/CP 校准/post-hoc)")
+        predictions_by_index = data_df['E_total'].values.astype(float).copy()
+        # 末尾留 horizon 长度的填充, 防止切片越界
+        if len(predictions_by_index) < sim_hours + cfg.MPC_HORIZON:
+            pad = sim_hours + cfg.MPC_HORIZON - len(predictions_by_index)
+            predictions_by_index = np.concatenate([
+                predictions_by_index,
+                np.full(pad, predictions_by_index[-1])])
+        print(f"   predictions_by_index = E_total[:{len(predictions_by_index)}], "
+              f"均值 {predictions_by_index[:sim_hours].mean():.1f} kW")
+    else:
+        print(f"\n[6/9] 预计算 {cfg.SIM_HOURS} + {cfg.MPC_HORIZON} 小时的负荷预测 ...")
+        cache_ies = StrategyAwareIES(
+            capacity_kwh=cfg.BESS_CAPACITY_KWH,
+            bess_power_kw=cfg.BESS_POWER_KW,
+            prediction_model=model,
+            feature_cols=feature_cols,
+            scaler_X=scaler_X, scaler_y=scaler_y,
+            strategy=BaselineStrategy(),
+            verbose=False,
         )
-    print(f"   校正后预测均值: {predictions_by_index[:sim_hours].mean():.1f} kW "
-          f"(实际 E_total 均值: {data_df['E_total'].iloc[:sim_hours].mean():.1f} kW)")
+        predictions_by_index = cache_ies.precompute_predictions(
+            data_df, sim_hours, horizon=cfg.MPC_HORIZON,
+            batch_size=getattr(cfg, 'INFER_BATCH_SIZE', 256),
+        )
 
-    # ---- 后处理 MAPE 修正 (不重训模型, 通过 bias/ridge/hybrid 降 MAPE) ----
-    if getattr(cfg, 'USE_POST_HOC_CORRECTION', True):
-        try:
-            from post_hoc_corrector import PostHocPipeline, mape
-            # 用训练/验证分界到数据末尾的段作为校准集; 避免污染仿真段
-            ph_cal_start = int(0.80 * len(data_df))
-            ph_cal_end   = min(len(data_df), len(predictions_by_index))
-            if ph_cal_end - ph_cal_start >= 200:
-                cal_preds   = predictions_by_index[ph_cal_start:ph_cal_end]
-                cal_actuals = data_df['E_total'].values[ph_cal_start:ph_cal_end]
-                cal_ts      = data_df['timestamp'].values[ph_cal_start:ph_cal_end]
+        # ---- 将模型预测从 E_grid → E_total ----
+        # 模型预测的是电网购电量，需加回可再生 + 原有储能才是港口总需求
+        # 修复: 向量化 + 物理合理性约束 (clip 到 [0, 真值最大 1.5×])
+        print("   将预测值从 E_grid 校正为 E_total ...")
+        n_preds = len(predictions_by_index)
+        safe_n = min(n_preds, len(data_df))
+        add_arr = (data_df['E_PV_kWh'].values[:safe_n]
+                   + data_df['E_wind_kWh'].values[:safe_n]
+                   + data_df['E_storage_discharge_kWh'].values[:safe_n])
+        if n_preds > safe_n:   # 末尾用最后一个值填充
+            add_arr = np.concatenate([add_arr,
+                                      np.full(n_preds - safe_n, add_arr[-1])])
+        predictions_by_index = predictions_by_index + add_arr
 
-                raw_mape = mape(cal_actuals, cal_preds)
-                print(f"\n   [post-hoc] 原始预测 MAPE = {raw_mape:.2f}%")
+        # 物理合理性约束: predict 不应为负, 也不应远超历史最大需求
+        e_total_max = float(data_df['E_total'].max())
+        upper_bound = e_total_max * 1.5
+        n_neg  = int(np.sum(predictions_by_index < 0))
+        n_high = int(np.sum(predictions_by_index > upper_bound))
+        if n_neg > 0 or n_high > 0:
+            print(f"   ⚠ 异常预测被截断: {n_neg} 个 < 0, {n_high} 个 > {upper_bound:.0f} kW")
+        predictions_by_index = np.clip(predictions_by_index, 0.0, upper_bound)
 
-                if raw_mape > getattr(cfg, 'POST_HOC_TRIGGER_MAPE', 5.0):
-                    pipeline = PostHocPipeline(
-                        use_bias=True, use_residual=True, use_hybrid=True,
-                        residual_model=getattr(cfg, 'POST_HOC_RESIDUAL_MODEL',
-                                               'ridge'))
-                    pipeline.fit(cal_preds, cal_actuals, cal_ts)
-                    # 应用到整个 predictions_by_index
-                    all_ts = pd.concat([
-                        data_df['timestamp'],
-                        pd.Series(pd.date_range(
-                            start=data_df['timestamp'].iloc[-1],
-                            periods=len(predictions_by_index) - len(data_df) + 1,
-                            freq='H')[1:]) if len(predictions_by_index) > len(data_df)
-                        else pd.Series([], dtype='datetime64[ns]'),
-                    ], ignore_index=True).values[:len(predictions_by_index)]
-                    # 用整个 E_total 作为 hybrid/lag 的历史 (只使用当前点之前的数据)
-                    predictions_by_index = pipeline.transform(
-                        predictions_by_index, all_ts,
-                        actuals_history=data_df['E_total'].values)
+        raw_actual_mean = data_df['E_total'].iloc[:sim_hours].mean()
+        raw_pred_mean   = predictions_by_index[:sim_hours].mean()
+        bias_pct = (raw_pred_mean - raw_actual_mean) / max(raw_actual_mean, 1) * 100
+        print(f"   校正后预测均值: {raw_pred_mean:.1f} kW "
+              f"(实际 E_total 均值: {raw_actual_mean:.1f} kW, 偏差 {bias_pct:+.1f}%)")
 
-                    # 再次评估修正后 MAPE (同一校准集段)
-                    new_preds_cal = predictions_by_index[ph_cal_start:ph_cal_end]
-                    new_mape = mape(cal_actuals, new_preds_cal)
-                    print(f"   [post-hoc] 修正后 MAPE = {new_mape:.2f}%  "
-                          f"(改善 {raw_mape - new_mape:.2f} pp, "
-                          f"相对 ↓ {(raw_mape - new_mape)/raw_mape*100:.1f}%)")
+        # ---- 后处理 MAPE 修正 (不重训模型, 通过 bias/ridge/hybrid 降 MAPE) ----
+        if getattr(cfg, 'USE_POST_HOC_CORRECTION', True):
+            try:
+                from post_hoc_corrector import PostHocPipeline, mape
+                # 用训练/验证分界到数据末尾的段作为校准集; 避免污染仿真段
+                ph_cal_start = int(0.80 * len(data_df))
+                ph_cal_end   = min(len(data_df), len(predictions_by_index))
+                if ph_cal_end - ph_cal_start >= 200:
+                    cal_preds   = predictions_by_index[ph_cal_start:ph_cal_end]
+                    cal_actuals = data_df['E_total'].values[ph_cal_start:ph_cal_end]
+                    cal_ts      = data_df['timestamp'].values[ph_cal_start:ph_cal_end]
+
+                    raw_mape = mape(cal_actuals, cal_preds)
+                    print(f"\n   [post-hoc] 原始预测 MAPE = {raw_mape:.2f}%")
+
+                    if raw_mape > getattr(cfg, 'POST_HOC_TRIGGER_MAPE', 5.0):
+                        pipeline = PostHocPipeline(
+                            use_bias=True, use_residual=True, use_hybrid=True,
+                            residual_model=getattr(cfg, 'POST_HOC_RESIDUAL_MODEL',
+                                                   'ridge'))
+                        pipeline.fit(cal_preds, cal_actuals, cal_ts)
+                        # 应用到整个 predictions_by_index
+                        all_ts = pd.concat([
+                            data_df['timestamp'],
+                            pd.Series(pd.date_range(
+                                start=data_df['timestamp'].iloc[-1],
+                                periods=len(predictions_by_index) - len(data_df) + 1,
+                                freq='H')[1:]) if len(predictions_by_index) > len(data_df)
+                            else pd.Series([], dtype='datetime64[ns]'),
+                        ], ignore_index=True).values[:len(predictions_by_index)]
+                        # 用整个 E_total 作为 hybrid/lag 的历史 (只使用当前点之前的数据)
+                        predictions_by_index = pipeline.transform(
+                            predictions_by_index, all_ts,
+                            actuals_history=data_df['E_total'].values)
+
+                        # 再次评估修正后 MAPE (同一校准集段)
+                        new_preds_cal = predictions_by_index[ph_cal_start:ph_cal_end]
+                        new_mape = mape(cal_actuals, new_preds_cal)
+                        print(f"   [post-hoc] 修正后 MAPE = {new_mape:.2f}%  "
+                              f"(改善 {raw_mape - new_mape:.2f} pp, "
+                              f"相对 ↓ {(raw_mape - new_mape)/raw_mape*100:.1f}%)")
+                    else:
+                        print(f"   [post-hoc] MAPE 已 ≤ {getattr(cfg, 'POST_HOC_TRIGGER_MAPE', 5.0)}%, "
+                              f"跳过后处理")
                 else:
-                    print(f"   [post-hoc] MAPE 已 ≤ {getattr(cfg, 'POST_HOC_TRIGGER_MAPE', 5.0)}%, "
-                          f"跳过后处理")
-            else:
-                print(f"   [post-hoc] 校准集样本不足 ({ph_cal_end - ph_cal_start}), 跳过")
-        except Exception as e:
-            print(f"   [post-hoc] 后处理修正失败, 保留原始预测: {e}")
+                    print(f"   [post-hoc] 校准集样本不足 ({ph_cal_end - ph_cal_start}), 跳过")
+            except Exception as e:
+                print(f"   [post-hoc] 后处理修正失败, 保留原始预测: {e}")
 
     # ---- 丢弃 warm-up: 前 WARM_UP_HOURS 小时模型未见足够历史 (P0) ----
     warm_up = int(getattr(cfg, 'WARM_UP_HOURS', 24))
@@ -399,75 +459,80 @@ def main():
         sim_hours = min(sim_hours - warm_up, len(predictions_by_index))
         print(f"   warm-up 后有效 sim_hours = {sim_hours}")
 
-    # ---- 在 E_total 空间重校准保形预测器 ----
-    # 原 q_hat 基于 E_grid 残差 (step 4)，现在切换到 E_total 残差以保持一致
-    # 使用 normalized 模式: 残差按预测量级归一化，区间宽度自适应
-    # P1: 若 USE_CQR=True 则额外训练 CQR, 用 MC Dropout 提供分位估计
-    print("   在 E_total 空间重校准保形预测器 ...")
-    cal_start = int(0.80 * len(data_df))
-    cal_end   = min(len(data_df), cal_start + int(cfg.CAL_FRACTION * len(data_df)))
-    cal_end   = min(cal_end, len(predictions_by_index))
-    cqr_predictor = None   # 独立的 CQR 预测器 (与原 normalized CP 并存供对比)
+    # ---- 在 E_total 空间重校准保形预测器  (ORACLE 模式下整段跳过) ----
+    cqr_predictor = None
     cqr_quantile_fn = None
-    if cal_end - cal_start >= 30:
-        cal_preds   = predictions_by_index[cal_start:cal_end]
-        cal_actuals = data_df['E_total'].values[cal_start:cal_end]
-        cal_resid   = np.abs(cal_preds - cal_actuals)
-        old_qhat = conformal.q_hat
-        old_mode  = conformal.mode
-        conformal.calibrate_from_residuals(cal_resid, predictions=cal_preds)
-        print(f"   q_hat: {old_qhat:.0f} -> {conformal.q_hat:.4f} "
-              f"({'normalized' if conformal.mode == 'normalized' else 'kW'})"
-              f"  (校准样本={cal_end - cal_start})")
-        # 验证: 打印校准集上的实际覆盖率和典型区间宽度
-        lo, hi = conformal.predict_interval(cal_preds)
-        actual_cov = np.mean((cal_actuals >= lo) & (cal_actuals <= hi))
-        avg_width = np.mean(hi - lo)
-        print(f"   校准集覆盖率: {actual_cov:.1%}, 平均区间宽度: {avg_width:.0f} kW")
-
-        # ---- CQR 构建 (P1) ----
-        if getattr(cfg, 'USE_CQR', False):
-            print("   [P1] 构建 CQR 预测器 (MC Dropout 分位估计 + 保形校正) ...")
-            try:
-                from uq_methods import mc_dropout_interval
-                mc_n = getattr(cfg, 'MC_DROPOUT_N', 30)
-                win  = getattr(model, 'window_size', 20)
-                # 在校准集上获取 MC Dropout 的 α/2 和 1-α/2 分位
-                X_cal_cqr = []
-                for idx_cal in range(cal_start, cal_end):
-                    start_c = max(0, idx_cal - win + 1)
-                    seq_c = data_df[feature_cols].iloc[start_c:idx_cal + 1].values.astype(np.float32)
-                    if len(seq_c) < win:
-                        seq_c = np.pad(seq_c, ((win - len(seq_c), 0), (0, 0)), mode='edge')
-                    X_cal_cqr.append(scaler_X.transform(seq_c).astype(np.float32))
-                X_cal_cqr = np.stack(X_cal_cqr)
-                _, ql_cal, qh_cal = mc_dropout_interval(
-                    model, X_cal_cqr, n_samples=mc_n, alpha=cfg.CONFORMAL_ALPHA,
-                    scaler_y=scaler_y, use_log_y=True, device=device)
-                # 校正 MC Dropout 分位: 加回 E_PV + E_wind + 原储能放电 (和主预测一致)
-                for j, idx_cal in enumerate(range(cal_start, cal_end)):
-                    offset = (float(data_df.iloc[idx_cal]['E_PV_kWh'])
-                              + float(data_df.iloc[idx_cal]['E_wind_kWh'])
-                              + float(data_df.iloc[idx_cal]['E_storage_discharge_kWh']))
-                    ql_cal[j] += offset
-                    qh_cal[j] += offset
-
-                cqr_predictor = ConformalPredictor(alpha=cfg.CONFORMAL_ALPHA, mode='cqr')
-                q_hat_cqr = cqr_predictor.calibrate_cqr(ql_cal, qh_cal, cal_actuals)
-                # 校准集覆盖和宽度
-                lo_cqr, hi_cqr = cqr_predictor.cqr_interval(ql_cal, qh_cal)
-                cov_cqr = np.mean((cal_actuals >= lo_cqr) & (cal_actuals <= hi_cqr))
-                width_cqr = np.mean(hi_cqr - lo_cqr)
-                print(f"   CQR q_hat: {q_hat_cqr:+.0f} kW  "
-                      f"(校准覆盖率: {cov_cqr:.1%}, 平均宽度: {width_cqr:.0f} kW)")
-                # 构建一个闭包: 新样本 → (q_low, q_high)
-                # 简化方案: 所有策略共享 MC Dropout 输出 (推理时查表)
-                # 为避免每步前向 N 次, 预计算在 step 6 并传递
-            except Exception as e:
-                print(f"   ⚠ CQR 构建失败: {e}; 继续使用 normalized CP")
-                cqr_predictor = None
+    if USE_ORACLE:
+        # Oracle 下 actual = pred, 残差恒为 0 → q_hat = 0, 区间退化为点
+        # CP / CQR 都不需要重新校准
+        print("   [ORACLE 模式] 跳过 E_total 空间 CP 重校准 (零残差)")
+        # 保险起见显式置零
+        conformal.q_hat = 0.0
+        conformal.calibration_residuals = np.zeros(1)
     else:
-        print("   校准样本不足，保留原始 q_hat")
+        # 原 q_hat 基于 E_grid 残差 (step 4)，现在切换到 E_total 残差以保持一致
+        # 使用 normalized 模式: 残差按预测量级归一化，区间宽度自适应
+        # P1: 若 USE_CQR=True 则额外训练 CQR, 用 MC Dropout 提供分位估计
+        print("   在 E_total 空间重校准保形预测器 ...")
+        cal_start = int(0.80 * len(data_df))
+        cal_end   = min(len(data_df), cal_start + int(cfg.CAL_FRACTION * len(data_df)))
+        cal_end   = min(cal_end, len(predictions_by_index))
+        if cal_end - cal_start >= 30:
+            cal_preds   = predictions_by_index[cal_start:cal_end]
+            cal_actuals = data_df['E_total'].values[cal_start:cal_end]
+            cal_resid   = np.abs(cal_preds - cal_actuals)
+            old_qhat = conformal.q_hat
+            old_mode  = conformal.mode
+            conformal.calibrate_from_residuals(cal_resid, predictions=cal_preds)
+            print(f"   q_hat: {old_qhat:.0f} -> {conformal.q_hat:.4f} "
+                  f"({'normalized' if conformal.mode == 'normalized' else 'kW'})"
+                  f"  (校准样本={cal_end - cal_start})")
+            # 验证: 打印校准集上的实际覆盖率和典型区间宽度
+            lo, hi = conformal.predict_interval(cal_preds)
+            actual_cov = np.mean((cal_actuals >= lo) & (cal_actuals <= hi))
+            avg_width = np.mean(hi - lo)
+            print(f"   校准集覆盖率: {actual_cov:.1%}, 平均区间宽度: {avg_width:.0f} kW")
+
+            # ---- CQR 构建 (P1) ----
+            if getattr(cfg, 'USE_CQR', False):
+                print("   [P1] 构建 CQR 预测器 (MC Dropout 分位估计 + 保形校正) ...")
+                try:
+                    from uq_methods import mc_dropout_interval
+                    mc_n = getattr(cfg, 'MC_DROPOUT_N', 30)
+                    win  = getattr(model, 'window_size', 20)
+                    # 在校准集上获取 MC Dropout 的 α/2 和 1-α/2 分位
+                    X_cal_cqr = []
+                    for idx_cal in range(cal_start, cal_end):
+                        start_c = max(0, idx_cal - win + 1)
+                        seq_c = data_df[feature_cols].iloc[start_c:idx_cal + 1].values.astype(np.float32)
+                        if len(seq_c) < win:
+                            seq_c = np.pad(seq_c, ((win - len(seq_c), 0), (0, 0)), mode='edge')
+                        X_cal_cqr.append(scaler_X.transform(seq_c).astype(np.float32))
+                    X_cal_cqr = np.stack(X_cal_cqr)
+                    _, ql_cal, qh_cal = mc_dropout_interval(
+                        model, X_cal_cqr, n_samples=mc_n, alpha=cfg.CONFORMAL_ALPHA,
+                        scaler_y=scaler_y, use_log_y=True, device=device)
+                    # 校正 MC Dropout 分位: 加回 E_PV + E_wind + 原储能放电 (和主预测一致)
+                    for j, idx_cal in enumerate(range(cal_start, cal_end)):
+                        offset = (float(data_df.iloc[idx_cal]['E_PV_kWh'])
+                                  + float(data_df.iloc[idx_cal]['E_wind_kWh'])
+                                  + float(data_df.iloc[idx_cal]['E_storage_discharge_kWh']))
+                        ql_cal[j] += offset
+                        qh_cal[j] += offset
+
+                    cqr_predictor = ConformalPredictor(alpha=cfg.CONFORMAL_ALPHA, mode='cqr')
+                    q_hat_cqr = cqr_predictor.calibrate_cqr(ql_cal, qh_cal, cal_actuals)
+                    # 校准集覆盖和宽度
+                    lo_cqr, hi_cqr = cqr_predictor.cqr_interval(ql_cal, qh_cal)
+                    cov_cqr = np.mean((cal_actuals >= lo_cqr) & (cal_actuals <= hi_cqr))
+                    width_cqr = np.mean(hi_cqr - lo_cqr)
+                    print(f"   CQR q_hat: {q_hat_cqr:+.0f} kW  "
+                          f"(校准覆盖率: {cov_cqr:.1%}, 平均宽度: {width_cqr:.0f} kW)")
+                except Exception as e:
+                    print(f"   ⚠ CQR 构建失败: {e}; 继续使用 normalized CP")
+                    cqr_predictor = None
+        else:
+            print("   校准样本不足，保留原始 q_hat")
 
     # ==================================================================
     # 7) 策略评估
@@ -515,11 +580,17 @@ def main():
         )
         sac = SACTrainer(state_dim=env_train.state_dim(), action_dim=1,
                          hidden=128, lr=3e-4, device=device)
-        # P0: 最小可用训练量 (可在 cfg 扩大)
-        sac_steps = int(getattr(cfg, 'SAC_TRAIN_STEPS', 3000))
-        sac.train(env_train, total_steps=sac_steps, warm_up=200,
-                  batch_size=128, log_every=max(500, sac_steps // 10),
+        # Bug 4 修复: 3k 步太短, 之前策略只学到 "充满 SOC=0.9 后无动作".
+        # 默认 30k 步, 配合 reward scaling, 通常足够收敛到合理充放电策略
+        sac_steps = int(getattr(cfg, 'SAC_TRAIN_STEPS', 30000))
+        sac.train(env_train, total_steps=sac_steps,
+                  warm_up=max(500, sac_steps // 30),    # 充分初始探索
+                  batch_size=256,
+                  log_every=max(1000, sac_steps // 15),
                   verbose=True)
+
+        # 检查训练效果: 末段 reward / SOC 多样性
+        # (DRLSACStrategy 仿真后再补诊断打印)
 
         # 评估时使用同一环境模板做归一化参考
         env_eval = BESSDispatchEnv(
@@ -556,13 +627,14 @@ def main():
         else:
             cap, pwr = cfg.BESS_CAPACITY_KWH, cfg.BESS_POWER_KW
 
+        # 始终传 conformal 给 IES (供 predicted_upper 列记录), 但只有 RobustMPCStrategy 真正用它优化
         ies = StrategyAwareIES(
             capacity_kwh=cap, bess_power_kw=pwr,
             prediction_model=model,
             feature_cols=feature_cols,
             scaler_X=scaler_X, scaler_y=scaler_y,
             strategy=strat,
-            conformal_predictor=conformal if isinstance(strat, RobustMPCStrategy) else None,
+            conformal_predictor=conformal,
             carbon_tracker=carbon_tracker,
             carbon_intensity_hourly=carbon_intensity_hourly,
             allow_grid_export=False,

@@ -127,6 +127,9 @@ def mc_dropout_interval(model, x, n_samples=30, alpha=0.10,
     mu    = preds_real.mean(axis=0)
     lower = np.quantile(preds_real, alpha / 2,     axis=0)
     upper = np.quantile(preds_real, 1 - alpha / 2, axis=0)
+    # 修复 Plot 8: 防止 lower > upper (经验分位本身有序, 这里仅作保险), 防 lower < 0
+    lower = np.minimum(lower, upper)
+    lower = np.maximum(lower, 0.0)
 
     model.eval()
     return mu, lower, upper

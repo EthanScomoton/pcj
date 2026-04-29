@@ -1,0 +1,2 @@
+Strategy,Total Cost (CNY),Energy Cost (CNY),Demand Charge (CNY),CO2 (tons),Carbon Cost (CNY),Peak Grid (kW),Load Factor,RE Penetration (%),Grid Indep. (%),BESS Cycles,Avg SOC,NPV (CNY),Payback (yr),Cost Savings (%),CO2 Reduction (%),Peak Reduction (%)
+Rule-Based Peak Shaving,614172889.99,597618802.43,16554087.56,540734.915,64888189.75,435633.88,0.197,16.77,19.04,509.0,0.293,-105573136.64,46.99,0.68,0.18,0.0

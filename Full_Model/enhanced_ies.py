@@ -258,6 +258,17 @@ class StrategyAwareIES(IntegratedEnergySystem):
             charge0    = float(bc[0]) if hasattr(bc, '__len__') else float(bc)
             discharge0 = float(bd[0]) if hasattr(bd, '__len__') else float(bd)
 
+            # ---- 修复 1.3: 物理裁剪, 避免过放电能量被静默丢弃 ----
+            # 计算"BESS 之外"的净需求 (load - renewable). 若 discharge > 该值,
+            # 多余的电量在 allow_export=False 下会被 max(0, .) 抹掉, 造成统计意义上
+            # "BESS 放出但没人接收"的 hidden loss. 这里在动作执行前先压扁.
+            actual_demand    = actual_demand_arr[t]
+            actual_renewable = renewable_arr[t]
+            net_unmet = actual_demand - actual_renewable   # 还需要从 grid+BESS 凑的电量
+            if not allow_export and discharge0 > 0:
+                # 放电量不超过未满足负荷, 否则就是无谓损耗
+                discharge0 = max(0.0, min(discharge0, net_unmet))
+
             if charge0 >= discharge0:
                 actual_power = self.bess.charge(charge0, dt)
                 bess_signed  = -actual_power
@@ -266,8 +277,6 @@ class StrategyAwareIES(IntegratedEnergySystem):
                 bess_signed  =  actual_power
 
             # ---- 实际潮流 ----
-            actual_demand    = actual_demand_arr[t]
-            actual_renewable = renewable_arr[t]
             actual_grid = actual_demand - actual_renewable - bess_signed
             if not allow_export:
                 actual_grid = max(0.0, actual_grid)

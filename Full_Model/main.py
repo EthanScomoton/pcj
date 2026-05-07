@@ -580,9 +580,9 @@ def main():
         )
         sac = SACTrainer(state_dim=env_train.state_dim(), action_dim=1,
                          hidden=128, lr=3e-4, device=device)
-        # Bug 4 修复: 3k 步太短, 之前策略只学到 "充满 SOC=0.9 后无动作".
-        # 默认 30k 步, 配合 reward scaling, 通常足够收敛到合理充放电策略
-        sac_steps = int(getattr(cfg, 'SAC_TRAIN_STEPS', 30000))
+        # 修复 2.5: 30k 步在加强 reward 设计后仍然不够 SAC 充分收敛
+        # (报告: DRL-SAC 反向把峰值推高 4%). 提到 100k, 同时 reward 已加 peak 强惩罚.
+        sac_steps = int(getattr(cfg, 'SAC_TRAIN_STEPS', 100000))
         sac.train(env_train, total_steps=sac_steps,
                   warm_up=max(500, sac_steps // 30),    # 充分初始探索
                   batch_size=256,

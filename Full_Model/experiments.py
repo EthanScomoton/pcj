@@ -1056,7 +1056,10 @@ def experiment_mpc_timing(
     for cname, ckwargs in configs.items():
         mpc = _ParametrizedMPC(bess, horizon, **ckwargs)
         times_warm, times_cold = [], []
-        solver_used = {'OSQP': 0, 'CLARABEL': 0, 'default': 0}
+        # 修复 2.3: 求解器名 key 全部用 dynamic dict, 任何 CVXPY backend 都能被记录
+        # (SCS / CLARABEL / OSQP / ECOS 等), 避免之前预设 3 个 key 漏掉 SCS
+        solver_used = {}
+        fail_count = 0
 
         indices = np.linspace(0, min(sim_hours - 1, len(predictions_by_index) - horizon),
                               n_steps, dtype=int)
@@ -1073,8 +1076,8 @@ def experiment_mpc_timing(
             ci = carbon_intensity_hourly[idx:idx + horizon] if ckwargs['include_carbon'] else None
             if ci is not None and len(ci) < horizon:
                 ci = np.pad(ci, (0, horizon - len(ci)), 'edge')
-            # 与 CarbonAwareMPCStrategy 保持一致 (Bug 3 修复后): cw = price/100 * sens
-            cw = (cfg.CARBON_PRICE / 100.0 * getattr(cfg, 'CARBON_SENSITIVITY', 3.0)
+            # 与 CarbonAwareMPCStrategy 保持一致 (修复 1.4 后): cw = price/1000 * sens
+            cw = (cfg.CARBON_PRICE / 1000.0 * getattr(cfg, 'CARBON_SENSITIVITY', 3.0)
                   if ckwargs['include_carbon'] else 0.0)
 
             # warm start 计时
@@ -1087,6 +1090,7 @@ def experiment_mpc_timing(
                 mpc.carbon_weight.value = cw
 
             t0 = time.perf_counter()
+            solved = False
             for solver in (cp_mod.OSQP, cp_mod.CLARABEL, None):
                 try:
                     if solver is None:
@@ -1095,27 +1099,25 @@ def experiment_mpc_timing(
                         mpc.problem.solve(solver=solver, warm_start=True, verbose=False)
                     status = mpc.problem.status
                     if status in (cp_mod.OPTIMAL, cp_mod.OPTIMAL_INACCURATE):
-                        # 修复 Plot 10: 优先读 solver_stats.solver_name (CVXPY 权威来源),
-                        # 否则回退到循环变量推断
+                        # 修复 2.3: 优先读 solver_stats.solver_name (权威),
+                        # 任何返回值都加进 dict (含 SCS / ECOS / etc.)
                         stats = getattr(mpc.problem, 'solver_stats', None)
                         sname = None
                         if stats is not None and getattr(stats, 'solver_name', None):
-                            sn_raw = str(stats.solver_name).upper()
-                            if 'OSQP' in sn_raw:
-                                sname = 'OSQP'
-                            elif 'CLARABEL' in sn_raw:
-                                sname = 'CLARABEL'
-                            else:
-                                sname = sn_raw
+                            sname = str(stats.solver_name).upper()
                         if sname is None:
                             sname = ('OSQP' if solver == cp_mod.OSQP
                                      else ('CLARABEL' if solver == cp_mod.CLARABEL
                                            else 'default'))
-                        # 累加求解器使用计数 (动态加 key 防 default → SCS 等情况)
                         solver_used[sname] = solver_used.get(sname, 0) + 1
+                        solved = True
                         break
                 except Exception:
                     continue
+            if not solved:
+                # 三层求解器都失败 → 记一次 FALLBACK
+                solver_used['FALLBACK'] = solver_used.get('FALLBACK', 0) + 1
+                fail_count += 1
             t1 = time.perf_counter()
             times_warm.append(t1 - t0)
 
@@ -1125,7 +1127,9 @@ def experiment_mpc_timing(
             'p95_ms': float(np.percentile(times_warm, 95)),
             'mean_ms': float(times_warm.mean()),
             'solver_counts': dict(solver_used),
-            'times_ms': times_warm.tolist(),
+            'fail_count':    int(fail_count),
+            'n_steps':       int(len(times_warm)),
+            'times_ms':      times_warm.tolist(),
         }
 
     names = list(all_records.keys())
@@ -1156,30 +1160,46 @@ def experiment_mpc_timing(
     plt.close(fig)
 
     # ---- 图 2: Solver 统计汇总表 ----
-    fig, ax = plt.subplots(figsize=(8, 3.5), constrained_layout=True)
+    # 修复 2.3: 列含义清晰化, 增加 fallback 行
+    fig, ax = plt.subplots(figsize=(10, 3.8), constrained_layout=True)
     ax.axis('off')
-    solver_names = ['OSQP', 'CLARABEL', 'default']
     col_labels = ['MPC Config', 'p50 (ms)', 'p95 (ms)', 'Mean (ms)',
-                  'Primary Solver', 'Steps']
+                  'N Solves', 'Backend (% solved)', 'Fallback']
     table_data = []
+    cell_colors = []
     for n in names:
         r = all_records[n]
-        total = sum(r['solver_counts'].values())
-        primary = max(r['solver_counts'], key=r['solver_counts'].get)
-        pct = r['solver_counts'][primary] / max(1, total) * 100
+        sc = r['solver_counts']
+        n_total = r['n_steps']
+        n_solved = sum(v for k, v in sc.items() if k != 'FALLBACK')
+        # 排除 FALLBACK 后选主 backend
+        non_fb = {k: v for k, v in sc.items() if k != 'FALLBACK'}
+        if non_fb:
+            primary = max(non_fb, key=non_fb.get)
+            pct = non_fb[primary] / max(1, n_solved) * 100
+            primary_str = f'{primary} ({pct:.0f}%)'
+        else:
+            primary_str = 'NONE'
+        fail_str = f'{r["fail_count"]}/{n_total}'
+        row_color = '#FCE5E5' if r['fail_count'] > 0 else '#FFFFFF'
         table_data.append([
-            n, f'{r["p50_ms"]:.1f}', f'{r["p95_ms"]:.1f}',
-            f'{r["mean_ms"]:.1f}', f'{primary} ({pct:.0f}%)', str(total)])
+            n, f'{r["p50_ms"]:.2f}', f'{r["p95_ms"]:.2f}',
+            f'{r["mean_ms"]:.2f}', str(n_total), primary_str, fail_str])
+        cell_colors.append([row_color] * len(col_labels))
+
     tbl = ax.table(cellText=table_data, colLabels=col_labels,
+                   cellColours=cell_colors,
                    loc='center', cellLoc='center')
     tbl.auto_set_font_size(False)
     tbl.set_fontsize(9)
     tbl.scale(1.0, 1.6)
-    # 表头颜色
+    # 表头
     for j in range(len(col_labels)):
         tbl[0, j].set_facecolor('#4C78A8')
         tbl[0, j].set_text_props(color='white', fontweight='bold')
-    ax.set_title('MPC Solver Performance Summary', fontweight='bold', pad=12)
+    ax.set_title('MPC Solver Performance Summary\n'
+                 '(Backend % solved 排除 fallback; Fallback = N 失败 / 总步数)',
+                 fontweight='bold', pad=12)
     plt.savefig(os.path.join(output_dir, 'exp05_solver_summary.png'),
                 dpi=200, bbox_inches='tight')
     plt.close(fig)
@@ -1377,20 +1397,43 @@ def experiment_bess_capacity(
     plt.close(fig)
 
     # ---- 图 2: 回收期 vs 容量 ----
+    # 修复 3.5: 当所有候选 NPV 都 < 0 时, payback = inf, 原图坐标轴空白.
+    # 改为 "提示性" 文字图.
     fig, ax = plt.subplots(figsize=(8, 5), constrained_layout=True)
     payback = df['payback'].values.copy()
-    finite_pb = payback[~np.isnan(payback) & (payback < 100)]
-    ax.plot(x, np.where(np.isnan(payback), np.nan, payback),
-            'D-', color='#d62728', lw=2, markersize=7)
-    ax.axhline(10, color='gray', ls='--', lw=1, label='10-year threshold')
-    ax.set_xlabel('Capacity (MWh)')
-    ax.set_ylabel('Payback Period (years)')
-    ax.set_title('Simple Payback Period vs BESS Capacity', fontweight='bold')
-    ax.legend(fontsize=9)
-    if len(finite_pb) > 0:
+    finite_pb = payback[~np.isnan(payback) & (payback < 100) & np.isfinite(payback)]
+    if len(finite_pb) == 0:
+        # 所有 NPV < 0: 显示提示文字
+        ax.text(0.5, 0.62,
+                '⚠ 所有候选容量 NPV < 0\n所有 payback = ∞',
+                ha='center', va='center', fontsize=14, fontweight='bold',
+                color='#d62728', transform=ax.transAxes,
+                bbox=dict(boxstyle='round,pad=0.6', fc='#FCE5E5', ec='#d62728'))
+        ax.text(0.5, 0.32,
+                '当前 BESS 经济性反负, 调度策略需先修复 (P0).\n'
+                '建议: 检查 MPC 终端 SOC 锚点 / Carbon-MPC scaling.',
+                ha='center', va='center', fontsize=10, color='#444444',
+                transform=ax.transAxes)
+        ax.set_xticks([]); ax.set_yticks([])
+        ax.set_title('Simple Payback Period vs BESS Capacity '
+                     '(no finite payback)', fontweight='bold')
+    else:
+        ax.plot(x, np.where(np.isfinite(payback), payback, np.nan),
+                'D-', color='#d62728', lw=2, markersize=7)
+        # 用 marker 标出 inf 的点
+        inf_mask = ~np.isfinite(payback)
+        if inf_mask.any():
+            ax.scatter(x[inf_mask], np.full(inf_mask.sum(), finite_pb.max() * 1.1),
+                       marker='x', s=80, color='gray',
+                       label='payback = ∞ (NPV < 0)')
+        ax.axhline(10, color='gray', ls='--', lw=1, label='10-year threshold')
+        ax.set_xlabel('Capacity (MWh)')
+        ax.set_ylabel('Payback Period (years)')
+        ax.set_title('Simple Payback Period vs BESS Capacity', fontweight='bold')
+        ax.legend(fontsize=9)
         ax.set_ylim(0, max(15, finite_pb.max() * 1.2))
     plt.savefig(os.path.join(output_dir, 'exp06_bess_payback.png'),
-                dpi=150, bbox_inches='tight')
+                dpi=200, bbox_inches='tight')
     plt.close(fig)
 
     # ---- 图 3: 投资额 vs 年化收益 (气泡图: 大小=NPV) ----

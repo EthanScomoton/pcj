@@ -59,16 +59,28 @@ class BaselineStrategy(BaseStrategy):
 # ========================================================================
 class _ParametrizedMPC:
     """
-    参数化 MPC 核心。相比初版的改进：
-      · 加入需量电费项 (peak_charge_weight * max_grid_import) → 激励削峰
-      · 提高循环正则权重 5e-3 以抑制无意义微循环
-      · 降低终端 SOC 惩罚至 500，让电池更灵活地参与套利
+    参数化 MPC 核心。本次修复 (1.2):
+      · 终端 SOC 锚点从 soc_init (动态) 改为 soc_target (固定 0.5),
+        避免一旦 SOC 落到 0.1, MPC 把"维持 0.1"当成最优而不再回填。
+      · 终端 SOC 权重从 500 (单位含糊) 改为 storage_value × cap × 0.5,
+        即 "把终端电量按平均电价折算成钱", 让 SOC 偏离与现金流同尺度可比。
+      · 仍保留 peak_charge / cycle 抑制 / 弃电正则。
     """
 
     def __init__(self, bess, horizon: int = 24, time_step: float = 1.0,
                  include_carbon: bool = False,
                  include_peak_charge: bool = True,
-                 peak_charge_weight: float = 1.5):
+                 peak_charge_weight: float = 1.5,
+                 soc_target: float = 0.5,
+                 storage_shadow_value: float = 0.6):
+        """
+        Parameters
+        ----------
+        soc_target : 终端 SOC 锚点 (用于次级软约束, 防止 MPC 过充到 0.9)
+        storage_shadow_value : 储能未来价值 (CNY/kWh), 推荐 ≈ 平均电价 (0.5-0.7).
+                               在目标函数中以 -value × cap × soc[H] 形式参与,
+                               让 MPC 自动按 "买低卖高" 决策, 而不是死守 soc_init.
+        """
         self.bess = bess
         self.horizon = horizon
         self.dt = time_step
@@ -80,6 +92,10 @@ class _ParametrizedMPC:
         self.pv_p    = cp.Parameter(horizon, value=np.zeros(horizon))
         self.price_p = cp.Parameter(horizon, value=np.ones(horizon))
         self.soc_init = cp.Parameter(value=bess.get_soc() if bess.capacity > 0 else 0.5)
+        # 修复 1.2: 加入 soc_target (软约束) 和 shadow_value (主要驱动)
+        self.soc_target = cp.Parameter(value=float(soc_target))
+        self.soc_shadow_value = cp.Parameter(nonneg=True,
+                                             value=float(storage_shadow_value))
 
         self.carbon_p      = cp.Parameter(horizon, value=np.zeros(horizon), nonneg=True) \
                              if include_carbon else None
@@ -115,8 +131,18 @@ class _ParametrizedMPC:
 
         # ---- 目标函数 ----
         obj_cost = cp.sum(cp.multiply(self.Pg, self.price_p))     # 电量电费
-        obj_reg  = 5e-3 * cp.sum(self.Pc + self.Pd)              # 抑制微循环（↑ 从 1e-4）
-        obj_soc  = 500 * cp.abs(self.soc[horizon] - self.soc_init)  # 终端 SOC（↓ 从 1e3）
+        obj_reg  = 5e-3 * cp.sum(self.Pc + self.Pd)              # 抑制微循环
+        # 修复 1.2 (核心): "储能 shadow value" 形式取代原 |soc[H] - soc_init|.
+        # 物理含义: 终端时刻每 kWh 储能的未来期望价值 ≈ 平均电价 (≈0.6 CNY/kWh).
+        # 在 24h rolling MPC 下:
+        #   marginal cost of charging now = current price α₀
+        #   marginal future gain          = shadow_value × eff_c
+        #   → 当 α₀ < shadow/eff_c 时充电, α₀ > shadow×eff_d 时放电
+        # 这天然导出 "买低卖高" 行为, 不会出现 1AM 谷价时一次倒空到 0.1.
+        # 同时 soc_anchor 对终端偏离 soc_target 做软二次惩罚, 防止 MPC 一直冲到 max_soc.
+        obj_soc_shadow = -self.soc_shadow_value * cap * self.soc[horizon]
+        obj_soc_anchor = 1.0 * cap * cp.square(self.soc[horizon] - self.soc_target)
+        obj_soc = obj_soc_shadow + obj_soc_anchor
         obj_curt = 1e-3 * cp.sum(self.pv_p - self.Pre_use)       # 轻度鼓励消纳可再生
 
         objective = obj_cost + obj_reg + obj_soc + obj_curt
@@ -343,14 +369,13 @@ class CarbonAwareMPCStrategy(BaseStrategy):
                                           include_peak_charge=True,
                                           peak_charge_weight=self.peak_charge_weight)
 
-        # 修复 Bug 3: 原 cw = price/1000 * sens 在标准 sens=3 下只 0.36,
-        # 配合 ef ≈ 0.7 折算成 0.25 CNY/kWh, 仅约电价的 25%。
-        # 当电价峰段与碳排峰段相关 (这套数据正是), 碳项无法引入额外行为差异,
-        # exp04 才会出现 Carbon-Aware vs Economic 曲线重叠 / MAC = 0。
-        # 改为 cw = price/100 * sens, 让 sensitivity 真正放大碳成本权重。
-        # 默认 (price=120, sens=3) → cw = 3.6, carbon 项 ≈ 2.5 CNY/kWh, 是电价 2.5×,
-        # 策略行为会显著向低碳时段倾斜 (符合论文叙事), 经济上仍可解释。
-        cw = self.carbon_price / 100.0 * self.carbon_sensitivity
+        # 修复 1.4: 原 cw = price/100 * sens = 3.6 让 carbon 项 ≈ 2.5 CNY/kWh,
+        # 比电价大 2-8 倍, CVXPY 三层求解器都失败 → 全程走 _heuristic_fallback,
+        # 实际碳目标失效甚至反向 (exp04 sensitivity 0.5-10 输出完全相同).
+        # 回到经济上正确的量纲 cw = price/1000 * sens (CNY/kgCO2 维度匹配),
+        # 默认 (price=120, sens=3) → cw = 0.36, carbon 项 ≈ 0.25 CNY/kWh = 25% 电价.
+        # 这值不会让求解器失衡, 同时 sensitivity 仍然提供 1×~10× 的可调放大。
+        cw = self.carbon_price / 1000.0 * self.carbon_sensitivity
         return self._mpc.solve(bess.get_soc(), pred_demand, renewable_gen, grid_prices,
                                carbon=carbon_intensity, carbon_weight=cw)
 

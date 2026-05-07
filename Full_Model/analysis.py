@@ -421,13 +421,24 @@ def plot_pareto_front(comparison_df, save_path=None,
                        edgecolor='black', linewidth=0.6, zorder=3)
             ax.annotate(_short(sn), (x, y), fontsize=8,
                         xytext=(6, 6), textcoords='offset points')
-        # 连接 Pareto 点 (按 x 排序)
+        # 修复 3.6: Pareto 仅 1 点时, 不画虚线 (会显示空白图例),
+        # 改为大号空心圆 + 文字标注 "Pareto = single point (X)"
         pts = comparison_df.loc[is_pareto, [ox, oy]].values
         if len(pts) > 1:
             pts = pts[np.argsort(pts[:, 0])]
             ax.plot(pts[:, 0], pts[:, 1], 'r--', lw=1.2, alpha=0.6,
                     label='Pareto frontier')
             ax.legend(fontsize=8)
+        elif len(pts) == 1:
+            single_name = comparison_df.loc[is_pareto, 'Strategy'].iloc[0]
+            ax.scatter(pts[0, 0], pts[0, 1], s=400, facecolor='none',
+                       edgecolor='red', linewidth=2.0, zorder=4)
+            ax.text(0.02, 0.98,
+                    f'⚠ Pareto 集合坍缩为单点:\n   {_short(single_name)}',
+                    transform=ax.transAxes, fontsize=8, va='top',
+                    color='#d62728',
+                    bbox=dict(boxstyle='round,pad=0.3',
+                              fc='#FCE5E5', ec='#d62728', alpha=0.85))
         ax.set_xlabel(ox)
         ax.set_ylabel(oy)
         ax.set_title(f'{ox.split("(")[0].strip()} vs '

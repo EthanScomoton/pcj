@@ -214,16 +214,30 @@ class BESSDispatchEnv:
         self.peak_grid = max(self.peak_grid, grid_t)
 
         # Reward: 负成本 + 负 CO2 + 负 peak 超额
-        # 修复 Bug 4: 原 reward 量级达 10^4-10^5 (cost=grid_kWh×price), 让 Q 值发散
-        # 改进:
-        #   1. 把 reward 按典型量级 (基线一小时成本) 缩放到 O(1)
-        #   2. 加入显式 round-trip 损耗惩罚, 鼓励合理充放电而非保持不动
-        #   3. 高 SOC 上限附近加二次惩罚, 防止策略学到 "永远充电到 0.9"
+        # 修复 2.5: 原 demand_charge_inc 仅 peak_excess × 38/30 量级 ≈ 1.27 × peak_excess,
+        # 远小于 cost_t (≈ price × Pg) ≈ 1.0 × 50000 = 50000,
+        # 所以 SAC 完全 ignore 削峰目标, 在 ±10000 kW 之间乱震荡 (报告 2.5).
+        # 现在加入:
+        #   (a) running peak 强惩罚: 全周期峰值 × demand_charge / 30 / sim_hours
+        #       (注意是绝对峰值的累计影响, 不只是 "本步是否破峰")
+        #   (b) round-trip 损耗惩罚 = (1 - eff) × |bess_power|
+        #   (c) 终端 SOC 软约束 (在 done=True 时给一次性惩罚)
         cost_t = grid_t * self.price[t]
         co2_t  = grid_t * self.ef[t]   # kg
         demand_charge_inc = peak_excess * self.dc_rate / 30.0
 
-        raw_reward = cost_t + self.carbon_penalty * co2_t + demand_charge_inc
+        # 强化 peak 惩罚: 用整周期 running peak 直接惩罚 (放大 5×, 论文中常用做法)
+        peak_penalty_t = 5.0 * self.peak_grid * self.dc_rate / 30.0 / max(self.T_total, 1)
+
+        # round-trip 损耗
+        rt_loss = (1.0 - self.bp['eff_d']) * abs(bess_signed)
+        rt_penalty = rt_loss * float(np.mean(self.price)) * 0.5
+
+        raw_reward = (cost_t
+                      + self.carbon_penalty * co2_t
+                      + demand_charge_inc
+                      + peak_penalty_t
+                      + rt_penalty)
 
         # 缩放到 O(1)
         scale = self._reward_scale if hasattr(self, '_reward_scale') and self._reward_scale > 0 \
@@ -237,6 +251,11 @@ class BESSDispatchEnv:
         elif self.soc <= self.bp['min_soc'] + 0.02:
             soc_pen = 0.05
         reward -= soc_pen
+
+        # 终端 SOC 软约束: episode 结束时若 SOC 远离 0.5, 一次性大惩罚
+        if self.t + 1 >= self.T_total:
+            terminal_pen = 5.0 * abs(self.soc - 0.5)
+            reward -= terminal_pen
 
         self.t += 1
         done = (self.t >= self.T_total)

@@ -1,12 +1,13 @@
 {
   "pareto_strategies": [
-    "Rule-Based Peak Shaving"
+    "Rule-Based Peak Shaving",
+    "DRL-SAC"
   ],
   "recommendations": {
-    "economic": "Rule-Based Peak Shaving",
-    "green": "Rule-Based Peak Shaving",
+    "economic": "DRL-SAC",
+    "green": "DRL-SAC",
     "peak": "Rule-Based Peak Shaving",
-    "balanced": "Rule-Based Peak Shaving",
-    "grid_indep": "Rule-Based Peak Shaving"
+    "balanced": "DRL-SAC",
+    "grid_indep": "DRL-SAC"
   }
 }

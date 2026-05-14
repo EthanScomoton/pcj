@@ -9,13 +9,13 @@
 
 【经济+环保+技术 综合排名】
                Strategy  Cost Savings (%)  CO2 Reduction (%)  Peak Reduction (%)  Grid Indep. (%)    score
-Rule-Based Peak Shaving              1.09               0.29                0.00            19.61 1.000000
-  Baseline (No Storage)              0.00               0.00                0.00            16.77 0.713889
-           Economic MPC             -0.19              -0.17                0.00            16.82 0.636869
- Robust MPC (Conformal)             -0.19              -0.17                0.00            16.82 0.636869
-         Stochastic MPC             -0.47              -0.41                0.00            16.83 0.525758
-       Carbon-Aware MPC             -0.55              -0.51                0.00            16.82 0.486869
-                DRL-SAC             -0.89              -1.25               -4.01            21.90 0.000000
+                DRL-SAC              2.22               0.76               -8.91            24.21 0.750000
+Rule-Based Peak Shaving              1.09               0.29                0.00            19.61 0.716141
+  Baseline (No Storage)              0.00               0.00                0.00            16.77 0.484683
+         Stochastic MPC             -0.22              -0.43                0.00            22.57 0.341661
+           Economic MPC             -0.57              -0.54                0.00            22.39 0.262963
+ Robust MPC (Conformal)             -0.57              -0.54                0.00            22.39 0.262963
+       Carbon-Aware MPC             -0.55              -0.59                0.00            22.99 0.252867
 
 【指标定义说明】
   RE Penetration (%):  可再生总发电量 / 总需求。系统固有特征，不随调度策略变化。
@@ -25,63 +25,64 @@ Rule-Based Peak Shaving              1.09               0.29                0.00
 Strategy                       Ann. Cost (万CNY)     Ann. CO2 (t)    Ann. Savings (万CNY)    Peak (kW)
 Baseline (No Storage)                   62031.2         543374.2                    0.0       435634
 Rule-Based Peak Shaving                 61354.6         541798.3                  676.5       435634
-Economic MPC                            62149.0         544324.3                 -117.8       435634
-Carbon-Aware MPC                        62372.9         546123.3                 -341.7       435634
-Robust MPC (Conformal)                  62149.0         544324.3                 -117.8       435634
-Stochastic MPC                          62321.3         545579.3                 -290.1       435634
-DRL-SAC                                 62581.8         550153.9                 -550.6       453108
+Economic MPC                            62385.4         546332.4                 -354.3       435634
+Carbon-Aware MPC                        62369.4         546600.9                 -338.2       435634
+Robust MPC (Conformal)                  62385.4         546332.4                 -354.3       435634
+Stochastic MPC                          62165.5         545729.8                 -134.3       435634
+DRL-SAC                                 60656.8         539251.1                 1374.3       474437
 
 ================================================================================
-  推荐策略: Rule-Based Peak Shaving
+  推荐策略: DRL-SAC
 ================================================================================
  · 经济性指标  (原始=仿真周期; 年化=×1.00)
-     total_cost_CNY                : 611655330.2095003    (年化: 613,546,398)
-     energy_cost_CNY               : 595101242.652467    (年化: 596,941,130)
-     demand_charge_CNY             : 16554087.55703329    (年化: 16,605,268)
-     peak_grid_kW                  : 435633.8830798234
+     total_cost_CNY                : 604698740.9972304    (年化: 606,568,301)
+     energy_cost_CNY               : 586670136.2262884    (年化: 588,483,957)
+     demand_charge_CNY             : 18028604.770942006    (年化: 18,084,344)
+     peak_grid_kW                  : 474436.9676563686
      simulation_hours              : 8733
-     avg_hourly_cost_CNY           : 70039.54313632203
-     total_grid_kwh                : 748988792.8485224    (年化: 751,304,457)
-     NPV_CNY                       : -87671750.28302598
-     payback_period                : 23.928424634783386
-     IRR                           : -0.1547678814195809
-     annual_savings_CNY            : 5145344.997807648
+     avg_hourly_cost_CNY           : 69242.95671558805
+     total_grid_kwh                : 753441677.4004844    (年化: 755,771,109)
+     NPV_CNY                       : -38206155.821914986
+     payback_period                : 10.155531701217397
+     IRR                           : -0.022588590091075774
+     annual_savings_CNY            : 12123442.043437367
      annual_om_CNY                 : 1620000.0
      investment_cost_CNY           : 123120000
  · 环保性指标  (原始=仿真周期; 年化=×1.00)
-     total_CO2_kg                  : 540128408.1391925    (年化: 541,798,334.51)
-     total_CO2_tons                : 540128.4081391925    (年化: 541,798.33)
+     total_CO2_kg                  : 537589047.8860321    (年化: 539,251,123.27)
+     total_CO2_tons                : 537589.0478860321    (年化: 539,251.12)
      total_renewable_kwh           : 150354033.87446427    (年化: 150,818,886.61)
      renewable_penetration         : 16.76832317095825
-     grid_independence_rate        : 19.60877253707928
-     carbon_cost_CNY               : 64815408.9767031    (年化: 65,015,800.14)
-     equivalent_trees_year         : 24305778.36626366
-     equivalent_cars_year          : 117419.21916069403
+     grid_independence_rate        : 24.21012688066107
+     carbon_cost_CNY               : 64510685.746323854    (年化: 64,710,134.79)
+     equivalent_trees_year         : 24191507.154871445
+     equivalent_cars_year          : 116867.18432305047
  · 技术性指标
-     peak_demand_kW                : 435633.8830798234
-     avg_demand_kW                 : 85765.34900360958
-     load_factor                   : 0.1968748353485956
-     avg_soc                       : 0.30278062354590607
+     peak_demand_kW                : 474436.9676563686
+     avg_demand_kW                 : 86275.24074206852
+     load_factor                   : 0.18184763545777713
+     avg_soc                       : 0.42736719160280623
      min_soc                       : 0.1
      max_soc                       : 0.9
      soc_range                     : 0.8
-     estimated_cycles              : 671.0
-     total_charge_kwh              : 28156708.809018046
-     total_discharge_kwh           : 25469035.62498882
+     estimated_cycles              : 1053.5
+     total_charge_kwh              : 73867874.21529487
+     total_discharge_kwh           : 66727316.47930362
 
 ================================================================================
 
 ================================================================================
 【Pareto 前沿 + 多情境决策推荐器 (P2)】
 --------------------------------------------------------------------------------
-Pareto 最优策略集合 (1 个):
+Pareto 最优策略集合 (2 个):
   - Rule-Based Peak Shaving
+  - DRL-SAC
 
 不同用户偏好下的推荐:
   偏好           推荐策略
-  economic     Rule-Based Peak Shaving
-  green        Rule-Based Peak Shaving
+  economic     DRL-SAC
+  green        DRL-SAC
   peak         Rule-Based Peak Shaving
-  balanced     Rule-Based Peak Shaving
-  grid_indep   Rule-Based Peak Shaving
+  balanced     DRL-SAC
+  grid_indep   DRL-SAC
 ================================================================================

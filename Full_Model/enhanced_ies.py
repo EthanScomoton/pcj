@@ -232,6 +232,11 @@ class StrategyAwareIES(IntegratedEnergySystem):
         ef_fallback = (self.carbon_tracker.ef if self.carbon_tracker is not None
                        else 0.0)
 
+        # 修复 #6: 维护 running peak (整个仿真已发生的最大 grid_import)
+        # 让 MPC 在每步 optimize 时知道 "如果不破峰就没有 demand charge 增量",
+        # 从而避免在低负荷时段为套利电价而充电反而推高 grid_import.
+        running_peak = 0.0
+
         for t in range(time_steps):
             # ---- 24h 切片 (numpy view, 零拷贝) ----
             pred_demand   = preds_arr[t:t + horizon]
@@ -250,6 +255,7 @@ class StrategyAwareIES(IntegratedEnergySystem):
                 grid_prices=prices,
                 carbon_intensity=ci_slice,
                 pred_upper=pred_upper,
+                running_peak=running_peak,
             )
 
             # sched 里的 bess_charge/bess_discharge 可能是 list/ndarray, 仅取第 1 步
@@ -280,6 +286,10 @@ class StrategyAwareIES(IntegratedEnergySystem):
             actual_grid = actual_demand - actual_renewable - bess_signed
             if not allow_export:
                 actual_grid = max(0.0, actual_grid)
+
+            # 修复 #6: 更新 running peak, 供下一步 MPC 决策使用
+            if actual_grid > running_peak:
+                running_peak = actual_grid
 
             # ---- 成本 ----
             p0 = prices[0]

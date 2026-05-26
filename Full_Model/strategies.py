@@ -31,7 +31,7 @@ class BaseStrategy(ABC):
 
     @abstractmethod
     def optimize(self, bess, pred_demand, renewable_gen, grid_prices,
-                 carbon_intensity=None, pred_upper=None):
+                 carbon_intensity=None, pred_upper=None, running_peak=0.0):
         pass
 
 
@@ -43,7 +43,7 @@ class BaselineStrategy(BaseStrategy):
     description = "无储能基准：仅可再生 + 电网"
 
     def optimize(self, bess, pred_demand, renewable_gen, grid_prices,
-                 carbon_intensity=None, pred_upper=None):
+                 carbon_intensity=None, pred_upper=None, running_peak=0.0):
         horizon = len(pred_demand)
         return {
             'bess_charge':    np.zeros(horizon),
@@ -102,6 +102,13 @@ class _ParametrizedMPC:
         self.carbon_weight = cp.Parameter(nonneg=True, value=0.0) \
                              if include_carbon else None
 
+        # ---- Running peak (修复 #6): MPC 必须知道 "已经发生的全周期峰值" ----
+        # 否则 24h 滚动窗口里每个 local peak 都被允许, 720h 累积下 BESS 在低
+        # 负荷时段的充电反而推高了全局峰值 (charge → Pg = load + Pc, 直接破峰).
+        # running_peak 让 MPC 知道: 只要 Pg <= running_peak 就不付额外 demand charge,
+        # 而 Pg > running_peak 才需要按 peak_charge_weight 付钱.
+        self.running_peak_p = cp.Parameter(nonneg=True, value=0.0) if include_peak_charge else None
+
         # ---- 决策变量 ----
         self.Pc = cp.Variable(horizon, nonneg=True)
         self.Pd = cp.Variable(horizon, nonneg=True)
@@ -149,15 +156,19 @@ class _ParametrizedMPC:
         if include_carbon:
             objective += self.carbon_weight * cp.sum(cp.multiply(self.Pg, self.carbon_p))
         if include_peak_charge:
+            # 修复 #6: peak 只惩罚 "超过 running_peak 的部分", 否则 MPC 会被
+            # 24h 窗口里那个固定的 local peak 主导, 在低负荷时段为了套利电价
+            # 而充电反而推高了 grid_import 创造新的全局峰值.
             cons.append(self.Pg <= self.peak)
-            # peak_charge_weight ≈ 需量电价/30 (日化)，典型 1.0~2.0 元/kW
-            objective += peak_charge_weight * self.peak
+            cons.append(self.peak >= self.running_peak_p)   # peak ≥ 已发生峰值
+            # 目标里只对 "新增超出 running_peak 的部分" 计费
+            objective += peak_charge_weight * (self.peak - self.running_peak_p)
 
         self.problem = cp.Problem(cp.Minimize(objective), cons)
 
     # --------------------------------------------------------------------
     def solve(self, soc_init, load, pv, price,
-              carbon=None, carbon_weight=0.0):
+              carbon=None, carbon_weight=0.0, running_peak=0.0):
         # ----- 输入清洗: 防御 NaN / inf / 负值 / 噪声实验中的极端放大 -----
         H = self.horizon
         load = np.nan_to_num(np.asarray(load, dtype=float).flatten()[:H],
@@ -176,6 +187,23 @@ class _ParametrizedMPC:
         self.load_p.value   = load
         self.pv_p.value     = pv
         self.price_p.value  = price
+        # ---- 修正: storage_shadow_value 控制终端 SOC 的"等效目标" ----
+        # 由 obj_soc_shadow (-shadow*cap*soc) + obj_soc_anchor (cap*(soc-0.5)^2)
+        # 求一阶最优可得: soc* = 0.5 + shadow/2.
+        # 旧实现 shadow=0.6 让 soc* = 0.8 (强制充满); 0.83 (=avg_price) 让 soc*=0.92
+        # 被截到 max_soc=0.9 → MPC 不顾价格强行充电创造峰值 (720h 实测).
+        # 现在限制 shadow ∈ [0.1, 0.3] → soc* ∈ [0.55, 0.65], MPC 只在峰谷差大
+        # 时主动套利, 不会无脑充满.
+        avg_price_24h = float(np.mean(price)) if len(price) > 0 else 0.6
+        self.soc_shadow_value.value = max(0.1, min(0.3, 0.25 * avg_price_24h))
+        # 修复 #6: running peak 取 max(外部已发生峰值, 24h 窗口内预测净负荷峰值)
+        # 这样可以在第一天 (running_peak=0 时) 让 MPC 也有合理的 peak 上界, 否则
+        # 它会在第一个 24h 窗口里为套利充电创造任意高的 grid spike.
+        # 含义: "本窗口内不充电就会发生的 net load peak, MPC 至少要保证不超过它".
+        if self.include_peak_charge and self.running_peak_p is not None:
+            expected_natural_peak = float(np.max(load - pv)) if len(load) > 0 else 0.0
+            self.running_peak_p.value = max(0.0, float(running_peak),
+                                             expected_natural_peak)
         if self.include_carbon:
             carbon_arr = np.maximum(0.0, np.nan_to_num(
                 np.asarray(carbon, dtype=float).flatten()[:H], nan=0.0))
@@ -328,7 +356,7 @@ class EconomicMPCStrategy(BaseStrategy):
         self._mpc = None
 
     def optimize(self, bess, pred_demand, renewable_gen, grid_prices,
-                 carbon_intensity=None, pred_upper=None):
+                 carbon_intensity=None, pred_upper=None, running_peak=0.0):
         if bess.capacity <= 1e-3:
             return BaselineStrategy().optimize(bess, pred_demand, renewable_gen, grid_prices)
         if self._mpc is None or self._mpc.bess is not bess:
@@ -336,7 +364,8 @@ class EconomicMPCStrategy(BaseStrategy):
                                           include_carbon=False,
                                           include_peak_charge=True,
                                           peak_charge_weight=self.peak_charge_weight)
-        return self._mpc.solve(bess.get_soc(), pred_demand, renewable_gen, grid_prices)
+        return self._mpc.solve(bess.get_soc(), pred_demand, renewable_gen, grid_prices,
+                                running_peak=running_peak)
 
 
 # ========================================================================
@@ -355,13 +384,14 @@ class CarbonAwareMPCStrategy(BaseStrategy):
         self._mpc = None
 
     def optimize(self, bess, pred_demand, renewable_gen, grid_prices,
-                 carbon_intensity=None, pred_upper=None):
+                 carbon_intensity=None, pred_upper=None, running_peak=0.0):
         if bess.capacity <= 1e-3:
             return BaselineStrategy().optimize(bess, pred_demand, renewable_gen, grid_prices)
         if carbon_intensity is None:
             return EconomicMPCStrategy(self.horizon,
                                        peak_charge_weight=self.peak_charge_weight).optimize(
-                bess, pred_demand, renewable_gen, grid_prices)
+                bess, pred_demand, renewable_gen, grid_prices,
+                running_peak=running_peak)
 
         if self._mpc is None or self._mpc.bess is not bess:
             self._mpc = _ParametrizedMPC(bess, self.horizon,
@@ -377,7 +407,8 @@ class CarbonAwareMPCStrategy(BaseStrategy):
         # 这值不会让求解器失衡, 同时 sensitivity 仍然提供 1×~10× 的可调放大。
         cw = self.carbon_price / 1000.0 * self.carbon_sensitivity
         return self._mpc.solve(bess.get_soc(), pred_demand, renewable_gen, grid_prices,
-                               carbon=carbon_intensity, carbon_weight=cw)
+                               carbon=carbon_intensity, carbon_weight=cw,
+                               running_peak=running_peak)
 
 
 # ========================================================================
@@ -396,7 +427,7 @@ class RobustMPCStrategy(BaseStrategy):
         self._mpc = None
 
     def optimize(self, bess, pred_demand, renewable_gen, grid_prices,
-                 carbon_intensity=None, pred_upper=None):
+                 carbon_intensity=None, pred_upper=None, running_peak=0.0):
         if bess.capacity <= 1e-3:
             return BaselineStrategy().optimize(bess, pred_demand, renewable_gen, grid_prices)
 
@@ -414,7 +445,8 @@ class RobustMPCStrategy(BaseStrategy):
                                           include_carbon=False,
                                           include_peak_charge=True,
                                           peak_charge_weight=self.peak_charge_weight)
-        return self._mpc.solve(bess.get_soc(), robust_demand, renewable_gen, grid_prices)
+        return self._mpc.solve(bess.get_soc(), robust_demand, renewable_gen, grid_prices,
+                                running_peak=running_peak)
 
 
 # ========================================================================
@@ -444,7 +476,7 @@ class StochasticMPCStrategy(BaseStrategy):
         self._mpc = None
 
     def optimize(self, bess, pred_demand, renewable_gen, grid_prices,
-                 carbon_intensity=None, pred_upper=None):
+                 carbon_intensity=None, pred_upper=None, running_peak=0.0):
         if bess.capacity <= 1e-3:
             return BaselineStrategy().optimize(bess, pred_demand, renewable_gen, grid_prices)
 
@@ -487,7 +519,8 @@ class StochasticMPCStrategy(BaseStrategy):
         for scn in scenarios:
             try:
                 res = self._mpc.solve(bess.get_soc(), scn,
-                                      renewable_gen, grid_prices)
+                                      renewable_gen, grid_prices,
+                                      running_peak=running_peak)
                 ch = float(np.asarray(res['bess_charge']).flatten()[0])
                 dc = float(np.asarray(res['bess_discharge']).flatten()[0])
                 obj = float(res.get('objective_value', 0.0))
@@ -545,7 +578,7 @@ class PeakShavingRuleStrategy(BaseStrategy):
         self.valley_ratio = valley_ratio
 
     def optimize(self, bess, pred_demand, renewable_gen, grid_prices,
-                 carbon_intensity=None, pred_upper=None):
+                 carbon_intensity=None, pred_upper=None, running_peak=0.0):
         H = min(len(pred_demand), self.horizon)
         pred_demand   = np.asarray(pred_demand, dtype=float)[:H]
         renewable_gen = np.asarray(renewable_gen, dtype=float)[:H]

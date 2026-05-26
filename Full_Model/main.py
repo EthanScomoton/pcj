@@ -538,7 +538,14 @@ def main():
     # 7) 策略评估
     # ==================================================================
     print("\n[7/9] 多策略对比评估 ...")
-    pcw = cfg.DEMAND_CHARGE_CNY_PER_KW_MONTH / 30.0   # 日化需量电费 → MPC 削峰权重
+    # ---- 修正: 原 pcw = rate/30 (日化) 严重低估了削峰价值, 让 MPC 不愿削峰 ----
+    # demand charge 按"月内最高 1 小时"全月计费 → 任意 1 kW 削峰节省整月 rate 元.
+    # MPC 24h 窗口里看到的 peak 项需要在 (a) 给 MPC 足够削峰激励 与 (b) 避免
+    # 让 peak 项压倒 energy 项导致 obj 严重失衡 之间取平衡:
+    #   - 原 1.27 元/kW 太低 (peak/energy ≈ 5%) → 完全不削峰
+    #   - 38 元/kW 太高 (peak/energy ≈ 100%) → SCS 数值不稳, SOC 易越界
+    #   - 5~10 元/kW 是合理区间 (peak/energy ≈ 20-30%): MPC 强烈倾向削峰但不失衡
+    pcw = max(cfg.DEMAND_CHARGE_CNY_PER_KW_MONTH / 5.0, 5.0)   # ≈ 7.6 元/kW
     strategies_to_run = [
         BaselineStrategy(),                                                     # 无储能
         PeakShavingRuleStrategy(horizon=cfg.MPC_HORIZON),                       # 规则型

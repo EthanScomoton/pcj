@@ -214,20 +214,25 @@ class BESSDispatchEnv:
         self.peak_grid = max(self.peak_grid, grid_t)
 
         # Reward: 负成本 + 负 CO2 + 负 peak 超额
-        # 修复 2.5: 原 demand_charge_inc 仅 peak_excess × 38/30 量级 ≈ 1.27 × peak_excess,
-        # 远小于 cost_t (≈ price × Pg) ≈ 1.0 × 50000 = 50000,
-        # 所以 SAC 完全 ignore 削峰目标, 在 ±10000 kW 之间乱震荡 (报告 2.5).
-        # 现在加入:
-        #   (a) running peak 强惩罚: 全周期峰值 × demand_charge / 30 / sim_hours
-        #       (注意是绝对峰值的累计影响, 不只是 "本步是否破峰")
-        #   (b) round-trip 损耗惩罚 = (1 - eff) × |bess_power|
-        #   (c) 终端 SOC 软约束 (在 done=True 时给一次性惩罚)
+        # 修复: 原 demand_charge_inc = peak_excess × dc_rate / 30 严重低估削峰价值.
+        # 因为 demand charge 按月度峰值计费, 任意 1 kW 破峰意味着 +dc_rate 元/月,
+        # 而每月只有少数小时会成为峰值时刻 → 每次破峰的 reward 信号必须远大于
+        # 同小时的电量电费, 否则 SAC 会在峰值小时充电以套取低 reward 微噪声.
+        #
+        # 修正方案:
+        #   (a) demand_charge_inc 直接用 dc_rate (元/kW), 而非 / 30 日化;
+        #       这等价于把"该月新增需量电费"全部记到这一步, 让 SAC 强烈惩罚破峰.
+        #   (b) 整周期 running peak 惩罚改用 dc_rate (而不是 dc_rate/30/T),
+        #       并放大 10× 让 reward 信号比电费高一个量级.
+        #   (c) round-trip 损耗惩罚 = (1 - eff) × |bess_power|.
+        #   (d) 终端 SOC 软约束.
         cost_t = grid_t * self.price[t]
         co2_t  = grid_t * self.ef[t]   # kg
-        demand_charge_inc = peak_excess * self.dc_rate / 30.0
+        demand_charge_inc = peak_excess * self.dc_rate    # 全月需量电费的边际增量
 
-        # 强化 peak 惩罚: 用整周期 running peak 直接惩罚 (放大 5×, 论文中常用做法)
-        peak_penalty_t = 5.0 * self.peak_grid * self.dc_rate / 30.0 / max(self.T_total, 1)
+        # running peak 强惩罚: 整周期峰值 × dc_rate × 10 / T_total
+        # (放大让 SAC 在每步都感知到 "推高峰值的代价" )
+        peak_penalty_t = 10.0 * self.peak_grid * self.dc_rate / max(self.T_total, 1)
 
         # round-trip 损耗
         rt_loss = (1.0 - self.bp['eff_d']) * abs(bess_signed)
@@ -387,7 +392,7 @@ class DRLSACStrategy:
         self._t = 0
 
     def optimize(self, bess, pred_demand, renewable_gen, grid_prices,
-                 carbon_intensity=None, pred_upper=None):
+                 carbon_intensity=None, pred_upper=None, running_peak=0.0):
         """返回与 MPC 策略相同格式的 schedule dict"""
         import numpy as np
         H = len(pred_demand)

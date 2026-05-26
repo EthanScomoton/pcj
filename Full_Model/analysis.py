@@ -99,15 +99,20 @@ def compute_economic_kpis(results_df, investment_cost=0.0,
                           annual_degradation_pct=2.0):
     """
     经济性 KPI。改进点（对应问题 ① ③）：
-      · 加入 **需量电费** (demand_charge_rate * peak_grid_kW)
+      · 加入 **需量电费** (demand_charge_rate * peak_grid_kW × 仿真月数)
+        — 修正: demand_charge_rate 单位是 CNY/kW/月, 不能直接乘 peak; 必须按
+          仿真覆盖的月数缩放, 否则 Total Cost 量纲不一致 (energy 是全周期,
+          demand 只算 1 个月, 让 MPC 削峰收益被严重低估).
       · NPV/IRR 考虑 **O&M 成本** 和 **容量衰减**
     """
     total_energy_cost = float(results_df['cost'].sum())
     peak_grid_kw = float(results_df['grid_import'].max())
-    demand_charge = peak_grid_kw * demand_charge_rate      # 需量电费
+    sim_hours = int(len(results_df))
+    # 730 h ≈ 1 个月 (8760/12). 仿真 8733h → 月数 ≈ 11.96
+    months_simulated = max(sim_hours / 730.0, 1e-6)
+    demand_charge = peak_grid_kw * demand_charge_rate * months_simulated   # 全周期需量电费
     total_cost = total_energy_cost + demand_charge
 
-    sim_hours = int(len(results_df))
     kpi = {
         'total_cost_CNY':       total_cost,
         'energy_cost_CNY':      total_energy_cost,
